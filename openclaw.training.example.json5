@@ -1,0 +1,50 @@
+{
+  plugins: {
+    load: {
+      paths: ["D:/OpenClaw/peixun/training-plugin"],
+    },
+    entries: {
+      "training-rag": {
+        enabled: true,
+        config: {
+          serviceUrl: "http://127.0.0.1:8787",
+          timeoutMs: 20000,
+        },
+      },
+    },
+  },
+  agents: {
+    list: [
+      {
+        id: "training-manager",
+        name: "Training Manager",
+        description: "老板自然语言发布培训、查询进度和生成报表的管理 Agent。",
+        skills: ["training-agent"],
+        tools: {
+          allow: [
+            "training_list_knowledge_bases",
+            "training_search_employees",
+            "training_create_task_draft",
+            "training_publish_task",
+            "training_get_task_status",
+            "training_answer_question",
+            "training_generate_quiz",
+            "training_grade_answer",
+          ],
+        },
+      },
+    ],
+  },
+  tools: {
+    allow: [
+      "training_list_knowledge_bases",
+      "training_search_employees",
+      "training_create_task_draft",
+      "training_publish_task",
+      "training_get_task_status",
+      "training_answer_question",
+      "training_generate_quiz",
+      "training_grade_answer",
+    ],
+  },
+}

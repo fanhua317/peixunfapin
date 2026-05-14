@@ -1,0 +1,47 @@
+{
+  "id": "training-rag",
+  "name": "Training RAG",
+  "description": "Tools for the external OpenClaw training-service Web MVP.",
+  "activation": {
+    "onStartup": true
+  },
+  "skills": ["./skills"],
+  "contracts": {
+    "tools": [
+      "training_list_knowledge_bases",
+      "training_search_employees",
+      "training_create_task_draft",
+      "training_publish_task",
+      "training_get_task_status",
+      "training_answer_question",
+      "training_generate_quiz",
+      "training_grade_answer"
+    ]
+  },
+  "uiHints": {
+    "serviceUrl": {
+      "label": "Training service URL",
+      "help": "Base URL for the external training-service, for example http://127.0.0.1:8787."
+    },
+    "apiToken": {
+      "label": "Training API token",
+      "help": "Optional bearer token if the training-service is protected by a reverse proxy.",
+      "sensitive": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "serviceUrl": {
+        "type": "string"
+      },
+      "apiToken": {
+        "type": ["string", "object"]
+      },
+      "timeoutMs": {
+        "type": "number"
+      }
+    }
+  }
+}

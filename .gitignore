@@ -1,0 +1,34 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+.cache/
+.tmp*/
+*.log
+
+# Local runtime data
+training-service/.tmp-smoke-data/
+training-service/data/state.json
+training-service/data/*.backup*.json
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# External business data must stay outside Git
+OpenClawData/
+training-raw/
+training-clean/
+training-index/
+training-vision/
+training-ocr-preview/
+qdrant/
+ollama/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

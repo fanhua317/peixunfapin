@@ -1,0 +1,20 @@
+{
+  "name": "openclaw-training-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Web MVP training service for OpenClaw-backed employee training workflows.",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "clean:raw": "node scripts/clean-raw.mjs",
+    "import:clean": "node scripts/import-clean.mjs",
+    "embed:chunks": "node scripts/embed-chunks.mjs",
+    "qdrant:snapshot": "node scripts/qdrant-snapshot.mjs",
+    "render:pdf": "node scripts/render-pdf-pages.mjs",
+    "check": "node --check src/server.mjs && node --check src/store.mjs && node --check src/domain.mjs && node --check src/rag.mjs && node --check src/general-chat.mjs && node --check src/llm.mjs && node --check src/chunking.mjs && node --check src/embedding.mjs && node --check src/qdrant.mjs && node --check src/quality.mjs && node --check src/health.mjs && node --check src/training-ai.mjs && node --check public/app.js && node --check scripts/clean-raw.mjs && node --check scripts/render-pdf-pages.mjs && node --check scripts/import-clean.mjs && node --check scripts/embed-chunks.mjs && node --check scripts/qdrant-snapshot.mjs && node --check scripts/smoke-test.mjs",
+    "smoke": "node scripts/smoke-test.mjs"
+  },
+  "engines": {
+    "node": ">=22.14.0"
+  }
+}

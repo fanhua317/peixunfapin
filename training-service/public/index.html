@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>苏州钜洲工业有限公司｜通用助手</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="chat-shell">
+      <header class="chat-header">
+        <div class="brand">
+          <div class="brand-mark">钜</div>
+          <div>
+            <div class="company-name">苏州钜洲工业有限公司</div>
+            <div class="assistant-name">通用助手</div>
+          </div>
+        </div>
+        <div class="status-pill"><span></span>在线</div>
+      </header>
+
+      <section class="conversation" id="messages" aria-live="polite">
+        <article class="message assistant-message">
+          <div class="avatar">AI</div>
+          <div class="bubble">
+            <h1>我可以帮你做什么？</h1>
+            <p>你可以直接输入需求，也可以从下面的推荐选项开始。我会先整理成确认草稿，确认后再执行。</p>
+            <div class="suggestions">
+              <button data-command="给王小明和李小红发布 A 产品基础培训，明天下午 6 点前完成，出 10 道选择题，80 分及格。">发布销售新人培训</button>
+              <button data-command="查询最近培训任务完成情况。">查询培训进度</button>
+              <button data-command="给张三发布 A 产品售后政策培训，明天下午 6 点前完成，出 5 道判断题，80 分及格。">发布售后专项培训</button>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <form class="composer" id="chatForm">
+        <textarea id="chatInput" rows="1" placeholder="输入培训安排或查询要求..." autocomplete="off"></textarea>
+        <div class="composer-actions">
+          <span id="composerHint">按 Enter 发送，Shift + Enter 换行</span>
+          <button id="sendBtn" type="submit">发送</button>
+        </div>
+      </form>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
