@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { callGateway } from "../../../openclaw/dist/call.runtime.js";
 
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 const DEFAULT_AGENT_ID = "main";
@@ -9,6 +8,18 @@ const GENERAL_CHAT_SIMPLE_THINKING = process.env.OPENCLAW_GENERAL_CHAT_SIMPLE_TH
 const GENERAL_CHAT_COMPLEX_THINKING = process.env.OPENCLAW_GENERAL_CHAT_COMPLEX_THINKING || process.env.OPENCLAW_CHAT_COMPLEX_THINKING || process.env.OPENCLAW_GENERAL_CHAT_THINKING || process.env.OPENCLAW_CHAT_THINKING || "medium";
 const GENERAL_CHAT_MODEL = process.env.OPENCLAW_GENERAL_CHAT_MODEL || process.env.OPENCLAW_CHAT_MODEL || DEFAULT_FLASH_MODEL;
 const sessionPatchCache = new Map();
+let callGatewayPromise;
+
+async function getCallGateway() {
+  if (!callGatewayPromise) {
+    callGatewayPromise = import("../../../openclaw/dist/call.runtime.js")
+      .then((module) => module.callGateway)
+      .catch((error) => {
+        throw new Error(`OpenClaw gateway runtime unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      });
+  }
+  return await callGatewayPromise;
+}
 
 function readConfig() {
   const agentId = process.env.OPENCLAW_AGENT_ID || DEFAULT_AGENT_ID;
@@ -95,6 +106,7 @@ async function patchOpenClawSession({ base, sessionKey, thinking, model, timeout
   const cacheKey = JSON.stringify({ sessionKey, ...patch });
   if (sessionPatchCache.has(cacheKey)) return sessionPatchCache.get(cacheKey);
   try {
+    const callGateway = await getCallGateway();
     const result = await callGateway({
       ...base,
       scopes: ["admin"],
@@ -122,6 +134,7 @@ async function patchOpenClawSession({ base, sessionKey, thinking, model, timeout
 
 async function waitForOpenClawReply({ config, message, thinking, model }) {
   const runId = randomUUID();
+  const callGateway = await getCallGateway();
   const base = {
     url: process.env.OPENCLAW_GATEWAY_URL ? config.gatewayUrl : undefined,
     token: config.token,
