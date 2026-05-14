@@ -46,3 +46,21 @@ D:\OpenClawData\ollama
 1. 先用 Web 页面跑通老板发布任务、员工链接学习、考试和报表。
 2. 再安装 OpenClaw 插件，让 Agent 调用 `training-service`。
 3. 最后再考虑小红书、公众号或企业微信等发布/通知渠道。
+
+## 打包给 Windows 用户
+
+生成绿色版 ZIP 和自解压安装 EXE：
+
+```powershell
+cd D:\OpenClaw\peixun
+powershell -ExecutionPolicy Bypass -File .\scripts\package-windows.ps1 -IncludeData
+```
+
+输出文件在：
+
+```text
+dist\OpenClawTraining.zip
+dist\OpenClawTraining-Setup.exe
+```
+
+`-IncludeData` 会打包 `D:\OpenClawData\training-index`、`training-clean` 和 `training-vision`，不会打包原始 PDF、Qdrant、Ollama 或密钥。
