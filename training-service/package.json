@@ -11,7 +11,7 @@
     "embed:chunks": "node scripts/embed-chunks.mjs",
     "qdrant:snapshot": "node scripts/qdrant-snapshot.mjs",
     "render:pdf": "node scripts/render-pdf-pages.mjs",
-    "check": "node --check src/server.mjs && node --check src/store.mjs && node --check src/domain.mjs && node --check src/rag.mjs && node --check src/general-chat.mjs && node --check src/llm.mjs && node --check src/chunking.mjs && node --check src/embedding.mjs && node --check src/qdrant.mjs && node --check src/quality.mjs && node --check src/health.mjs && node --check src/training-ai.mjs && node --check public/app.js && node --check scripts/clean-raw.mjs && node --check scripts/render-pdf-pages.mjs && node --check scripts/import-clean.mjs && node --check scripts/embed-chunks.mjs && node --check scripts/qdrant-snapshot.mjs && node --check scripts/smoke-test.mjs",
+    "check": "node --check src/server.mjs && node --check src/store.mjs && node --check src/domain.mjs && node --check src/rag.mjs && node --check src/general-chat.mjs && node --check src/llm.mjs && node --check src/direct-llm.mjs && node --check src/chunking.mjs && node --check src/embedding.mjs && node --check src/qdrant.mjs && node --check src/quality.mjs && node --check src/health.mjs && node --check src/training-ai.mjs && node --check public/app.js && node --check scripts/clean-raw.mjs && node --check scripts/render-pdf-pages.mjs && node --check scripts/import-clean.mjs && node --check scripts/embed-chunks.mjs && node --check scripts/qdrant-snapshot.mjs && node --check scripts/smoke-test.mjs",
     "smoke": "node scripts/smoke-test.mjs"
   },
   "engines": {

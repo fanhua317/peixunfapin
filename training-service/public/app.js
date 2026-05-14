@@ -280,9 +280,17 @@ function canForcePublishUnmatched(draft) {
   );
 }
 
+function canPublishDraft(draft) {
+  return Boolean(
+    draft?.knowledgeBase?.id &&
+    Array.isArray(draft.employees) &&
+    draft.employees.length > 0,
+  );
+}
+
 function draftActionButtons(draft) {
   const actions = [];
-  if (!draft.warnings?.length) {
+  if (canPublishDraft(draft)) {
     actions.push({ label: "确认发布", onClick: publishCurrentDraft });
   } else if (canForcePublishUnmatched(draft)) {
     actions.push({ label: "生成临时链接并发布", onClick: (button) => publishCurrentDraft(button, { allowUnmatchedEmployees: true }) });
@@ -292,7 +300,7 @@ function draftActionButtons(draft) {
 }
 
 function isDraftConfirmationMessage(message) {
-  return /(直接发布|确认发布|不用匹配|不需要匹配|无需匹配|不用管|继续发布|发吧|就这样|没问题|可以发布|确认)/.test(String(message || ""));
+  return /(发布|确认|确定|直接发布|确认发布|不用匹配|不需要匹配|无需匹配|不用管|继续发布|发吧|就这样|没问题|可以发布|同意|ok|yes)/i.test(String(message || ""));
 }
 
 function renderPublishResult(result) {
@@ -427,7 +435,7 @@ function appendDraftResult(result) {
 
 async function dispatchUserMessage(message) {
   if (currentDraft && isDraftConfirmationMessage(message)) {
-    if (!currentDraft.warnings?.length) {
+    if (canPublishDraft(currentDraft)) {
       await publishCurrentDraft();
       return;
     }
