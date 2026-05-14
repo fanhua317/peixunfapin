@@ -232,6 +232,115 @@ function splitTrainingSentences(value, limit = 4) {
     .slice(0, limit);
 }
 
+const MATERIAL_KEYWORD_RE = /(电机|三相|异步|同步|定子|转子|绕组|铁芯|铸铝|轴承|端盖|风叶|风罩|接线盒|铭牌|功率|电压|电流|转速|频率|效率|防护|绝缘|安装|选型|客户|销售|沟通|低压|转差|磁场|水泵|应用|能效|IE\d?)/i;
+const MATERIAL_NOISE_RE = /^(?:来源文件|页数|作成|日期|目录|第\s*\d+\s*页|福建新银嘉泵业有限公司|FUJIAN NEW YINJIA PUMP CO\.?,?\s*LTD\.?|YINJIA|A TRUSTED BRAND|YOUR RELIABLE PARTNER|\d+)$/i;
+
+function cleanMaterialPoint(value, maxLength = 180) {
+  const text = cleanTrainingText(String(value || "")
+    .replace(/[●○•▪▫□■◆◇►▶]/g, " ")
+    .replace(/^#+\s*/g, "")
+    .replace(/^\s*[-*·•○●▪▫□■◆◇►▶]+\s*/g, "")
+    .replace(/^\s*(?:第\s*)?\d+\s*(?:页)?\s*$/g, "")
+    .replace(/^\s*\d+\s+(?=\d+(?:\.\d+)+|\S)/g, "")
+    .replace(/\s+/g, " "));
+  return compactText(text, maxLength);
+}
+
+function isGoodMaterialPoint(value) {
+  const text = cleanMaterialPoint(value);
+  if (!text || text.length < 12) return false;
+  if (MATERIAL_NOISE_RE.test(text)) return false;
+  if (/^[\d\s.。,:：;；、-]+$/.test(text)) return false;
+  if (/[\u0400-\u04ff\u0600-\u06ff]/.test(text)) return false;
+  if (/^[A-Z]{1,5}\d[-A-Z0-9]*\s+\d/.test(text) && (text.match(/\d/g) || []).length >= 8) return false;
+  if ((text.match(/[A-Za-z0-9]/g) || []).length > text.length * 0.55 && (text.match(/[\u3400-\u9fff]/g) || []).length < 6) return false;
+  if (/有限公司/.test(text) && text.length < 40) return false;
+  if (/专利号[:：]?|发明专利/i.test(text)) return false;
+  if (/^Q[:：]/i.test(text)) return false;
+  if (/[，,、：:]$/.test(text)) return false;
+  if (/^(?:什么是|结构组成|规格参数|运行特性)$/.test(text)) return false;
+  if (text.length < 20 && !MATERIAL_KEYWORD_RE.test(text)) return false;
+  return isUsefulTrainingText(text);
+}
+
+function splitMaterialLine(line) {
+  const cleaned = cleanMaterialPoint(line);
+  if (!cleaned) return [];
+  if (cleaned.length <= 90) return [cleaned];
+  const pieces = cleaned.match(/[^。！？；;]+[。！？；;]?/g) || [cleaned];
+  return pieces.map((piece) => cleanMaterialPoint(piece)).filter(Boolean);
+}
+
+function materialCandidateLines(value) {
+  const lines = String(value || "")
+    .replace(/\r/g, "\n")
+    .split(/\n+|[●○•▪▫□■◆◇►▶]/g)
+    .flatMap((line) => splitMaterialLine(line));
+  return uniqueStrings(lines.filter(isGoodMaterialPoint));
+}
+
+function extractLearningPoints(value, limit = 4) {
+  return materialCandidateLines(value).slice(0, limit);
+}
+
+function extractSectionHeading(value) {
+  const lines = String(value || "")
+    .replace(/\r/g, "\n")
+    .split(/\n+/)
+    .map((line) => cleanMaterialPoint(line, 80))
+    .filter(Boolean);
+  const numbered = lines.find((line) => /^\d+(?:\.\d+)+\s*\S/.test(line) && line.length <= 60);
+  const heading = numbered || lines.find((line) => MATERIAL_KEYWORD_RE.test(line) && line.length >= 4 && line.length <= 40);
+  return heading ? heading.replace(/^\d+(?:\.\d+)+\s*/, "").trim() : "";
+}
+
+function materialChunkScore(chunk, task) {
+  const points = extractLearningPoints(chunk.content, 8);
+  if (!points.length) return -100;
+  const query = `${task.title || ""} ${task.instruction || ""}`;
+  const text = cleanTrainingText(`${chunk.content || ""} ${chunk.sourceRef || ""}`);
+  let score = points.length * 8 + Math.min(text.length / 120, 8) + Number(chunk.score || chunk.keywordScore || 0);
+  if (MATERIAL_KEYWORD_RE.test(text)) score += 8;
+  const sourceName = `${chunk.sourcePath || ""} ${chunk.sourceRef || ""}`;
+  if (/视觉识别补充/.test(sourceName)) score += 80;
+  if (/三相异步电动机|异步电机定转子|电机数据/.test(sourceName)) score += 4;
+  if (/定转子参数表-多语言|定转子参数表-(?:俄语|法语|英语|阿语)/.test(sourceName) && !/(参数表|俄语|法语|英语|阿语|多语言)/.test(query)) score -= 35;
+  if (/(产品3|Q[:：]|PK|话术)/.test(text) && !/(话术|问答|客户异议)/.test(query)) score -= 18;
+  if (!/(销售|客户|新人|业务|沟通)/.test(query) && /(产品3|销售|客户|话术|PK|需求)/.test(text)) score -= 10;
+  if (/^(?:#|来源文件|页数)/.test(String(chunk.content || "").trim())) score -= 8;
+  return score;
+}
+
+function selectFallbackMaterialChunks(state, task, limit = 10) {
+  const query = `${task.title || ""} ${task.instruction || ""}`;
+  const ranked = selectContextChunks(state, {
+    knowledgeBaseId: task.knowledgeBaseId,
+    query,
+    limit: 30,
+  });
+  const fallback = state.chunks
+    .filter((chunk) => chunk.knowledgeBaseId === task.knowledgeBaseId)
+    .filter(isUsableTrainingChunk);
+  const seen = new Set();
+  const candidates = [];
+  for (const chunk of [...ranked, ...fallback]) {
+    if (!chunk || !chunk.id || seen.has(chunk.id)) continue;
+    seen.add(chunk.id);
+    candidates.push(chunk);
+  }
+  return candidates
+    .map((chunk) => ({
+      ...chunk,
+      materialScore: materialChunkScore(chunk, task),
+      sentences: extractLearningPoints(chunk.content, 5),
+      sectionHeading: extractSectionHeading(chunk.content),
+      clean: cleanTrainingText(chunk.content),
+    }))
+    .filter((chunk) => chunk.materialScore > 0 && chunk.sentences.length)
+    .sort((left, right) => right.materialScore - left.materialScore)
+    .slice(0, limit);
+}
+
 function inferModuleHeading(text, index) {
   const value = cleanTrainingText(text);
   const rules = [
@@ -277,29 +386,20 @@ export async function classifyTrainingIntent(state, message) {
 }
 
 function fallbackTrainingMaterial(state, task) {
-  const chunks = selectContextChunks(state, {
-    knowledgeBaseId: task.knowledgeBaseId,
-    query: `${task.title} ${task.instruction}`,
-    limit: 10,
-  });
-  const cleanedChunks = chunks
-    .map((chunk) => ({
-      ...chunk,
-      clean: cleanTrainingText(chunk.content),
-      sentences: splitTrainingSentences(chunk.content, 4),
-    }))
-    .filter((chunk) => isUsefulTrainingText(chunk.clean) || chunk.sentences.length);
+  const chunks = selectFallbackMaterialChunks(state, task, 10);
+  const cleanedChunks = chunks.filter((chunk) => isUsefulTrainingText(chunk.clean) || chunk.sentences.length);
   const keyPoints = uniqueStrings(cleanedChunks.flatMap((chunk) => chunk.sentences)).slice(0, 8);
   const modules = [];
   for (const chunk of cleanedChunks) {
-    const heading = inferModuleHeading(chunk.clean, modules.length);
-    const existing = modules.find((item) => item.heading === heading);
+    const inferredHeading = inferModuleHeading(chunk.clean, modules.length);
+    const finalHeading = /^学习模块/.test(inferredHeading) && chunk.sectionHeading ? chunk.sectionHeading : inferredHeading;
+    const existing = modules.find((item) => item.heading === finalHeading);
     const points = chunk.sentences.slice(0, 3);
     if (!points.length) continue;
     if (existing) {
       existing.points = uniqueStrings([...existing.points, ...points]).slice(0, 4);
     } else {
-      modules.push({ heading, points });
+      modules.push({ heading: finalHeading, points });
     }
     if (modules.length >= 6) break;
   }
@@ -337,8 +437,13 @@ function fallbackTrainingMaterial(state, task) {
     practiceTips: ["先看模块标题，再逐条理解要点。", "遇到参数、结构、应用场景时，结合资料来源复盘。", "考试前重点复习模块卡片和必须掌握内容。"],
     sourceRefs: uniqueStrings(chunks.map((chunk) => chunk.sourceRef)).slice(0, 12),
     generatedBy: "fallback",
+    fallbackVersion: 2,
     generatedAt: new Date().toISOString(),
   };
+}
+
+export function regenerateLocalTrainingMaterial(state, task) {
+  return fallbackTrainingMaterial(state, task);
 }
 
 function looseJsonField(text, field) {
@@ -518,7 +623,7 @@ export async function generateKnowledgeAnswer(state, { knowledgeBaseId, question
       sources: sourceObjects(chunks),
       sourceRefs: uniqueStrings(data.sourceRefs).slice(0, 8),
       confidence: retrievalConfidence(chunks, "high", "medium"),
-      generatedBy: "openclaw",
+      generatedBy: result.source || "openclaw",
       thinking: result.thinking || profile.thinking,
       model: result.model || profile.model,
       sessionPatch: result.sessionPatch,
@@ -564,7 +669,7 @@ export async function generateTrainingMaterial(state, task) {
       studyGuide: compactMultiline(material.studyGuide, 2200),
       practiceTips: uniqueStrings(material.practiceTips).slice(0, 8),
       sourceRefs: uniqueStrings(material.sourceRefs).slice(0, 12),
-      generatedBy: "openclaw",
+      generatedBy: result.source || "openclaw",
       thinking: result.thinking || profile.thinking,
       model: result.model || profile.model,
       sessionPatch: result.sessionPatch,

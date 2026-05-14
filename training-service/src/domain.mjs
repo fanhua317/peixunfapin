@@ -1,6 +1,6 @@
 import { appendEvent, isoNow, makeId, makeToken } from "./store.mjs";
 import { searchChunks, summarizeKnowledgeBase } from "./rag.mjs";
-import { generateKnowledgeAnswer, generateQuizQuestions, generateTrainingMaterial } from "./training-ai.mjs";
+import { generateKnowledgeAnswer, generateQuizQuestions, generateTrainingMaterial, regenerateLocalTrainingMaterial } from "./training-ai.mjs";
 import { chunkToLearningPoints, cleanQuestionText, getKnowledgeBaseQuality, isUsableTrainingChunk } from "./quality.mjs";
 
 function includesAny(source, values) {
@@ -361,6 +361,9 @@ export function openInvite(state, token) {
   }
   const task = state.tasks.find((entry) => entry.id === invite.taskId);
   const knowledgeBase = state.knowledgeBases.find((entry) => entry.id === task?.knowledgeBaseId);
+  if (task?.trainingMaterial?.generatedBy === "fallback" && task.trainingMaterial.fallbackVersion !== 2) {
+    task.trainingMaterial = regenerateLocalTrainingMaterial(state, task);
+  }
   const trainingMaterial = task?.trainingMaterial || null;
   return {
     invite,

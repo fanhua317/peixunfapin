@@ -529,6 +529,16 @@ function renderInviteApp() {
   </main>`;
 }
 
+function materialGeneratedByLabel(material) {
+  const source = String(material?.generatedBy || "").toLowerCase();
+  const model = String(material?.model || "").toLowerCase();
+  if (source === "fallback") return "本地整理";
+  if (source === "openclaw-text") return "OpenClaw 文本";
+  if (source === "llm-api") return model.includes("deepseek") ? "DeepSeek" : "直连模型";
+  if (source === "openclaw") return "OpenClaw";
+  return source ? source : "AI 生成";
+}
+
 function renderTrainingMaterial(material, summary) {
   if (!material) {
     const fallbackLines = splitLearningText(summary, 5);
@@ -556,7 +566,7 @@ function renderTrainingMaterial(material, summary) {
   const keyPoints = cleanLearningList(material.keyPoints, 8).map((point) => `<li>${escapeHtml(point)}</li>`).join("");
   const tips = cleanLearningList(material.practiceTips, 5).map((tip) => `<span class="badge">${escapeHtml(tip)}</span>`).join("");
   const sources = (material.sourceRefs || []).map((source) => `<li>${escapeHtml(source)}</li>`).join("");
-  const materialLabel = material.generatedBy === "fallback" ? "本地整理" : material.generatedBy === "openclaw-text" ? "OpenClaw 文本" : "OpenClaw";
+  const materialLabel = materialGeneratedByLabel(material);
   const summaryCandidate = cleanLearningText(material.summary || summary || "", 260);
   const summaryText = isUsefulLearningText(summaryCandidate) ? summaryCandidate : "请按下方学习路径完成培训，先理解核心概念，再结合模块要点复盘，最后进入在线考试。";
   const studyGuide = renderStudyGuide(material.studyGuide);
