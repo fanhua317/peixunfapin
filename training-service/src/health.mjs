@@ -1,4 +1,6 @@
 import { EMBEDDING_DEFAULT_BASE_URL, EMBEDDING_DEFAULT_MODEL } from "./embedding.mjs";
+import { getOpenClawRuntimeStatus } from "./general-chat.mjs";
+import { getLlmRuntimeConfig } from "./llm.mjs";
 import { QDRANT_DEFAULT_BASE_URL, QDRANT_DEFAULT_COLLECTION } from "./qdrant.mjs";
 import { isUsableTrainingChunk } from "./quality.mjs";
 
@@ -90,14 +92,22 @@ export async function checkOllamaRuntime() {
 }
 
 export async function getRuntimeHealth() {
-  const [qdrant, ollama] = await Promise.all([checkQdrantRuntime(), checkOllamaRuntime()]);
+  const [qdrant, ollama, openclawRuntime] = await Promise.all([checkQdrantRuntime(), checkOllamaRuntime(), getOpenClawRuntimeStatus()]);
   const hybridConfigured = !["0", "false", "off", "no"].includes(String(process.env.TRAINING_HYBRID_RETRIEVAL || "").toLowerCase());
   const retrievalMode = hybridConfigured && qdrant.ok && qdrant.collectionExists && ollama.ok ? "hybrid" : "keyword";
+  const llm = {
+    ...getLlmRuntimeConfig(),
+    openclawRuntime,
+  };
   return {
     qdrant,
     ollama,
+    llm,
     qdrantOk: qdrant.ok,
     ollamaOk: ollama.ok,
+    openclawRuntimeOk: openclawRuntime.ok,
+    llmProvider: llm.effectiveProvider,
+    llmConfigured: llm.effectiveProvider === "openclaw" ? openclawRuntime.ok : llm.directConfigured,
     retrievalMode,
     hybridConfigured,
     checkedAt: new Date().toISOString(),

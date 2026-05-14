@@ -24,6 +24,54 @@ body {
 }
 button, textarea, input { font: inherit; }
 
+.auth-mode {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.login-shell {
+  width: min(420px, 100%);
+}
+
+.login-card {
+  padding: 26px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--shadow);
+}
+
+.login-card .brand-row strong {
+  display: block;
+  color: #101828;
+  font-size: 22px;
+}
+
+.login-card .brand-row p {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+.login-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.login-form input {
+  width: 100%;
+  border: 1px solid #cfd8ea;
+  border-radius: 14px;
+  padding: 13px 14px;
+  outline: none;
+}
+
+.login-form input:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 4px rgba(23,78,166,.12);
+}
+
 .shell {
   width: min(1180px, calc(100% - 32px));
   margin: 0 auto;

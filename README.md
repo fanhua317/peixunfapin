@@ -64,3 +64,41 @@ dist\OpenClawTraining-Setup.exe
 ```
 
 `-IncludeData` 会打包 `D:\OpenClawData\training-index`、`training-clean` 和 `training-vision`，不会打包原始 PDF、Qdrant、Ollama 或密钥。
+
+大模型出题/生成资料建议通过服务端环境变量配置：
+
+```text
+TRAINING_LLM_PROVIDER=auto
+TRAINING_LLM_BASE_URL=https://api.deepseek.com/v1
+TRAINING_LLM_MODEL=deepseek-chat
+TRAINING_LLM_API_KEY=你的 API Key
+```
+
+## 打包部署到服务器
+
+生成服务器部署包：
+
+```powershell
+cd D:\OpenClaw\peixun
+powershell -ExecutionPolicy Bypass -File .\scripts\package-server.ps1 -IncludeData
+```
+
+输出文件：
+
+```text
+dist\OpenClawTrainingServer.zip
+```
+
+服务器部署包内置 Docker Compose 配置和 `.env.example`。复制为 `.env` 后填写：
+
+```text
+TRAINING_ACCESS_KEY=给老板和员工使用的访问密钥
+TRAINING_LLM_API_KEY=大模型 API Key
+PUBLIC_BASE_URL=https://你的域名
+```
+
+启动：
+
+```bash
+docker compose up -d --build
+```

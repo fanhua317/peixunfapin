@@ -1,0 +1,24 @@
+services:
+  training:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: openclaw-training
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8787}:8787"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8787
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL in .env}
+      TRAINING_DATA_DIR: /app/data/training-index
+      TRAINING_ACCESS_KEY: ${TRAINING_ACCESS_KEY:?set TRAINING_ACCESS_KEY in .env}
+      TRAINING_LLM_PROVIDER: ${TRAINING_LLM_PROVIDER:-auto}
+      TRAINING_LLM_BASE_URL: ${TRAINING_LLM_BASE_URL:-https://api.deepseek.com/v1}
+      TRAINING_LLM_MODEL: ${TRAINING_LLM_MODEL:-deepseek-chat}
+      TRAINING_LLM_API_KEY: ${TRAINING_LLM_API_KEY:?set TRAINING_LLM_API_KEY in .env}
+      TRAINING_HYBRID_RETRIEVAL: ${TRAINING_HYBRID_RETRIEVAL:-0}
+      TRAINING_HEALTH_TIMEOUT_MS: ${TRAINING_HEALTH_TIMEOUT_MS:-800}
+      OPENCLAW_CHAT_TIMEOUT_MS: ${OPENCLAW_CHAT_TIMEOUT_MS:-120000}
+    volumes:
+      - ./data/training-index:/app/data/training-index

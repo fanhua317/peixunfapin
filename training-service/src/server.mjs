@@ -1,4 +1,5 @@
 import http from "node:http";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +27,60 @@ const publicDir = path.join(serviceRoot, "public");
 
 const port = Number(process.env.PORT || process.env.TRAINING_SERVICE_PORT || 8787);
 const host = process.env.HOST || "127.0.0.1";
+const accessKey = process.env.TRAINING_ACCESS_KEY || process.env.OPENCLAW_TRAINING_ACCESS_KEY || "";
+const accessCookieName = "training_access";
+const accessCookieMaxAge = Number(process.env.TRAINING_ACCESS_COOKIE_MAX_AGE || 60 * 60 * 24 * 30);
+
+function authEnabled() {
+  return Boolean(accessKey) && !["1", "true", "yes", "on"].includes(String(process.env.TRAINING_AUTH_DISABLED || "").toLowerCase());
+}
+
+function safeEqual(left, right) {
+  const leftBuffer = Buffer.from(String(left || ""));
+  const rightBuffer = Buffer.from(String(right || ""));
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function accessToken() {
+  return createHmac("sha256", accessKey).update("openclaw-training-access").digest("base64url");
+}
+
+function parseCookies(req) {
+  const header = req.headers.cookie || "";
+  return Object.fromEntries(header.split(";").map((part) => {
+    const [name, ...valueParts] = part.trim().split("=");
+    return [name, decodeURIComponent(valueParts.join("=") || "")];
+  }).filter(([name]) => name));
+}
+
+function requestAccessKey(req) {
+  const headerValue = req.headers["x-training-access-key"];
+  if (typeof headerValue === "string" && headerValue) return headerValue;
+  const authorization = req.headers.authorization || "";
+  const bearer = authorization.match(/^Bearer\s+(.+)$/i);
+  return bearer ? bearer[1] : "";
+}
+
+function isSecureRequest(req) {
+  return req.socket.encrypted || req.headers["x-forwarded-proto"] === "https" || process.env.TRAINING_COOKIE_SECURE === "1";
+}
+
+function isAuthenticated(req) {
+  if (!authEnabled()) return true;
+  const headerKey = requestAccessKey(req);
+  if (headerKey && safeEqual(headerKey, accessKey)) return true;
+  const cookieToken = parseCookies(req)[accessCookieName];
+  return Boolean(cookieToken) && safeEqual(cookieToken, accessToken());
+}
+
+function setAccessCookie(req, res) {
+  const secure = isSecureRequest(req) ? "; Secure" : "";
+  res.setHeader("Set-Cookie", `${accessCookieName}=${encodeURIComponent(accessToken())}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${accessCookieMaxAge}${secure}`);
+}
+
+function clearAccessCookie(res) {
+  res.setHeader("Set-Cookie", `${accessCookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+}
 
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload, null, 2);
@@ -85,6 +140,40 @@ async function servePublic(res, pathname) {
 }
 
 async function handleApi(req, res, url) {
+  if (req.method === "GET" && url.pathname === "/api/auth/status") {
+    sendJson(res, 200, {
+      enabled: authEnabled(),
+      authenticated: isAuthenticated(req),
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/auth/login") {
+    const body = await readBody(req);
+    if (!authEnabled()) {
+      sendJson(res, 200, { ok: true, enabled: false, authenticated: true });
+      return;
+    }
+    if (safeEqual(body.key || body.accessKey || "", accessKey)) {
+      setAccessCookie(req, res);
+      sendJson(res, 200, { ok: true, enabled: true, authenticated: true });
+      return;
+    }
+    sendJson(res, 401, { error: "invalid access key" });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/auth/logout") {
+    clearAccessCookie(res);
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (!isAuthenticated(req)) {
+    sendJson(res, 401, { error: "access key required" });
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/health") {
     let state = null;
     let stateError = "";
@@ -101,6 +190,9 @@ async function handleApi(req, res, url) {
       stateError,
       qdrantOk: runtime.qdrantOk,
       ollamaOk: runtime.ollamaOk,
+      openclawRuntimeOk: runtime.openclawRuntimeOk,
+      llmProvider: runtime.llmProvider,
+      llmConfigured: runtime.llmConfigured,
       retrievalMode: runtime.retrievalMode,
       dataDir,
       counts: state ? {

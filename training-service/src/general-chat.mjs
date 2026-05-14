@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { access } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 const DEFAULT_AGENT_ID = "main";
@@ -9,12 +12,77 @@ const GENERAL_CHAT_COMPLEX_THINKING = process.env.OPENCLAW_GENERAL_CHAT_COMPLEX_
 const GENERAL_CHAT_MODEL = process.env.OPENCLAW_GENERAL_CHAT_MODEL || process.env.OPENCLAW_CHAT_MODEL || DEFAULT_FLASH_MODEL;
 const sessionPatchCache = new Map();
 let callGatewayPromise;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+function moduleCandidateFromPath(filePath) {
+  const fullPath = path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath);
+  return {
+    display: fullPath,
+    checkPath: fullPath,
+    specifier: pathToFileURL(fullPath).href,
+  };
+}
+
+function getOpenClawRuntimeCandidates() {
+  const candidates = [];
+  if (process.env.OPENCLAW_RUNTIME_MODULE) {
+    const value = process.env.OPENCLAW_RUNTIME_MODULE;
+    if (/^(?:file|data|node|https?):/i.test(value)) {
+      candidates.push({ display: value, specifier: value });
+    } else {
+      candidates.push(moduleCandidateFromPath(value));
+    }
+  }
+  candidates.push(
+    moduleCandidateFromPath(path.resolve(__dirname, "..", "..", "openclaw-runtime", "dist", "call.runtime.js")),
+    moduleCandidateFromPath(path.resolve(__dirname, "..", "..", "..", "openclaw", "dist", "call.runtime.js")),
+  );
+  if (process.env.LOCALAPPDATA) {
+    candidates.push(
+      moduleCandidateFromPath(path.join(process.env.LOCALAPPDATA, "openclaw", "dist", "call.runtime.js")),
+      moduleCandidateFromPath(path.join(process.env.LOCALAPPDATA, "OpenClaw", "dist", "call.runtime.js")),
+    );
+  }
+  return candidates;
+}
+
+export async function resolveOpenClawRuntimeModule() {
+  const tried = [];
+  for (const candidate of getOpenClawRuntimeCandidates()) {
+    tried.push(candidate.display);
+    if (candidate.checkPath) {
+      try {
+        await access(candidate.checkPath);
+      } catch {
+        continue;
+      }
+    }
+    return candidate;
+  }
+  throw new Error(`Cannot find OpenClaw gateway runtime call.runtime.js. Tried: ${tried.join(", ")}`);
+}
+
+export async function getOpenClawRuntimeStatus() {
+  try {
+    const candidate = await resolveOpenClawRuntimeModule();
+    return { ok: true, module: candidate.display };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
 
 async function getCallGateway() {
   if (!callGatewayPromise) {
-    callGatewayPromise = import("../../../openclaw/dist/call.runtime.js")
-      .then((module) => module.callGateway)
+    callGatewayPromise = resolveOpenClawRuntimeModule()
+      .then((candidate) => import(candidate.specifier))
+      .then((module) => {
+        if (typeof module.callGateway !== "function") {
+          throw new Error("OpenClaw runtime did not export callGateway");
+        }
+        return module.callGateway;
+      })
       .catch((error) => {
+        callGatewayPromise = undefined;
         throw new Error(`OpenClaw gateway runtime unavailable: ${error instanceof Error ? error.message : String(error)}`);
       });
   }

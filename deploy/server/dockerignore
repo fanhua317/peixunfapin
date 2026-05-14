@@ -1,0 +1,6 @@
+data/
+*.log
+training-service/.tmp-smoke-data/
+training-service/data/
+training-service/node_modules/
+training-service/dist/

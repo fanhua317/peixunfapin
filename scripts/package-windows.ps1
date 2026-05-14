@@ -70,6 +70,20 @@ if ($IncludeData) {
   Copy-Directory -Source (Join-Path $dataRootFull "training-vision") -Destination (Join-Path $stageRoot "data\training-vision")
 }
 
+$configEnv = @"
+# OpenClaw Training runtime config
+# Fill TRAINING_LLM_API_KEY to enable direct model calls for training drafts and quizzes.
+TRAINING_LLM_PROVIDER=auto
+TRAINING_LLM_BASE_URL=https://api.deepseek.com/v1
+TRAINING_LLM_MODEL=deepseek-chat
+TRAINING_LLM_API_KEY=
+
+# Optional: use an existing OpenClaw Gateway for general chat.
+OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
+OPENCLAW_CHAT_TIMEOUT_MS=120000
+"@
+Set-Content -Encoding ASCII -Path (Join-Path $stageRoot "config.env") -Value $configEnv
+
 $startCmd = @"
 @echo off
 setlocal
@@ -78,11 +92,17 @@ set "PORT=$Port"
 set "HOST=127.0.0.1"
 set "TRAINING_DATA_DIR=%APP_DIR%data\training-index"
 set "OPENCLAW_CHAT_TIMEOUT_MS=3000"
+if exist "%APP_DIR%config.env" (
+  for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%APP_DIR%config.env") do (
+    if not "%%A"=="" set "%%A=%%B"
+  )
+)
 
 echo Starting OpenClaw Training...
 echo.
 echo Browser: http://127.0.0.1:%PORT%/
 echo Data:    %TRAINING_DATA_DIR%
+echo LLM:     %TRAINING_LLM_PROVIDER% / %TRAINING_LLM_MODEL%
 echo.
 start "" powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Seconds 2; Start-Process 'http://127.0.0.1:%PORT%/'"
 "%APP_DIR%runtime\node.exe" "%APP_DIR%training-service\src\server.mjs"
@@ -100,6 +120,12 @@ http://127.0.0.1:$Port/
 Data directory:
 
 data\training-index
+
+LLM config:
+
+config.env
+
+Set TRAINING_LLM_API_KEY to enable direct OpenAI-compatible model calls.
 
 If no business data is included, demo data will be created on first run.
 "@
