@@ -185,7 +185,7 @@ async function handleApi(req, res, url) {
     } catch (error) {
       stateError = error instanceof Error ? error.message : String(error);
     }
-    const runtime = await getRuntimeHealth();
+    const runtime = await getRuntimeHealth(state || undefined);
     sendJson(res, 200, {
       ok: !stateError,
       service: "openclaw-training-service",
@@ -193,6 +193,7 @@ async function handleApi(req, res, url) {
       stateError,
       qdrantOk: runtime.qdrantOk,
       ollamaOk: runtime.ollamaOk,
+      localVectorIndexOk: runtime.localVectorIndexOk,
       openclawRuntimeOk: runtime.openclawRuntimeOk,
       llmProvider: runtime.llmProvider,
       llmConfigured: runtime.llmConfigured,

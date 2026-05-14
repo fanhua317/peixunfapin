@@ -1,6 +1,7 @@
 import { EMBEDDING_DEFAULT_BASE_URL, EMBEDDING_DEFAULT_MODEL } from "./embedding.mjs";
 import { getOpenClawRuntimeStatus } from "./general-chat.mjs";
 import { getLlmRuntimeConfig } from "./llm.mjs";
+import { getLocalVectorIndexStatus } from "./local-vector-index.mjs";
 import { QDRANT_DEFAULT_BASE_URL, QDRANT_DEFAULT_COLLECTION } from "./qdrant.mjs";
 import { isUsableTrainingChunk } from "./quality.mjs";
 
@@ -91,10 +92,14 @@ export async function checkOllamaRuntime() {
   }
 }
 
-export async function getRuntimeHealth() {
+export async function getRuntimeHealth(state = { chunks: [] }) {
   const [qdrant, ollama, openclawRuntime] = await Promise.all([checkQdrantRuntime(), checkOllamaRuntime(), getOpenClawRuntimeStatus()]);
+  const localVectorIndex = await getLocalVectorIndexStatus(state || { chunks: [] });
   const hybridConfigured = !["0", "false", "off", "no"].includes(String(process.env.TRAINING_HYBRID_RETRIEVAL || "").toLowerCase());
-  const retrievalMode = hybridConfigured && qdrant.ok && qdrant.collectionExists && ollama.ok ? "hybrid" : "keyword";
+  const localVectorReady = ["ready", "partial"].includes(localVectorIndex.status);
+  const qdrantReady = qdrant.ok && qdrant.collectionExists;
+  const semanticReady = hybridConfigured && ollama.ok && (qdrantReady || localVectorReady);
+  const retrievalMode = semanticReady ? "hybrid" : "keyword";
   const llm = {
     ...getLlmRuntimeConfig(),
     openclawRuntime,
@@ -102,9 +107,11 @@ export async function getRuntimeHealth() {
   return {
     qdrant,
     ollama,
+    localVectorIndex,
     llm,
     qdrantOk: qdrant.ok,
     ollamaOk: ollama.ok,
+    localVectorIndexOk: localVectorReady,
     openclawRuntimeOk: openclawRuntime.ok,
     llmProvider: llm.effectiveProvider,
     llmConfigured: llm.effectiveProvider === "openclaw" ? openclawRuntime.ok : llm.directConfigured,
@@ -116,10 +123,22 @@ export async function getRuntimeHealth() {
 
 export async function getVectorIndexStatus(state, knowledgeBaseId, runtime) {
   const qdrant = runtime?.qdrant || await checkQdrantRuntime();
+  const localVectorIndex = runtime?.localVectorIndex || await getLocalVectorIndexStatus(state, knowledgeBaseId);
   const collection = qdrant.collection || process.env.QDRANT_COLLECTION || QDRANT_DEFAULT_COLLECTION;
   const checkedAt = new Date().toISOString();
   if (!qdrant.ok) {
-    return { status: "unavailable", collection, checkedAt, message: qdrant.error || "Qdrant unavailable" };
+    if (["ready", "partial"].includes(localVectorIndex.status)) {
+      return {
+        status: localVectorIndex.status,
+        backend: "local",
+        collection: localVectorIndex.path,
+        checkedAt,
+        indexedChunks: localVectorIndex.indexedChunks,
+        missingVectorChunks: localVectorIndex.missingVectorChunks,
+        message: localVectorIndex.message,
+      };
+    }
+    return { status: "unavailable", collection, checkedAt, message: qdrant.error || localVectorIndex.message || "Vector index unavailable" };
   }
   if (!qdrant.collectionExists) {
     return { status: "missing_collection", collection, checkedAt, message: "Qdrant collection does not exist" };

@@ -62,3 +62,22 @@ data/training-index
 ```
 
 Back up `data/training-index/state.json` regularly.
+
+## RAG With bge-m3
+
+For a 2-core / 4GB Windows server, prefer the local vector index instead of Qdrant:
+
+```powershell
+ollama pull bge-m3
+cd C:\Users\Administrator\Desktop\OpenClawTrainingServer\training-service
+$env:TRAINING_DATA_DIR="C:\Users\Administrator\Desktop\OpenClawTrainingServer\data\training-index"
+npm run embed:local -- --model=bge-m3
+```
+
+Keep these values in `.env`:
+
+```text
+TRAINING_HYBRID_RETRIEVAL=auto
+TRAINING_VECTOR_BACKEND=local
+TRAINING_EMBEDDING_MODEL=bge-m3
+```

@@ -23,7 +23,10 @@ if (!$env:TRAINING_LLM_PROVIDER) { $env:TRAINING_LLM_PROVIDER = "auto" }
 if (!$env:TRAINING_LLM_BASE_URL) { $env:TRAINING_LLM_BASE_URL = "https://api.deepseek.com/v1" }
 if (!$env:TRAINING_LLM_MODEL) { $env:TRAINING_LLM_MODEL = "deepseek-chat" }
 if (!$env:TRAINING_LLM_TEMPERATURE) { $env:TRAINING_LLM_TEMPERATURE = "1" }
-if (!$env:TRAINING_HYBRID_RETRIEVAL) { $env:TRAINING_HYBRID_RETRIEVAL = "0" }
+if (!$env:TRAINING_HYBRID_RETRIEVAL) { $env:TRAINING_HYBRID_RETRIEVAL = "auto" }
+if (!$env:TRAINING_VECTOR_BACKEND) { $env:TRAINING_VECTOR_BACKEND = "local" }
+if (!$env:TRAINING_EMBEDDING_MODEL) { $env:TRAINING_EMBEDDING_MODEL = "bge-m3" }
+if (!$env:TRAINING_RAG_EMBEDDING_TIMEOUT_MS) { $env:TRAINING_RAG_EMBEDDING_TIMEOUT_MS = "8000" }
 
 New-Item -ItemType Directory -Force -Path $env:TRAINING_DATA_DIR | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $PSScriptRoot "logs") | Out-Null

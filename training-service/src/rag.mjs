@@ -1,4 +1,5 @@
 import { createEmbeddingClient } from "./embedding.mjs";
+import { loadLocalVectorIndex, searchLocalVectorIndex } from "./local-vector-index.mjs";
 import { buildKbFilter, createQdrantClient, QDRANT_DEFAULT_COLLECTION } from "./qdrant.mjs";
 import { isUsableTrainingChunk } from "./quality.mjs";
 
@@ -9,10 +10,13 @@ const SEMANTIC_WEIGHT = Number(process.env.TRAINING_SEMANTIC_WEIGHT || 0.7);
 const KEYWORD_WEIGHT = Number(process.env.TRAINING_KEYWORD_WEIGHT || 0.3);
 const HYBRID_COLLECTION = process.env.QDRANT_COLLECTION || QDRANT_DEFAULT_COLLECTION;
 const SEMANTIC_RETRY_MS = Number(process.env.TRAINING_SEMANTIC_RETRY_MS || 60_000);
+const SEMANTIC_BACKEND = String(process.env.TRAINING_VECTOR_BACKEND || process.env.TRAINING_SEMANTIC_BACKEND || "auto").toLowerCase();
 
 let cachedQdrant = null;
 let cachedEmbedding = null;
 let qdrantHealthy = HYBRID_ENABLED;
+let cachedLocalIndex = null;
+let cachedLocalIndexPath = "";
 let lastSemanticFailureAt = 0;
 
 function getQdrant() {
@@ -21,12 +25,23 @@ function getQdrant() {
 }
 
 function getEmbedding() {
-  if (!cachedEmbedding) cachedEmbedding = createEmbeddingClient();
+  if (!cachedEmbedding) {
+    cachedEmbedding = createEmbeddingClient({
+      timeoutMs: Number(process.env.TRAINING_RAG_EMBEDDING_TIMEOUT_MS || process.env.EMBEDDING_QUERY_TIMEOUT_MS || 8_000),
+      batchSize: 1,
+    });
+  }
   return cachedEmbedding;
+}
+
+function backendEnabled(name) {
+  if (!SEMANTIC_BACKEND || SEMANTIC_BACKEND === "auto") return true;
+  return SEMANTIC_BACKEND.split(/[,;|]/).map((part) => part.trim()).includes(name);
 }
 
 function canTrySemanticSearch() {
   if (!HYBRID_ENABLED) return false;
+  if (backendEnabled("local")) return true;
   if (qdrantHealthy) return true;
   return Date.now() - lastSemanticFailureAt > SEMANTIC_RETRY_MS;
 }
@@ -105,7 +120,6 @@ async function semanticSearch(state, { knowledgeBaseId, query, limit }) {
   if (!canTrySemanticSearch()) return [];
   const trimmed = String(query || "").trim();
   if (!trimmed) return [];
-  const qdrant = getQdrant();
   const embedding = getEmbedding();
   let vector;
   try {
@@ -117,6 +131,25 @@ async function semanticSearch(state, { knowledgeBaseId, query, limit }) {
   if (!Array.isArray(vector)) {
     return [];
   }
+
+  if (backendEnabled("local")) {
+    try {
+      const indexPath = process.env.TRAINING_LOCAL_VECTOR_INDEX_PATH || process.env.TRAINING_VECTOR_INDEX_PATH || "";
+      if (!cachedLocalIndex || cachedLocalIndexPath !== indexPath) {
+        cachedLocalIndex = await loadLocalVectorIndex();
+        cachedLocalIndexPath = indexPath;
+      }
+      const localMatches = searchLocalVectorIndex(state, cachedLocalIndex, { knowledgeBaseId, vector, limit });
+      if (localMatches.length) return localMatches;
+    } catch {
+      cachedLocalIndex = null;
+      cachedLocalIndexPath = "";
+    }
+  }
+
+  if (!backendEnabled("qdrant")) return [];
+
+  const qdrant = getQdrant();
   let raw;
   try {
     raw = await qdrant.search({
