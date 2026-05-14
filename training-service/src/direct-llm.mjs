@@ -28,6 +28,31 @@ function chatCompletionsUrl(baseUrl) {
   return /\/chat\/completions$/i.test(trimmed) ? trimmed : `${trimmed}/chat/completions`;
 }
 
+function isTemperatureOneRequiredError(message) {
+  return /invalid temperature/i.test(String(message || "")) && /only\s+1\s+is\s+allowed/i.test(String(message || ""));
+}
+
+async function postChatCompletion(body, signal) {
+  const response = await fetch(chatCompletionsUrl(resolveDirectBaseUrl()), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${resolveDirectApiKey()}`,
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) : null;
+  if (!response.ok) {
+    const detail = payload?.error?.message || payload?.message || text || response.statusText;
+    const error = new Error(`LLM API request failed: ${detail}`);
+    error.detail = detail;
+    throw error;
+  }
+  return payload;
+}
+
 export function getDirectLlmRuntimeConfig(options = {}) {
   const apiKeyConfigured = Boolean(resolveDirectApiKey());
   return {
@@ -60,20 +85,15 @@ export async function askOpenAiCompatibleLLM(message, options = {}) {
   if (DEFAULT_MAX_TOKENS > 0) body.max_tokens = DEFAULT_MAX_TOKENS;
 
   try {
-    const response = await fetch(chatCompletionsUrl(resolveDirectBaseUrl()), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    const text = await response.text();
-    const payload = text ? JSON.parse(text) : null;
-    if (!response.ok) {
-      const detail = payload?.error?.message || payload?.message || text || response.statusText;
-      throw new Error(`LLM API request failed: ${detail}`);
+    let payload;
+    try {
+      payload = await postChatCompletion(body, controller.signal);
+    } catch (error) {
+      if (body.temperature !== 1 && isTemperatureOneRequiredError(error.detail || error.message)) {
+        payload = await postChatCompletion({ ...body, temperature: 1 }, controller.signal);
+      } else {
+        throw error;
+      }
     }
     const answer = payload?.choices?.[0]?.message?.content || payload?.choices?.[0]?.text || "";
     if (!answer) throw new Error("LLM API returned no assistant content");

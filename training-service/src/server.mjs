@@ -110,11 +110,14 @@ async function readBody(req) {
 }
 
 function publicBaseUrl(req) {
-  const configured = process.env.PUBLIC_BASE_URL;
-  if (configured) return configured.replace(/\/$/, "");
+  const configured = process.env.PUBLIC_BASE_URL ? process.env.PUBLIC_BASE_URL.replace(/\/$/, "") : "";
+  const mode = String(process.env.PUBLIC_BASE_URL_MODE || process.env.TRAINING_PUBLIC_BASE_URL_MODE || "request").toLowerCase();
   const proto = req.headers["x-forwarded-proto"] || "http";
   const hostHeader = req.headers.host || `${host}:${port}`;
-  return `${proto}://${hostHeader}`;
+  const requestBase = `${proto}://${hostHeader}`.replace(/\/$/, "");
+  if (mode === "env" && configured) return configured;
+  if (mode === "auto" && configured && /^https?:\/\//i.test(configured)) return configured;
+  return requestBase || configured;
 }
 
 async function servePublic(res, pathname) {

@@ -5,9 +5,9 @@
 1. Install Docker and Docker Compose on the server.
 2. Copy `.env.example` to `.env`.
 3. Edit `.env` and set:
-   - `PUBLIC_BASE_URL`
    - `TRAINING_ACCESS_KEY`
    - `TRAINING_LLM_API_KEY`
+   - `PUBLIC_BASE_URL` only if you want to force one fixed domain; otherwise links are generated from the current browser address.
 4. Start the service:
 
 ```bash
@@ -18,6 +18,13 @@ Open:
 
 ```text
 http://your-server-ip:8787/
+```
+
+For `http://47.95.194.219:8787/`, keep `PUBLIC_BASE_URL_MODE=request` or set:
+
+```text
+PUBLIC_BASE_URL=http://47.95.194.219:8787
+PUBLIC_BASE_URL_MODE=env
 ```
 
 ## Direct Node

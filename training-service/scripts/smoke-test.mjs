@@ -52,6 +52,8 @@ const child = spawn(process.execPath, ["src/server.mjs"], {
     ...process.env,
     PORT: String(port),
     HOST: "127.0.0.1",
+    PUBLIC_BASE_URL: "http://old.example:8787",
+    PUBLIC_BASE_URL_MODE: "",
     TRAINING_DATA_DIR: tempDataDir,
     TRAINING_HEALTH_TIMEOUT_MS: process.env.TRAINING_HEALTH_TIMEOUT_MS || "300",
     OPENCLAW_CHAT_TIMEOUT_MS: process.env.OPENCLAW_CHAT_TIMEOUT_MS || "3000",
@@ -94,6 +96,9 @@ try {
     method: "POST",
     body: JSON.stringify({ draft: draftResponse.draft }),
   });
+  if (!String(publishResponse.inviteLinks?.[0]?.url || "").startsWith(`${baseUrl}/t/`)) {
+    throw new Error(`expected invite link to use request host, got ${publishResponse.inviteLinks?.[0]?.url}`);
+  }
 
   const qualityResponse = await request(`/api/knowledge-bases/${encodeURIComponent(publishResponse.task.knowledgeBaseId)}/quality`);
   if (!qualityResponse.quality || qualityResponse.quality.chunks < 1) {
