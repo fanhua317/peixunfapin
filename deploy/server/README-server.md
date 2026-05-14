@@ -31,6 +31,21 @@ chmod +x start-server.sh
 ./start-server.sh
 ```
 
+On Windows Server, install Node.js 24 LTS and run PowerShell as Administrator:
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
+powershell -ExecutionPolicy Bypass -File .\start-server.ps1
+```
+
+To run after reboot, create a Windows scheduled task:
+
+```powershell
+schtasks /Create /TN "OpenClawTraining" /SC ONSTART /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\apps\OpenClawTrainingServer\start-server.ps1" /RU SYSTEM /RL HIGHEST /F
+schtasks /Run /TN "OpenClawTraining"
+```
+
 ## Data
 
 The default data directory is:
