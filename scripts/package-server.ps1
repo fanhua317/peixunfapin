@@ -1,8 +1,8 @@
-param(
+﻿param(
   [switch]$IncludeData,
   [string]$DataRoot = "D:\OpenClawData",
   [string]$OutputDir = ".\dist",
-  [string]$AppName = "OpenClawTrainingServer"
+  [string]$AppName = "JuzhouAgentTrainingServer"
 )
 
 $ErrorActionPreference = "Stop"
@@ -60,3 +60,4 @@ if ($IncludeData) {
 Compress-Archive -LiteralPath $stageRoot -DestinationPath $zipPath -Force
 
 Write-Host "Server package: $zipPath"
+

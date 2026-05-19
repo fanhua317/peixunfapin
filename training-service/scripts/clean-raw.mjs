@@ -4,13 +4,12 @@ import { pathToFileURL } from "node:url";
 import { inflateRawSync } from "node:zlib";
 
 const serviceRoot = path.resolve(import.meta.dirname, "..");
-const workspaceRoot = path.resolve(serviceRoot, "..", "..");
 const defaultRawDir = "D:\\OpenClawData\\training-raw";
 const defaultCleanDir = "D:\\OpenClawData\\training-clean";
 const rawDir = path.resolve(process.argv[2] || process.env.TRAINING_RAW_DIR || defaultRawDir);
 const cleanDir = path.resolve(process.argv[3] || process.env.TRAINING_CLEAN_DIR || defaultCleanDir);
 const pdfJsRoot = path.resolve(
-  process.env.PDFJS_DIST_DIR || path.join(workspaceRoot, "openclaw", "node_modules", "pdfjs-dist"),
+  process.env.PDFJS_DIST_DIR || path.join(serviceRoot, "node_modules", "pdfjs-dist"),
 );
 
 let pdfJsModulePromise;

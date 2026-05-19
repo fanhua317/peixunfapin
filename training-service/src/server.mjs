@@ -42,7 +42,7 @@ function safeEqual(left, right) {
 }
 
 function accessToken() {
-  return createHmac("sha256", accessKey).update("openclaw-training-access").digest("base64url");
+  return createHmac("sha256", accessKey).update("juzhou-agent-training-access").digest("base64url");
 }
 
 function parseCookies(req) {
@@ -188,7 +188,7 @@ async function handleApi(req, res, url) {
     const runtime = await getRuntimeHealth(state || undefined);
     sendJson(res, 200, {
       ok: !stateError,
-      service: "openclaw-training-service",
+      service: "juzhou-agent-training-service",
       stateOk: !stateError,
       stateError,
       qdrantOk: runtime.qdrantOk,
@@ -385,5 +385,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, host, () => {
-  console.log(`OpenClaw training service listening at http://${host}:${port}`);
+  console.log(`Juzhou Agent training service listening at http://${host}:${port}`);
 });

@@ -3,13 +3,12 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const serviceRoot = path.resolve(import.meta.dirname, "..");
-const workspaceRoot = path.resolve(serviceRoot, "..", "..");
 const pdfJsRoot = path.resolve(
-  process.env.PDFJS_DIST_DIR || path.join(workspaceRoot, "openclaw", "node_modules", "pdfjs-dist"),
+  process.env.PDFJS_DIST_DIR || path.join(serviceRoot, "node_modules", "pdfjs-dist"),
 );
 const canvasModulePath = path.resolve(
   process.env.CANVAS_MODULE_PATH ||
-    path.join(workspaceRoot, "openclaw", "node_modules", "@napi-rs", "canvas", "index.js"),
+    path.join(serviceRoot, "node_modules", "@napi-rs", "canvas", "index.js"),
 );
 const inputPath = path.resolve(process.argv[2] || process.env.TRAINING_RENDER_INPUT || "D:\\OpenClawData\\training-raw");
 const inputRoot = /\.pdf$/i.test(inputPath) ? path.dirname(inputPath) : inputPath;

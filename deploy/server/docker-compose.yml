@@ -1,9 +1,9 @@
-services:
+﻿services:
   training:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: openclaw-training
+    container_name: juzhou-agent-training
     restart: unless-stopped
     ports:
       - "${HOST_PORT:-8787}:8787"
@@ -27,3 +27,4 @@ services:
       OPENCLAW_CHAT_TIMEOUT_MS: ${OPENCLAW_CHAT_TIMEOUT_MS:-120000}
     volumes:
       - ./data/training-index:/app/data/training-index
+

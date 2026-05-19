@@ -428,7 +428,7 @@ async function answerGeneralMessage(message) {
 function appendDraftResult(result) {
   currentDraft = result.draft;
   const decision = result.decision
-    ? `<p class="muted">已由 OpenClaw 判定意图：${escapeHtml(result.decision.intent || result.decision.skill)} ｜ ${escapeHtml(result.decision.source || "local")}${result.decision.thinking ? ` ｜ ${escapeHtml(result.decision.thinking)}` : ""}${result.decision.model ? ` ｜ ${escapeHtml(result.decision.model)}` : ""}</p>`
+    ? `<p class="muted">已由智能助手判定意图：${escapeHtml(result.decision.intent || result.decision.skill)} ｜ ${escapeHtml(result.decision.source || "local")}${result.decision.thinking ? ` ｜ ${escapeHtml(result.decision.thinking)}` : ""}${result.decision.model ? ` ｜ ${escapeHtml(result.decision.model)}` : ""}</p>`
     : "";
   appendAssistantHtml(`${decision}${renderDraftCard(currentDraft)}`, draftActionButtons(currentDraft));
 }
@@ -613,7 +613,7 @@ function renderInvite(result) {
       <div class="task-head">
         <div>
           <strong>在线考试</strong>
-          <p class="muted">题目将由 OpenClaw 结合资料生成，并按性价比策略选择思考强度。</p>
+          <p class="muted">题目将由系统结合资料生成，并按性价比策略选择思考强度。</p>
         </div>
         <span class="badge">${escapeHtml(result.task.quizCount)} 题 / ${escapeHtml(result.task.passScore)} 分通过</span>
       </div>
@@ -660,7 +660,7 @@ async function startQuiz() {
     startBtn.disabled = true;
     startBtn.textContent = "生成题目中...";
   }
-  output.innerHTML = `<p class="typing">OpenClaw 正在按性价比策略生成题目...</p>`;
+  output.innerHTML = `<p class="typing">正在按性价比策略生成题目...</p>`;
   const result = await api("/api/quiz/generate", {
     method: "POST",
     body: JSON.stringify({ taskId: currentInvite.task.id }),

@@ -1,8 +1,8 @@
-param(
+﻿param(
   [switch]$IncludeData,
   [string]$DataRoot = "D:\OpenClawData",
   [string]$OutputDir = ".\dist",
-  [string]$AppName = "OpenClawTraining",
+  [string]$AppName = "JuzhouAgentTraining",
   [int]$Port = 8787,
   [string]$NodePath = ""
 )
@@ -71,7 +71,7 @@ if ($IncludeData) {
 }
 
 $configEnv = @"
-# OpenClaw Training runtime config
+# Juzhou Agent Training runtime config
 # Fill TRAINING_LLM_API_KEY to enable direct model calls for training drafts and quizzes.
 TRAINING_LLM_PROVIDER=auto
 TRAINING_LLM_BASE_URL=https://api.deepseek.com/v1
@@ -98,7 +98,7 @@ if exist "%APP_DIR%config.env" (
   )
 )
 
-echo Starting OpenClaw Training...
+echo Starting Juzhou Agent Training...
 echo.
 echo Browser: http://127.0.0.1:%PORT%/
 echo Data:    %TRAINING_DATA_DIR%
@@ -111,7 +111,7 @@ pause
 Set-Content -Encoding ASCII -Path (Join-Path $stageRoot "start-training.cmd") -Value $startCmd
 
 $portableReadme = @"
-# OpenClaw Training Portable
+# 钜洲培训 Agent Portable
 
 Double click start-training.cmd to start the training service, then open:
 
@@ -155,12 +155,12 @@ if (Test-Path -LiteralPath `$dest) {
 New-Item -ItemType Directory -Force -Path `$dest | Out-Null
 Expand-Archive -LiteralPath `$zip -DestinationPath `$env:LOCALAPPDATA -Force
 `$appDir = Join-Path `$env:LOCALAPPDATA "$AppName"
-`$shortcutPath = Join-Path ([Environment]::GetFolderPath("Desktop")) "OpenClaw Training.lnk"
+`$shortcutPath = Join-Path ([Environment]::GetFolderPath("Desktop")) "钜洲培训 Agent.lnk"
 `$shell = New-Object -ComObject WScript.Shell
 `$shortcut = `$shell.CreateShortcut(`$shortcutPath)
 `$shortcut.TargetPath = Join-Path `$appDir "start-training.cmd"
 `$shortcut.WorkingDirectory = `$appDir
-`$shortcut.Description = "OpenClaw Training"
+`$shortcut.Description = "钜洲培训 Agent"
 `$shortcut.Save()
 Start-Process -FilePath (Join-Path `$appDir "start-training.cmd") -WorkingDirectory `$appDir
 "@
@@ -185,9 +185,9 @@ CAB_ResvCodeSigning=0
 RebootMode=N
 InstallPrompt=
 DisplayLicense=
-FinishMessage=OpenClaw Training has been installed.
+FinishMessage=Juzhou Agent Training has been installed.
 TargetName=$exeEscaped
-FriendlyName=OpenClaw Training Installer
+FriendlyName=Juzhou Agent Training Installer
 AppLaunched=install.cmd
 PostInstallCmd=<None>
 AdminQuietInstCmd=
@@ -219,3 +219,4 @@ if ($exeCreated) {
 } else {
   Write-Host "Installer EXE: skipped, iexpress.exe not available"
 }
+

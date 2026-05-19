@@ -1,7 +1,7 @@
-{
+﻿{
   plugins: {
     load: {
-      paths: ["D:/OpenClaw/peixun/training-plugin"],
+      paths: ["D:/juzhou-agent/peixun/training-plugin"],
     },
     entries: {
       "training-rag": {
@@ -48,3 +48,4 @@
     ],
   },
 }
+

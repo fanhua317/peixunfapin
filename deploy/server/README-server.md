@@ -1,4 +1,4 @@
-# OpenClaw Training Server Deployment
+﻿# 钜洲培训 Agent Server Deployment
 
 ## Docker Compose
 
@@ -49,8 +49,8 @@ powershell -ExecutionPolicy Bypass -File .\start-server.ps1
 To run after reboot, create a Windows scheduled task:
 
 ```powershell
-schtasks /Create /TN "OpenClawTraining" /SC ONSTART /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\apps\OpenClawTrainingServer\start-server.ps1" /RU SYSTEM /RL HIGHEST /F
-schtasks /Run /TN "OpenClawTraining"
+schtasks /Create /TN "JuzhouAgentTraining" /SC ONSTART /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\apps\JuzhouAgentTrainingServer\start-server.ps1" /RU SYSTEM /RL HIGHEST /F
+schtasks /Run /TN "JuzhouAgentTraining"
 ```
 
 ## Data
@@ -69,8 +69,8 @@ For a 2-core / 4GB Windows server, prefer the local vector index instead of Qdra
 
 ```powershell
 ollama pull bge-m3
-cd C:\Users\Administrator\Desktop\OpenClawTrainingServer\training-service
-$env:TRAINING_DATA_DIR="C:\Users\Administrator\Desktop\OpenClawTrainingServer\data\training-index"
+cd C:\Users\Administrator\Desktop\JuzhouAgentTrainingServer\training-service
+$env:TRAINING_DATA_DIR="C:\Users\Administrator\Desktop\JuzhouAgentTrainingServer\data\training-index"
 npm run embed:local -- --model=bge-m3
 ```
 
@@ -81,3 +81,4 @@ TRAINING_HYBRID_RETRIEVAL=auto
 TRAINING_VECTOR_BACKEND=local
 TRAINING_EMBEDDING_MODEL=bge-m3
 ```
+

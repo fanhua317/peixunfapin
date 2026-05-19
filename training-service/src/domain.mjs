@@ -1,7 +1,8 @@
 import { appendEvent, isoNow, makeId, makeToken } from "./store.mjs";
 import { searchChunks, summarizeKnowledgeBase } from "./rag.mjs";
 import { generateKnowledgeAnswer, generateQuizQuestions, generateTrainingMaterial, regenerateLocalTrainingMaterial } from "./training-ai.mjs";
-import { chunkToLearningPoints, cleanQuestionText, getKnowledgeBaseQuality, isUsableTrainingChunk } from "./quality.mjs";
+import { getKnowledgeBaseQuality, isUsableTrainingChunk } from "./quality.mjs";
+import { buildFallbackQuestionFromChunk } from "./domain/quiz-fallback.mjs";
 
 function includesAny(source, values) {
   const text = String(source || "").toLowerCase();
@@ -382,41 +383,6 @@ export async function answerQuestion(state, { token, taskId, question }) {
   return await generateKnowledgeAnswer(state, { knowledgeBaseId: task.knowledgeBaseId, question });
 }
 
-function buildQuestionFromChunk(chunk, index, quizType) {
-  const points = chunkToLearningPoints(chunk, 3);
-  const correctOption = cleanQuestionText(points[0] || chunk.content || "资料中的说法符合培训要求", 72);
-  const sourceRef = chunk.sourceRef || "培训资料";
-  if (quizType === "true_false") {
-    const correct = index % 2 === 0;
-    return {
-      id: makeId("question"),
-      type: "true_false",
-      prompt: correct
-        ? `判断题：${correctOption}`
-        : "判断题：培训资料中的产品知识与实际销售、选型或服务沟通无关。",
-      options: ["正确", "错误"],
-      correctAnswer: correct ? "正确" : "错误",
-      explanation: `参考资料：${sourceRef}。${correctOption}`,
-      sourceRef,
-    };
-  }
-
-  return {
-    id: makeId("question"),
-    type: "single_choice",
-    prompt: `根据资料，关于${cleanQuestionText(chunk.heading || chunk.metadata?.section || "培训内容", 30)}，以下哪项最符合要求？`,
-    options: [
-      correctOption,
-      "忽略客户问题，直接推进成交。",
-      "只介绍价格，不需要说明售后。",
-      "不需要根据资料回答客户问题。",
-    ],
-    correctAnswer: correctOption,
-    explanation: `正确答案来自：${sourceRef}。`,
-    sourceRef,
-  };
-}
-
 export async function generateQuiz(state, taskId) {
   const task = state.tasks.find((entry) => entry.id === taskId);
   if (!task) throw new Error("task not found");
@@ -438,7 +404,7 @@ export async function generateQuiz(state, taskId) {
   }));
   for (let index = questions.length; index < task.quizCount; index += 1) {
     const chunk = sourceChunks[index % sourceChunks.length];
-    questions.push(buildQuestionFromChunk(chunk, index, task.quizType));
+    questions.push(buildFallbackQuestionFromChunk(chunk, index, task.quizType));
   }
   const quiz = {
     id: makeId("quiz"),

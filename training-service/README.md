@@ -1,4 +1,4 @@
-﻿# OpenClaw Training Service MVP
+﻿# 钜洲培训 Agent Service MVP
 
 这是培训系统的外部 Web/API 服务。它保存员工、知识库、培训任务、邀请链接、考试和报表数据，OpenClaw 通过外部插件调用它。
 
@@ -20,7 +20,7 @@ npm start
 培训系统代码在：
 
 ```text
-D:\OpenClaw\peixun\training-service
+D:\juzhou-agent\peixun\training-service
 ```
 
 业务数据放在代码目录外：
@@ -184,3 +184,4 @@ D:\OpenClawData\training-clean
 - Qdrant collection 的向量维度固定；更换 embedding 模型后需要重建 collection。
 - 图片型或扫描型 PDF 需要 OCR 后才能得到完整文本；当前清洗脚本只能直接抽取可复制文本。
 - 当前邀请链接没有手机号/企业身份校验，正式版需要补权限验证。
+

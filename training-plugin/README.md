@@ -1,4 +1,4 @@
-# OpenClaw Training RAG Plugin
+﻿# 钜洲培训 Agent RAG Plugin
 
 这是 OpenClaw 外部插件，把 `training-service` 的培训能力暴露为 Agent tools。
 
@@ -18,7 +18,7 @@
 在 OpenClaw 中安装本地插件：
 
 ```powershell
-openclaw plugins install "D:\OpenClaw\peixun\training-plugin"
+openclaw plugins install "D:\juzhou-agent\peixun\training-plugin"
 openclaw gateway restart
 ```
 
@@ -28,7 +28,7 @@ openclaw gateway restart
 {
   plugins: {
     load: {
-      paths: ["D:/OpenClaw/peixun/training-plugin"],
+      paths: ["D:/juzhou-agent/peixun/training-plugin"],
     },
     entries: {
       "training-rag": {
@@ -58,3 +58,4 @@ openclaw gateway restart
 ## Agent 使用原则
 
 插件附带 `training-agent` skill。老板用自然语言创建任务时，Agent 应先生成草稿并展示确认；只有老板明确确认后，才调用 `training_publish_task`。
+

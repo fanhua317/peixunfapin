@@ -1,4 +1,4 @@
-# OpenClaw Training MVP
+﻿# 钜洲培训 Agent MVP
 
 这个目录包含独立于 OpenClaw 主仓库的培训系统 MVP：
 
@@ -12,7 +12,7 @@ training-plugin   # OpenClaw 外部插件，把培训服务暴露为 Agent tools
 1. 启动培训服务：
 
 ```powershell
-node D:\OpenClaw\peixun\training-service\src\server.mjs
+node D:\juzhou-agent\peixun\training-service\src\server.mjs
 ```
 
 2. 打开老板后台：
@@ -24,7 +24,7 @@ http://127.0.0.1:8787/
 3. 在 OpenClaw 中安装插件：
 
 ```powershell
-openclaw plugins install "D:\OpenClaw\peixun\training-plugin"
+openclaw plugins install "D:\juzhou-agent\peixun\training-plugin"
 openclaw gateway restart
 ```
 
@@ -52,15 +52,15 @@ D:\OpenClawData\ollama
 生成绿色版 ZIP 和自解压安装 EXE：
 
 ```powershell
-cd D:\OpenClaw\peixun
+cd D:\juzhou-agent\peixun
 powershell -ExecutionPolicy Bypass -File .\scripts\package-windows.ps1 -IncludeData
 ```
 
 输出文件在：
 
 ```text
-dist\OpenClawTraining.zip
-dist\OpenClawTraining-Setup.exe
+dist\JuzhouAgentTraining.zip
+dist\JuzhouAgentTraining-Setup.exe
 ```
 
 `-IncludeData` 会打包 `D:\OpenClawData\training-index`、`training-clean` 和 `training-vision`，不会打包原始 PDF、Qdrant、Ollama 或密钥。
@@ -79,14 +79,14 @@ TRAINING_LLM_API_KEY=你的 API Key
 生成服务器部署包：
 
 ```powershell
-cd D:\OpenClaw\peixun
+cd D:\juzhou-agent\peixun
 powershell -ExecutionPolicy Bypass -File .\scripts\package-server.ps1 -IncludeData
 ```
 
 输出文件：
 
 ```text
-dist\OpenClawTrainingServer.zip
+dist\JuzhouAgentTrainingServer.zip
 ```
 
 服务器部署包内置 Docker Compose 配置和 `.env.example`。复制为 `.env` 后填写：
@@ -102,3 +102,4 @@ PUBLIC_BASE_URL=https://你的域名
 ```bash
 docker compose up -d --build
 ```
+
