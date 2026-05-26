@@ -1,4 +1,4 @@
-import { searchChunks, searchChunksHybrid } from "../rag.mjs";
+import { searchChunks, searchKnowledgeContexts } from "../rag.mjs";
 import { isUsableTrainingChunk } from "../quality.mjs";
 import {
   AI_PROFILE,
@@ -53,9 +53,10 @@ function isLowValueContext(chunk) {
 }
 
 function retrievalModeFromChunks(chunks) {
-  if ((chunks || []).some((chunk) => chunk.retrieval === "hybrid")) return "hybrid";
-  if ((chunks || []).some((chunk) => chunk.retrieval === "semantic")) return "hybrid";
-  return "keyword";
+  if ((chunks || []).some((chunk) => String(chunk.retrieval || "").includes("hybrid"))) return "hybrid";
+  if ((chunks || []).some((chunk) => /(semantic|local-vector|vector)/.test(String(chunk.retrieval || "")))) return "hybrid";
+  if ((chunks || []).some((chunk) => String(chunk.retrieval || "").includes("bm25"))) return "bm25";
+  return "keyword-legacy";
 }
 
 function contextScoreForQuery(chunk, query, index) {
@@ -127,7 +128,7 @@ function selectContextChunks(state, { knowledgeBaseId, query, limit = 12 }) {
 
 async function selectContextChunksHybrid(state, { knowledgeBaseId, query, limit = 12 }) {
   try {
-    const hybrid = await searchChunksHybrid(state, { knowledgeBaseId, query, limit });
+    const hybrid = await searchKnowledgeContexts(state, { knowledgeBaseId, query, limit });
     if (hybrid && hybrid.length) {
       const seen = new Set();
       const merged = [];
@@ -418,6 +419,7 @@ function sourceObjects(chunks) {
     sourceRef: chunk.sourceRef,
     score: chunk.score,
     retrieval: chunk.retrieval,
+    bm25Score: chunk.bm25Score,
     keywordScore: chunk.keywordScore,
     semanticScore: chunk.semanticScore,
     matchedPreview: chunk.matchedPreview || "",
@@ -427,10 +429,10 @@ function sourceObjects(chunks) {
 
 function retrievalConfidence(chunks, high = "high", medium = "medium") {
   const top = chunks[0] || {};
-  if (top.retrieval === "semantic" || top.retrieval === "hybrid") {
+  if (/(semantic|hybrid|local-vector|vector)/.test(String(top.retrieval || ""))) {
     return (top.score || 0) >= 0.55 ? high : medium;
   }
-  return (top.score || 0) >= 4 ? high : medium;
+  return (top.score || 0) >= 0.55 || (top.bm25Score || 0) >= 4 ? high : medium;
 }
 
 function buildAnswerQuality({ chunks, answer, sourceRefs, warnings = [], generatedBy = "" }) {
@@ -588,7 +590,7 @@ export async function generateKnowledgeAnswer(state, { knowledgeBaseId, question
   }
   let chunks = [];
   try {
-    chunks = await searchChunksHybrid(state, {
+    chunks = await searchKnowledgeContexts(state, {
       knowledgeBaseId,
       query: text,
       limit: 8,
@@ -619,6 +621,10 @@ function requestedWebSearch(instruction) {
 function marketingSubjectText(instruction) {
   return String(instruction || "")
     .replace(/联网|网上|网络|搜索|查一下|查找|检索|最新|外部资料|行业趋势|竞品|市场数据/g, " ")
+    .replace(/写|生成|做|来|给我|帮我|整理|创作|一篇|关于|基于|根据/g, " ")
+    .replace(/软文|营销文章|推广文案|公众号文章|产品介绍|宣传文案|客户文章|宣传稿|营销稿|官网文章|推文|文章|文案/g, " ")
+    .replace(/短一点|简短|详细|完整|客户营销|客户|官网|公众号|朋友圈|阿里国际站|B2B|b2b|平台/g, " ")
+    .replace(/联网|网上|网络|搜索|查一下|查找|检索|最新|外部资料|行业趋势|竞品|市场数据/g, " ")
     .replace(/写|生成|做|来|出|整理|创作|给我|帮我|一篇|关于|基于|根据/g, " ")
     .replace(/软文|营销文章|推广文案|公众号文章|产品介绍|宣传文案|客户文章|宣传稿|营销稿|官网文章|推文|文章|文案/g, " ")
     .replace(/短一点|简短|详细|完整|客户营销|客户|官网|公众号|朋友圈|阿里国际站|B2B|b2b|平台/g, " ")
@@ -626,11 +632,22 @@ function marketingSubjectText(instruction) {
     .trim();
 }
 
-function matchMarketingKnowledgeBase(state, instruction) {
+function normalizeMarketingSubject(value) {
+  return String(value || "")
+    .replace(/联网|网上|网络|搜索|查一下|查找|检索|最新|外部资料|行业趋势|竞品|市场数据/g, " ")
+    .replace(/写|生成|做|来|给我|帮我|整理|创作|一篇|关于|基于|根据/g, " ")
+    .replace(/软文|营销文章|推广文案|公众号文章|产品介绍|宣传文案|客户文章|宣传稿|营销稿|官网文章|推文|文章|文案/g, " ")
+    .replace(/短一点|简短|详细|完整|客户营销|客户|官网|公众号|朋友圈|阿里国际站|B2B|b2b|平台/g, " ")
+    .replace(/[的了呢吗啊呀把将和与及或、，。！？：；（）()【】《》“”"'\\s]+/g, " ")
+    .trim();
+}
+
+async function matchMarketingKnowledgeBase(state, instruction) {
   const text = String(instruction || "").toLowerCase();
-  const subject = marketingSubjectText(instruction);
+  const subject = normalizeMarketingSubject(marketingSubjectText(instruction) || instruction);
   const ready = (state.knowledgeBases || []).filter((kb) => kb.status === "ready");
-  const scored = ready.map((kb) => {
+  const scored = [];
+  for (const kb of ready) {
     const names = uniqueStrings([
       kb.name,
       String(kb.name || "").replace(/资料库|培训资料库|培训/g, ""),
@@ -647,16 +664,17 @@ function matchMarketingKnowledgeBase(state, instruction) {
     }
     let chunkScore = 0;
     if (subject.length >= 2) {
-      const matches = searchChunks(state, { knowledgeBaseId: kb.id, query: subject, limit: 3 });
-      chunkScore = matches.reduce((sum, chunk) => sum + Number(chunk.score || 0), 0);
+      const matches = await searchKnowledgeContexts(state, { knowledgeBaseId: kb.id, query: subject, limit: 3 });
+      chunkScore = matches.reduce((sum, chunk) => sum + Number(chunk.score || chunk.bm25Score || 0), 0);
       score += chunkScore;
     }
-    return { kb, score, explicitNameMatch, chunkScore };
-  }).sort((left, right) => right.score - left.score);
+    scored.push({ kb, score, explicitNameMatch, chunkScore });
+  }
+  scored.sort((left, right) => right.score - left.score);
   const best = scored[0];
   if (!best) return null;
   if (best.explicitNameMatch) return best.kb;
-  return best.chunkScore >= 4 ? best.kb : null;
+  return best.chunkScore >= 0.55 || best.chunkScore >= 4 ? best.kb : null;
 }
 
 function articleChannel(instruction) {
@@ -694,7 +712,7 @@ export async function generateMarketingArticle(state, { instruction }) {
   const text = String(instruction || "").trim();
   const webSearchDisabled = requestedWebSearch(text);
   const warnings = webSearchDisabled ? ["当前版本未开启联网搜索，已仅基于本地知识库生成。"] : [];
-  const knowledgeBase = matchMarketingKnowledgeBase(state, text);
+  const knowledgeBase = await matchMarketingKnowledgeBase(state, text);
   if (!knowledgeBase) {
     const prefix = webSearchDisabled ? "当前版本未开启联网搜索，且" : "";
     return insufficientMarketingArticle(`${prefix}本地知识库没有匹配到足够相关的产品资料，无法生成软文。`, warnings);

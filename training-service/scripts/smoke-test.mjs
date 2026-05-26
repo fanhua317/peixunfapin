@@ -70,7 +70,7 @@ try {
   await waitForHealth();
 
   const health = await request("/api/health");
-  if (!health.stateOk || !["keyword", "hybrid"].includes(health.retrievalMode)) {
+  if (!health.stateOk || !["bm25", "hybrid", "keyword-legacy"].includes(health.retrievalMode)) {
     throw new Error(`unexpected health payload: ${JSON.stringify(health)}`);
   }
 

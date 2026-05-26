@@ -6,8 +6,11 @@ import { isUsableTrainingChunk } from "./quality.mjs";
 const CJK_RE = /[\u3400-\u9fff]/g;
 
 const HYBRID_ENABLED = !["0", "false", "off", "no"].includes(String(process.env.TRAINING_HYBRID_RETRIEVAL || "").toLowerCase());
-const SEMANTIC_WEIGHT = Number(process.env.TRAINING_SEMANTIC_WEIGHT || 0.7);
-const KEYWORD_WEIGHT = Number(process.env.TRAINING_KEYWORD_WEIGHT || 0.3);
+const SEMANTIC_WEIGHT = Number(process.env.TRAINING_SEMANTIC_WEIGHT || 0.55);
+const BM25_WEIGHT = Number(process.env.TRAINING_BM25_WEIGHT || process.env.TRAINING_KEYWORD_WEIGHT || 0.45);
+const BM25_K1 = Number(process.env.TRAINING_BM25_K1 || 1.2);
+const BM25_B = Number(process.env.TRAINING_BM25_B || 0.75);
+const HYBRID_MATCH_BOOST = Number(process.env.TRAINING_HYBRID_MATCH_BOOST || 0.08);
 const PARAMETER_QUERY_RE = /(参数|范围|功率|机座|级数|能效|型号|尺寸|电压|电流|效率|YE\d|IE\d|Y2|kw|kW|pole|poles)/i;
 const HYBRID_COLLECTION = process.env.QDRANT_COLLECTION || QDRANT_DEFAULT_COLLECTION;
 const SEMANTIC_RETRY_MS = Number(process.env.TRAINING_SEMANTIC_RETRY_MS || 60_000);
@@ -58,7 +61,7 @@ function normalizeText(value) {
 
 function tokenize(value) {
   const text = normalizeText(value);
-  const latin = text.match(/[a-z0-9]+/g) || [];
+  const latin = text.match(/[a-z0-9][a-z0-9._+/#:-]*/g) || [];
   const cjk = text.match(CJK_RE) || [];
   const cjkBigrams = [];
   for (let index = 0; index < cjk.length - 1; index += 1) {
@@ -74,34 +77,82 @@ function chunkSearchText(chunk) {
   return `${chunk?.searchText || ""} ${chunk?.content || ""} ${chunk?.sourceRef || ""} ${chunk?.heading || ""} ${businessKeys}`;
 }
 
-function scoreChunk(queryTokens, chunk) {
-  const haystack = normalizeText(chunkSearchText(chunk));
-  let score = 0;
-  for (const token of queryTokens) {
+function tokenCounts(tokens) {
+  const counts = new Map();
+  for (const token of tokens || []) {
     if (!token) continue;
-    if (haystack.includes(token)) {
-      score += token.length > 1 ? 2 : 1;
+    counts.set(token, (counts.get(token) || 0) + 1);
+  }
+  return counts;
+}
+
+function buildBm25Corpus(state, knowledgeBaseId) {
+  const chunks = state.chunks
+    .filter((chunk) => !knowledgeBaseId || chunk.knowledgeBaseId === knowledgeBaseId)
+    .filter(isUsableTrainingChunk);
+  const entries = chunks.map((chunk) => {
+    const tokens = tokenize(chunkSearchText(chunk));
+    return {
+      chunk,
+      tokens,
+      length: Math.max(tokens.length, 1),
+      frequencies: tokenCounts(tokens),
+    };
+  });
+  const documentFrequency = new Map();
+  for (const entry of entries) {
+    for (const token of new Set(entry.tokens)) {
+      documentFrequency.set(token, (documentFrequency.get(token) || 0) + 1);
     }
+  }
+  const averageLength = entries.length
+    ? entries.reduce((sum, entry) => sum + entry.length, 0) / entries.length
+    : 1;
+  return { entries, documentFrequency, averageLength, size: entries.length };
+}
+
+function bm25Score(queryTokens, entry, corpus) {
+  if (!queryTokens.length || !corpus.size) return 0;
+  let score = 0;
+  const uniqueQueryTokens = new Set(queryTokens);
+  for (const token of uniqueQueryTokens) {
+    const tf = entry.frequencies.get(token) || 0;
+    if (!tf) continue;
+    const df = corpus.documentFrequency.get(token) || 0;
+    const idf = Math.log(1 + (corpus.size - df + 0.5) / (df + 0.5));
+    const denominator = tf + BM25_K1 * (1 - BM25_B + BM25_B * (entry.length / corpus.averageLength));
+    score += idf * ((tf * (BM25_K1 + 1)) / denominator);
   }
   return score;
 }
 
-function searchChildChunks(state, { knowledgeBaseId, query, limit = 5 }) {
+function searchBm25ChildChunks(state, { knowledgeBaseId, query, limit = 5 }) {
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 5, 50));
   const queryTokens = tokenize(query);
-  const chunks = state.chunks
-    .filter((chunk) => !knowledgeBaseId || chunk.knowledgeBaseId === knowledgeBaseId)
-    .filter(isUsableTrainingChunk)
-    .map((chunk) => ({
-      ...chunk,
-      score: scoreChunk(queryTokens, chunk),
-      keywordScore: scoreChunk(queryTokens, chunk),
-      retrieval: "keyword",
-    }))
-    .filter((chunk) => chunk.score > 0 || !queryTokens.length)
+  const corpus = buildBm25Corpus(state, knowledgeBaseId);
+  if (!queryTokens.length) {
+    return corpus.entries.slice(0, safeLimit).map((entry) => ({
+      ...entry.chunk,
+      score: 0,
+      bm25Score: 0,
+      keywordScore: 0,
+      retrieval: "bm25",
+    }));
+  }
+  return corpus.entries
+    .map((entry) => {
+      const score = bm25Score(queryTokens, entry, corpus);
+      return {
+        ...entry.chunk,
+        score,
+        bm25Score: score,
+        keywordScore: score,
+        retrieval: "bm25",
+      };
+    })
+    .filter((chunk) => chunk.score > 0)
     .sort((left, right) => right.score - left.score)
-    .slice(0, Math.max(1, Math.min(Number(limit) || 5, 20)));
-
-  return chunks;
+    .slice(0, safeLimit);
 }
 
 function parentById(state) {
@@ -116,7 +167,7 @@ function matchedPreview(chunk, maxLength = 220) {
 function mergeRetrieval(left, right) {
   const values = new Set(String(left || "").split("+").filter(Boolean));
   for (const item of String(right || "").split("+").filter(Boolean)) values.add(item);
-  return [...values].join("+") || left || right || "keyword";
+  return [...values].join("+") || left || right || "bm25";
 }
 
 function parentContextForHit(parentMap, hit) {
@@ -133,6 +184,8 @@ function parentContextForHit(parentMap, hit) {
         childType: hit?.childType || "",
         preview: matchedPreview(hit),
         score: hit?.score || 0,
+        bm25Score: hit?.bm25Score || hit?.keywordScore || 0,
+        semanticScore: hit?.semanticScore || 0,
       }],
     };
   }
@@ -150,13 +203,17 @@ function parentContextForHit(parentMap, hit) {
       childType: hit.childType || "",
       preview: matchedPreview(hit),
       score: hit.score || 0,
+      bm25Score: hit.bm25Score || hit.keywordScore || 0,
+      semanticScore: hit.semanticScore || 0,
     }],
     score: hit.score || 0,
+    bm25Score: hit.bm25Score || hit.keywordScore || 0,
+    bm25Normalized: hit.bm25Normalized || hit.keywordNormalized || 0,
     keywordScore: hit.keywordScore || 0,
     keywordNormalized: hit.keywordNormalized || 0,
     semanticScore: hit.semanticScore || 0,
     semanticNormalized: hit.semanticNormalized || 0,
-    retrieval: hit.retrieval || "keyword",
+    retrieval: hit.retrieval || "bm25",
     childType: hit.childType || "",
     searchText: `${hit.searchText || ""}\n\n${parent.content || ""}`.trim(),
     businessKeys: { ...(parent.businessKeys || {}), ...(hit.businessKeys || {}) },
@@ -183,8 +240,12 @@ function expandParentMatches(state, matches, limit) {
     merged.set(key, {
       ...base,
       score: Math.max(existingScore, nextScore),
+      bm25Score: Math.max(Number(existing.bm25Score || existing.keywordScore || 0), Number(context.bm25Score || context.keywordScore || 0)),
+      bm25Normalized: Math.max(Number(existing.bm25Normalized || existing.keywordNormalized || 0), Number(context.bm25Normalized || context.keywordNormalized || 0)),
       keywordScore: Math.max(Number(existing.keywordScore || 0), Number(context.keywordScore || 0)),
+      keywordNormalized: Math.max(Number(existing.keywordNormalized || 0), Number(context.keywordNormalized || 0)),
       semanticScore: Math.max(Number(existing.semanticScore || 0), Number(context.semanticScore || 0)),
+      semanticNormalized: Math.max(Number(existing.semanticNormalized || 0), Number(context.semanticNormalized || 0)),
       retrieval: mergeRetrieval(existing.retrieval, context.retrieval),
       matchedChunks: [...(base.matchedChunks || []), ...(other.matchedChunks || [])]
         .filter((item, index, array) => item.chunkId && array.findIndex((entry) => entry.chunkId === item.chunkId) === index)
@@ -198,7 +259,7 @@ function expandParentMatches(state, matches, limit) {
 }
 
 export function searchChunks(state, { knowledgeBaseId, query, limit = 5 }) {
-  return expandParentMatches(state, searchChildChunks(state, { knowledgeBaseId, query, limit }), limit);
+  return expandParentMatches(state, searchBm25ChildChunks(state, { knowledgeBaseId, query, limit }), limit);
 }
 
 function normalizeRange(values) {
@@ -215,9 +276,10 @@ function normalizeScore(value, range) {
 
 function queryWeights(query) {
   if (PARAMETER_QUERY_RE.test(String(query || ""))) {
-    return { semantic: 0.15, keyword: 0.85 };
+    return { semantic: 0.25, bm25: 0.75 };
   }
-  return { semantic: SEMANTIC_WEIGHT, keyword: KEYWORD_WEIGHT };
+  const total = Math.max(SEMANTIC_WEIGHT + BM25_WEIGHT, 0.01);
+  return { semantic: SEMANTIC_WEIGHT / total, bm25: BM25_WEIGHT / total };
 }
 
 function cjkPoleNumber(value) {
@@ -338,22 +400,29 @@ async function semanticSearch(state, { knowledgeBaseId, query, limit }) {
   return matches;
 }
 
-export async function searchChunksHybrid(state, { knowledgeBaseId, query, limit = 8 }) {
+export async function searchKnowledgeContexts(state, { knowledgeBaseId, query, limit = 8 }) {
   const safeLimit = Math.max(1, Math.min(Number(limit) || 8, 20));
-  const weights = queryWeights(query);
-  const keywordMatches = searchChildChunks(state, { knowledgeBaseId, query, limit: safeLimit });
-  const semanticMatches = HYBRID_ENABLED ? await semanticSearch(state, { knowledgeBaseId, query, limit: safeLimit }) : [];
+  const candidateLimit = Math.max(safeLimit, Math.min(50, safeLimit * 4));
+  const bm25Matches = searchBm25ChildChunks(state, { knowledgeBaseId, query, limit: candidateLimit });
+  const semanticMatches = HYBRID_ENABLED ? await semanticSearch(state, { knowledgeBaseId, query, limit: candidateLimit }) : [];
+  const configuredWeights = queryWeights(query);
+  const weights = semanticMatches.length
+    ? configuredWeights
+    : { bm25: 1, semantic: 0 };
   const merged = new Map();
-  const keywordRange = normalizeRange(keywordMatches.map((chunk) => chunk.score || 0));
-  for (const chunk of keywordMatches) {
+  const bm25Range = normalizeRange(bm25Matches.map((chunk) => chunk.bm25Score || chunk.score || 0));
+  for (const chunk of bm25Matches) {
     if (!chunk.id) continue;
+    const bm25ScoreValue = chunk.bm25Score || chunk.score || 0;
     merged.set(chunk.id, {
       ...chunk,
-      keywordScore: chunk.score || 0,
-      keywordNormalized: normalizeScore(chunk.score || 0, keywordRange),
+      bm25Score: bm25ScoreValue,
+      bm25Normalized: normalizeScore(bm25ScoreValue, bm25Range),
+      keywordScore: bm25ScoreValue,
+      keywordNormalized: normalizeScore(bm25ScoreValue, bm25Range),
       semanticScore: 0,
       semanticNormalized: 0,
-      retrieval: "keyword",
+      retrieval: "bm25",
     });
   }
   const semanticRange = normalizeRange(semanticMatches.map((match) => match.semanticScore || 0));
@@ -372,12 +441,15 @@ export async function searchChunksHybrid(state, { knowledgeBaseId, query, limit 
       heading: match.heading,
       sectionPath: match.sectionPath,
       page: match.page,
+      bm25Score: 0,
+      bm25Normalized: 0,
       keywordScore: 0,
       keywordNormalized: 0,
     };
     const semanticNormalized = normalizeScore(match.semanticScore || 0, semanticRange);
     merged.set(id, {
       ...base,
+      chunkId: id,
       semanticScore: match.semanticScore || 0,
       semanticNormalized,
       retrieval: existing ? "hybrid" : "semantic",
@@ -388,10 +460,17 @@ export async function searchChunksHybrid(state, { knowledgeBaseId, query, limit 
     .filter(isUsableTrainingChunk)
     .map((chunk) => ({
       ...chunk,
-      score: weights.semantic * (chunk.semanticNormalized || 0) + weights.keyword * (chunk.keywordNormalized || 0) + exactParameterBoost(query, chunk),
+      score: weights.semantic * (chunk.semanticNormalized || 0)
+        + weights.bm25 * (chunk.bm25Normalized || chunk.keywordNormalized || 0)
+        + (chunk.retrieval === "hybrid" ? HYBRID_MATCH_BOOST : 0)
+        + exactParameterBoost(query, chunk),
     }))
     .sort((left, right) => right.score - left.score);
   return expandParentMatches(state, ranked.slice(0, safeLimit * 2), safeLimit);
+}
+
+export async function searchChunksHybrid(state, { knowledgeBaseId, query, limit = 8 }) {
+  return searchKnowledgeContexts(state, { knowledgeBaseId, query, limit });
 }
 
 export function isHybridSearchEnabled() {

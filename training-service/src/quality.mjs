@@ -112,8 +112,8 @@ export function getKnowledgeBaseQuality(state, knowledgeBaseId, vectorIndex = {}
   if (lowValueChunks.length) warnings.push(`${lowValueChunks.length} 个片段偏向页眉、目录或标题，已从答疑和出题候选中排除。`);
   if (missingSourceChunks.length) warnings.push(`${missingSourceChunks.length} 个片段缺少来源引用。`);
   if (usableChunks.length < Math.min(5, chunks.length || 5)) warnings.push("可用于答疑和出题的有效片段偏少。");
-  if (vectorStatus === "unavailable") warnings.push("Qdrant 或本地向量索引不可用，当前会使用关键词检索。");
-  if (vectorStatus === "missing_collection") warnings.push("Qdrant collection 尚未建立，当前会使用关键词检索。");
+  if (vectorStatus === "unavailable") warnings.push("Qdrant 或本地向量索引不可用，当前会使用 BM25 文本检索。");
+  if (vectorStatus === "missing_collection") warnings.push("Qdrant collection 尚未建立，当前会使用 BM25 文本检索。");
   if (missingVectorChunks && missingVectorChunks > 0) warnings.push(`${missingVectorChunks} 个有效片段尚未写入向量索引。`);
 
   const qualityScore = Math.max(0, Math.min(100, Math.round(

@@ -95,6 +95,7 @@ function compactHit(hit, expected) {
     matchedChunkId: hit?.matchedChunkId,
     retrieval: hit?.retrieval,
     score: Number(hit?.score || 0).toFixed(3),
+    bm25Score: Number(hit?.bm25Score || hit?.keywordScore || 0).toFixed(3),
     semanticScore: Number(hit?.semanticScore || 0).toFixed(3),
     expectedHits: expectedHits(hit, expected),
     sourceRef: hit?.sourceRef,
@@ -140,10 +141,10 @@ if (!knowledgeBase) {
 const rows = [];
 for (const test of tests) {
   const hybrid = await searchChunksHybrid(state, { knowledgeBaseId: knowledgeBase.id, query: test.query, limit: 5 });
-  const keyword = searchChunks(state, { knowledgeBaseId: knowledgeBase.id, query: test.query, limit: 5 });
+  const bm25 = searchChunks(state, { knowledgeBaseId: knowledgeBase.id, query: test.query, limit: 5 });
   const threshold = Math.min(2, test.expected.length);
   const hybridScores = hybrid.map((hit) => expectedHits(hit, test.expected));
-  const keywordScores = keyword.map((hit) => expectedHits(hit, test.expected));
+  const bm25Scores = bm25.map((hit) => expectedHits(hit, test.expected));
   const row = {
     id: test.id,
     query: test.query,
@@ -151,8 +152,9 @@ for (const test of tests) {
     hybridTop1Relevant: (hybridScores[0] || 0) >= threshold,
     hybridTop3Relevant: hybridScores.slice(0, 3).some((score) => score >= threshold),
     hybridTop1ExpectedHits: hybridScores[0] || 0,
-    keywordTop1ExpectedHits: keywordScores[0] || 0,
+    bm25Top1ExpectedHits: bm25Scores[0] || 0,
     hybridTop3: hybrid.slice(0, 3).map((hit) => compactHit(hit, test.expected)),
+    bm25Top3: bm25.slice(0, 3).map((hit) => compactHit(hit, test.expected)),
   };
   if (includeAnswers) {
     const answer = await generateKnowledgeAnswer(state, { knowledgeBaseId: knowledgeBase.id, question: test.query });
@@ -179,7 +181,7 @@ const summary = {
     total: rows.length,
     hybridTop1Relevant: rows.filter((row) => row.hybridTop1Relevant).length,
     hybridTop3Relevant: rows.filter((row) => row.hybridTop3Relevant).length,
-    hybridTop1BetterOrEqualKeyword: rows.filter((row) => row.hybridTop1ExpectedHits >= row.keywordTop1ExpectedHits).length,
+    hybridTop1BetterOrEqualBm25: rows.filter((row) => row.hybridTop1ExpectedHits >= row.bm25Top1ExpectedHits).length,
   },
   answers: includeAnswers ? {
     total: answerRows.length,

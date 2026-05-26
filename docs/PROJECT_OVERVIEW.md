@@ -59,7 +59,7 @@
    通过 OpenAI-compatible API 直连 DeepSeek、Kimi、OpenAI 等模型，也保留 OpenClaw Gateway 接入能力。
 
 5. RAG 检索约束  
-   本地向量索引、Qdrant、Ollama 不可用时，服务仍可回退关键词检索，不能因为语义检索离线导致业务完全不可用。
+   本地向量索引、Qdrant、Ollama 不可用时，服务仍可回退 BM25 文本检索，不能因为语义检索离线导致业务完全不可用。
 
 6. 来源可追溯  
    答疑、讲义和出题都尽量绑定 `sourceRef`，让用户知道内容来自哪份资料、哪个章节或 chunk。
@@ -249,8 +249,8 @@ JSON 存储适合当前 MVP 和小团队使用。后续如果多人高并发或�
 - 文本 chunk：本地切分。
 - Embedding 模型：`bge-m3`。
 - 向量后端：本地向量索引优先，Qdrant 可选。
-- 关键词召回：内置关键词检索。
-- 混合检索：向量语义召回 + 关键词召回。
+- BM25 召回：内置 BM25 文本检索。
+- 混合检索：向量语义召回 + BM25 召回。
 
 推荐小服务器方案：
 
@@ -440,9 +440,9 @@ training-service/src/embedding.mjs
 - 将 Markdown/TXT 切分为 chunk。
 - 提取 chunk 元数据、来源引用、关键词。
 - 过滤 OCR 占位、空文本、短文本和低价值 chunk。
-- 进行关键词检索。
+- 进行 BM25 检索。
 - 进行向量检索。
-- 合并关键词分数和语义分数。
+- 合并 BM25 分数和语义分数。
 - 给模型提供去噪后的上下文。
 
 ### 6.5 LLM 适配层
@@ -626,9 +626,9 @@ GET /api/knowledge-bases/{id}/quality
 当前检索链路：
 
 1. 根据知识库 ID 和问题过滤候选 chunk。
-2. 关键词检索召回。
+2. BM25 检索召回。
 3. 如果配置可用，执行向量语义召回。
-4. 合并关键词分数和语义分数。
+4. 合并 BM25 分数和语义分数。
 5. 过滤不可用 chunk。
 6. 根据问题类型做上下文去噪。
 7. 只把少量高质量上下文传给模型。
@@ -698,14 +698,14 @@ GET /api/health
 - `openclawRuntimeOk`：OpenClaw runtime 是否可用。
 - `llmProvider`：当前 LLM 提供方。
 - `llmConfigured`：LLM 是否配置完成。
-- `retrievalMode`：`hybrid` 或 `keyword`。
+- `retrievalMode`：`hybrid`、`bm25` 或兼容旧实现时的 `keyword-legacy`。
 - `dataDir`：当前数据目录。
 
 这个接口用于确认：
 
 - 服务是否启动。
 - 数据目录是否正确。
-- 当前是语义检索还是关键词检索。
+- 当前是混合检索还是 BM25 检索。
 - 大模型是否可用。
 - 是否还依赖 OpenClaw Gateway。
 
@@ -1003,8 +1003,8 @@ public/src/ui.js
 - 能通过网页完成培训发布、学习、答疑、考试和报表。
 - 能通过 OpenClaw 插件暴露 8 个培训工具。
 - 能使用直连大模型 API 完成讲义和试题生成。
-- 能使用 `bge-m3 + 本地向量索引 + 关键词 hybrid` 做资料问答。
-- 能在向量服务不可用时回退关键词检索。
+- 能使用 `bge-m3 + 本地向量索引 + BM25 hybrid` 做资料问答。
+- 能在向量服务不可用时回退 BM25 检索。
 - 能打包为 Windows 便携包和服务器部署包。
 
 当前最关键的优化点仍然是资料质量，尤其是扫描型 PDF 的 OCR 和清洗。只要资料质量稳定，现有架构已经可以支撑内部培训 MVP 上线试用。

@@ -99,7 +99,7 @@ export async function getRuntimeHealth(state = { chunks: [] }) {
   const localVectorReady = ["ready", "partial"].includes(localVectorIndex.status);
   const qdrantReady = qdrant.ok && qdrant.collectionExists;
   const semanticReady = hybridConfigured && ollama.ok && (qdrantReady || localVectorReady);
-  const retrievalMode = semanticReady ? "hybrid" : "keyword";
+  const retrievalMode = semanticReady ? "hybrid" : "bm25";
   const llm = {
     ...getLlmRuntimeConfig(),
     openclawRuntime,
