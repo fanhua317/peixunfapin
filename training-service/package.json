@@ -11,6 +11,7 @@
     "embed:chunks": "node scripts/embed-chunks.mjs",
     "embed:local": "node scripts/embed-local-index.mjs",
     "eval:intent": "node scripts/eval-intent.mjs",
+    "eval:memory": "node scripts/eval-memory.mjs",
     "eval:rag": "node scripts/eval-rag.mjs",
     "qdrant:snapshot": "node scripts/qdrant-snapshot.mjs",
     "render:pdf": "node scripts/render-pdf-pages.mjs",

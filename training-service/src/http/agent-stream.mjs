@@ -4,6 +4,14 @@ import { streamGeneralChat } from "../chat/general-chat.mjs";
 import { createTaskDraft, deleteTrainingRecords, getTaskStatus } from "../domain/index.mjs";
 import { getRuntimeHealth, getVectorIndexStatus } from "../health.mjs";
 import { createIntentConfirmationToken, verifyIntentConfirmationToken } from "../intent-confirmation.mjs";
+import {
+  buildMemoryContext,
+  normalizeMemoryMode,
+  normalizeSessionId,
+  renderIntentMemoryHint,
+  trainingDefaultsFromMemory,
+} from "../memory/index.mjs";
+import { applyMemoryAfterTurn, processMemoryInstruction } from "../memory/flow.mjs";
 import { getKnowledgeBaseQuality } from "../quality.mjs";
 import { loadState, mutateState } from "../store.mjs";
 import { isAuthenticated } from "./auth.mjs";
@@ -18,13 +26,17 @@ function parseClientPayload(raw) {
   const payload = JSON.parse(raw);
   return {
     message: String(payload.message || payload.instruction || "").trim(),
+    sessionId: normalizeSessionId(payload.sessionId),
+    memoryMode: normalizeMemoryMode(payload.memoryMode),
     confirmedSkill: String(payload.confirmedSkill || "").trim(),
     confirmationToken: String(payload.confirmationToken || "").trim(),
   };
 }
 
-async function createEnrichedTaskDraft(state, instruction) {
-  const draft = createTaskDraft(state, instruction);
+async function createEnrichedTaskDraft(state, instruction, memoryContext = null) {
+  const draft = createTaskDraft(state, instruction, {
+    memoryDefaults: trainingDefaultsFromMemory(memoryContext),
+  });
   const knowledgeBaseId = draft.knowledgeBase?.id;
   if (!knowledgeBaseId) return draft;
   const runtime = await getRuntimeHealth(state);
@@ -97,10 +109,51 @@ async function handleStreamMessage(socket, raw, abortController) {
     return;
   }
   const state = await loadState();
-  const decision = await classifyTrainingIntent(state, body.message, { confirmedSkill: body.confirmedSkill });
+  const memoryContext = await buildMemoryContext({
+    sessionId: body.sessionId,
+    message: body.message,
+    memoryMode: body.memoryMode,
+  });
+  const memoryOnlyPayload = await processMemoryInstruction(body.message, {
+    sessionId: body.sessionId,
+    memoryMode: body.memoryMode,
+  });
+  if (memoryOnlyPayload) {
+    const payload = await applyMemoryAfterTurn({
+      message: body.message,
+      payload: memoryOnlyPayload,
+      memoryContext,
+      sessionId: body.sessionId,
+      memoryMode: body.memoryMode,
+    });
+    sendWsJson(socket, { type: "result", payload });
+    sendWsJson(socket, { type: "done", action: payload.action });
+    await appendAgentTrace({
+      transport: "ws",
+      route: "/api/agent/stream",
+      message: body.message,
+      confirmedSkill: body.confirmedSkill,
+      confirmationTokenPresent: Boolean(body.confirmationToken),
+      confirmationVerified: confirmation?.ok === true,
+      result: payload,
+      latencyMs: Date.now() - startedAt,
+    });
+    closeWebSocket(socket);
+    return;
+  }
+  const decision = await classifyTrainingIntent(state, body.message, {
+    confirmedSkill: body.confirmedSkill,
+    memoryHint: renderIntentMemoryHint(memoryContext),
+  });
 
   if (decision.needsConfirmation) {
-    const payload = intentConfirmPayload(body.message, decision);
+    const payload = await applyMemoryAfterTurn({
+      message: body.message,
+      payload: intentConfirmPayload(body.message, decision),
+      memoryContext,
+      sessionId: body.sessionId,
+      memoryMode: body.memoryMode,
+    });
     sendWsJson(socket, {
       type: "result",
       payload,
@@ -125,11 +178,18 @@ async function handleStreamMessage(socket, raw, abortController) {
     const payload = {
       action: "draft",
       decision,
-      draft: await createEnrichedTaskDraft(state, body.message),
+      draft: await createEnrichedTaskDraft(state, body.message, memoryContext),
     };
+    const payloadWithMemory = await applyMemoryAfterTurn({
+      message: body.message,
+      payload,
+      memoryContext,
+      sessionId: body.sessionId,
+      memoryMode: body.memoryMode,
+    });
     sendWsJson(socket, {
       type: "result",
-      payload,
+      payload: payloadWithMemory,
     });
     sendWsJson(socket, { type: "done", action: "draft" });
     await appendAgentTrace({
@@ -140,7 +200,7 @@ async function handleStreamMessage(socket, raw, abortController) {
       confirmationTokenPresent: Boolean(body.confirmationToken),
       confirmationVerified: confirmation?.ok === true,
       decision,
-      result: payload,
+      result: payloadWithMemory,
       latencyMs: Date.now() - startedAt,
     });
     closeWebSocket(socket);
@@ -153,9 +213,16 @@ async function handleStreamMessage(socket, raw, abortController) {
       decision,
       tasks: state.tasks.map((task) => getTaskStatus(state, task.id)),
     };
+    const payloadWithMemory = await applyMemoryAfterTurn({
+      message: body.message,
+      payload,
+      memoryContext,
+      sessionId: body.sessionId,
+      memoryMode: body.memoryMode,
+    });
     sendWsJson(socket, {
       type: "result",
-      payload,
+      payload: payloadWithMemory,
     });
     sendWsJson(socket, { type: "done", action: "status" });
     await appendAgentTrace({
@@ -166,7 +233,7 @@ async function handleStreamMessage(socket, raw, abortController) {
       confirmationTokenPresent: Boolean(body.confirmationToken),
       confirmationVerified: confirmation?.ok === true,
       decision,
-      result: payload,
+      result: payloadWithMemory,
       latencyMs: Date.now() - startedAt,
     });
     closeWebSocket(socket);
@@ -179,9 +246,16 @@ async function handleStreamMessage(socket, raw, abortController) {
       ...result,
       decision,
     };
+    const payloadWithMemory = await applyMemoryAfterTurn({
+      message: body.message,
+      payload,
+      memoryContext,
+      sessionId: body.sessionId,
+      memoryMode: body.memoryMode,
+    });
     sendWsJson(socket, {
       type: "result",
-      payload,
+      payload: payloadWithMemory,
     });
     sendWsJson(socket, { type: "done", action: "delete_records" });
     await appendAgentTrace({
@@ -192,7 +266,7 @@ async function handleStreamMessage(socket, raw, abortController) {
       confirmationTokenPresent: Boolean(body.confirmationToken),
       confirmationVerified: confirmation?.ok === true,
       decision,
-      result: payload,
+      result: payloadWithMemory,
       latencyMs: Date.now() - startedAt,
     });
     closeWebSocket(socket);
@@ -210,11 +284,18 @@ async function handleStreamMessage(socket, raw, abortController) {
     const payload = {
       action: "marketing_article",
       decision,
-      article: await generateMarketingArticle(state, { instruction: body.message }),
+      article: await generateMarketingArticle(state, { instruction: body.message, memoryContext }),
     };
+    const payloadWithMemory = await applyMemoryAfterTurn({
+      message: body.message,
+      payload,
+      memoryContext,
+      sessionId: body.sessionId,
+      memoryMode: body.memoryMode,
+    });
     sendWsJson(socket, {
       type: "result",
-      payload,
+      payload: payloadWithMemory,
     });
     sendWsJson(socket, { type: "done", action: "marketing_article" });
     await appendAgentTrace({
@@ -225,7 +306,7 @@ async function handleStreamMessage(socket, raw, abortController) {
       confirmationTokenPresent: Boolean(body.confirmationToken),
       confirmationVerified: confirmation?.ok === true,
       decision,
-      result: payload,
+      result: payloadWithMemory,
       latencyMs: Date.now() - startedAt,
     });
     closeWebSocket(socket);
@@ -240,6 +321,7 @@ async function handleStreamMessage(socket, raw, abortController) {
     route: "general_chat",
   });
   const result = await streamGeneralChat(body.message, {
+    memoryContext,
     signal: abortController.signal,
     onDelta: (delta) => sendWsJson(socket, { type: "delta", delta }),
   });
@@ -248,10 +330,17 @@ async function handleStreamMessage(socket, raw, abortController) {
     decision,
     ...result,
   };
+  const payloadWithMemory = await applyMemoryAfterTurn({
+    message: body.message,
+    payload,
+    memoryContext,
+    sessionId: body.sessionId,
+    memoryMode: body.memoryMode,
+  });
   sendWsJson(socket, {
     type: "done",
     action: "chat",
-    payload,
+    payload: payloadWithMemory,
   });
   await appendAgentTrace({
     transport: "ws",
@@ -261,7 +350,7 @@ async function handleStreamMessage(socket, raw, abortController) {
     confirmationTokenPresent: Boolean(body.confirmationToken),
     confirmationVerified: confirmation?.ok === true,
     decision,
-    result: payload,
+    result: payloadWithMemory,
     latencyMs: Date.now() - startedAt,
   });
   closeWebSocket(socket);

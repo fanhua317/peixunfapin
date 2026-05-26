@@ -4,6 +4,14 @@ import { appendAgentTrace } from "../../agent-trace.mjs";
 import { answerGeneralChat } from "../../chat/general-chat.mjs";
 import { getRuntimeHealth, getVectorIndexStatus } from "../../health.mjs";
 import { createIntentConfirmationToken, verifyIntentConfirmationToken } from "../../intent-confirmation.mjs";
+import {
+  buildMemoryContext,
+  normalizeMemoryMode,
+  normalizeSessionId,
+  renderIntentMemoryHint,
+  trainingDefaultsFromMemory,
+} from "../../memory/index.mjs";
+import { applyMemoryAfterTurn, processMemoryInstruction } from "../../memory/flow.mjs";
 import { getKnowledgeBaseQuality } from "../../quality.mjs";
 import { loadState, mutateState } from "../../store.mjs";
 import { readBody } from "../request.mjs";
@@ -16,12 +24,12 @@ export async function handleEmployees(req, res, url) {
   return true;
 }
 
-async function sendGeneralChat(res, message, decision = null) {
+async function sendGeneralChat(res, message, decision = null, options = {}) {
   try {
     sendJson(res, 200, {
       action: "chat",
       ...(decision ? { decision } : {}),
-      ...(await answerGeneralChat(message)),
+      ...(await answerGeneralChat(message, { memoryContext: options.memoryContext })),
     });
   } catch (error) {
     sendJson(res, 503, {
@@ -35,8 +43,10 @@ async function sendGeneralChat(res, message, decision = null) {
   }
 }
 
-async function createEnrichedTaskDraft(state, instruction) {
-  const draft = createTaskDraft(state, instruction);
+async function createEnrichedTaskDraft(state, instruction, memoryContext = null) {
+  const draft = createTaskDraft(state, instruction, {
+    memoryDefaults: trainingDefaultsFromMemory(memoryContext),
+  });
   const knowledgeBaseId = draft.knowledgeBase?.id;
   if (!knowledgeBaseId) return draft;
   const runtime = await getRuntimeHealth(state);
@@ -89,7 +99,7 @@ function validateConfirmedSkill({ confirmedSkill, confirmationToken, message }) 
   return { ok: true, verification };
 }
 
-async function buildDecisionResult(state, message, decision) {
+async function buildDecisionResult(state, message, decision, options = {}) {
   if (decision.needsConfirmation) {
     return { status: 200, payload: intentConfirmPayload(message, decision) };
   }
@@ -97,7 +107,7 @@ async function buildDecisionResult(state, message, decision) {
     return { status: 200, payload: {
       action: "draft",
       decision,
-      draft: await createEnrichedTaskDraft(state, message),
+      draft: await createEnrichedTaskDraft(state, message, options.memoryContext),
     } };
   }
   if (decision.skill === "show_training_status" || decision.intent === "show_training_status") {
@@ -118,14 +128,14 @@ async function buildDecisionResult(state, message, decision) {
     return { status: 200, payload: {
       action: "marketing_article",
       decision,
-      article: await generateMarketingArticle(state, { instruction: message }),
+      article: await generateMarketingArticle(state, { instruction: message, memoryContext: options.memoryContext }),
     } };
   }
   try {
     return { status: 200, payload: {
       action: "chat",
       decision,
-      ...(await answerGeneralChat(message)),
+      ...(await answerGeneralChat(message, { memoryContext: options.memoryContext })),
     } };
   } catch (error) {
     return { status: 503, payload: {
@@ -143,7 +153,13 @@ export async function handleAgent(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/agent/draft") {
     const body = await readBody(req);
     const state = await loadState();
-    sendJson(res, 200, { draft: await createEnrichedTaskDraft(state, body.instruction || "") });
+    const memoryMode = normalizeMemoryMode(body.memoryMode);
+    const memoryContext = await buildMemoryContext({
+      sessionId: normalizeSessionId(body.sessionId),
+      message: body.instruction || "",
+      memoryMode,
+    });
+    sendJson(res, 200, { draft: await createEnrichedTaskDraft(state, body.instruction || "", memoryContext) });
     return true;
   }
 
@@ -151,6 +167,8 @@ export async function handleAgent(req, res, url) {
     const startedAt = Date.now();
     const body = await readBody(req);
     const message = body.message || body.instruction || "";
+    const sessionId = normalizeSessionId(body.sessionId);
+    const memoryMode = normalizeMemoryMode(body.memoryMode);
     const confirmedSkill = String(body.confirmedSkill || "").trim();
     const confirmationToken = String(body.confirmationToken || "").trim();
     const confirmation = validateConfirmedSkill({ confirmedSkill, confirmationToken, message });
@@ -169,10 +187,31 @@ export async function handleAgent(req, res, url) {
       });
       return true;
     }
+    const memoryContext = await buildMemoryContext({ sessionId, message, memoryMode });
+    const memoryOnlyPayload = await processMemoryInstruction(message, { sessionId, memoryMode });
+    if (memoryOnlyPayload) {
+      const payload = await applyMemoryAfterTurn({ message, payload: memoryOnlyPayload, memoryContext, sessionId, memoryMode });
+      sendJson(res, 200, payload);
+      await appendAgentTrace({
+        transport: "http",
+        route: "/api/agent/dispatch",
+        message,
+        confirmedSkill,
+        confirmationTokenPresent: Boolean(confirmationToken),
+        confirmationVerified: confirmation?.ok === true,
+        result: payload,
+        latencyMs: Date.now() - startedAt,
+      });
+      return true;
+    }
     const state = await loadState();
-    const decision = await classifyTrainingIntent(state, message, { confirmedSkill });
+    const decision = await classifyTrainingIntent(state, message, {
+      confirmedSkill,
+      memoryHint: renderIntentMemoryHint(memoryContext),
+    });
     try {
-      const { status, payload } = await buildDecisionResult(state, message, decision);
+      const { status, payload: rawPayload } = await buildDecisionResult(state, message, decision, { memoryContext });
+      const payload = await applyMemoryAfterTurn({ message, payload: rawPayload, memoryContext, sessionId, memoryMode });
       sendJson(res, status, payload);
       await appendAgentTrace({
         transport: "http",
@@ -204,7 +243,36 @@ export async function handleAgent(req, res, url) {
 
   if (req.method === "POST" && url.pathname === "/api/chat") {
     const body = await readBody(req);
-    await sendGeneralChat(res, body.message || "");
+    const sessionId = normalizeSessionId(body.sessionId);
+    const memoryMode = normalizeMemoryMode(body.memoryMode);
+    const message = body.message || "";
+    const memoryContext = await buildMemoryContext({ sessionId, message, memoryMode });
+    const startedAt = Date.now();
+    try {
+      const payload = {
+        action: "chat",
+        ...(await answerGeneralChat(message, { memoryContext })),
+      };
+      const withMemory = await applyMemoryAfterTurn({ message, payload, memoryContext, sessionId, memoryMode });
+      sendJson(res, 200, withMemory);
+      await appendAgentTrace({
+        transport: "http",
+        route: "/api/chat",
+        message,
+        result: withMemory,
+        latencyMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      const payload = {
+        action: "chat",
+        error: error instanceof Error ? error.message : String(error),
+        source: "llm-api",
+        route: "general_chat",
+        llmConfigured: false,
+      };
+      const withMemory = await applyMemoryAfterTurn({ message, payload, memoryContext, sessionId, memoryMode });
+      sendJson(res, 503, withMemory);
+    }
     return true;
   }
 

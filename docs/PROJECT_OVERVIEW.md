@@ -104,22 +104,23 @@ D:\juzhou-agent\peixun
     │   ├── app.js
     │   └── src
     │       ├── api.js
-    │       ├── auth.js
-    │       ├── bootstrap.js
-    │       ├── chat.js
-    │       ├── invite.js
-    │       ├── messages.js
-    │       └── ui.js
+│       ├── auth.js
+│       ├── bootstrap.js
+│       ├── chat.js
+│       ├── invite.js
+│       ├── messages.js
+│       └── ui.js
     ├── scripts
     │   ├── check-syntax.mjs
     │   ├── clean-raw.mjs
     │   ├── import-clean.mjs
-        │   ├── embed-chunks.mjs
-        │   ├── embed-local-index.mjs
-        │   ├── eval-intent.mjs
-        │   ├── eval-rag.mjs
-        │   ├── qdrant-snapshot.mjs
-        │   └── smoke-test.mjs
+    │   ├── embed-chunks.mjs
+    │   ├── embed-local-index.mjs
+    │   ├── eval-intent.mjs
+    │   ├── eval-memory.mjs
+    │   ├── eval-rag.mjs
+    │   ├── qdrant-snapshot.mjs
+    │   └── smoke-test.mjs
     └── src
         ├── server.mjs
         ├── http
@@ -164,6 +165,14 @@ D:\juzhou-agent\peixun
         │   └── quiz.mjs
         ├── chat
         │   └── general-chat.mjs
+        ├── memory
+        │   ├── store.mjs
+        │   ├── policy.mjs
+        │   ├── extractor.mjs
+        │   ├── retrieval.mjs
+        │   ├── prompt.mjs
+        │   ├── flow.mjs
+        │   └── index.mjs
         ├── gateway
         │   ├── core.mjs
         │   ├── runtime.mjs
@@ -194,6 +203,7 @@ D:\juzhou-agent\peixun
 - 当前使用 JSON 文件存储运行状态。
 - 默认路径：`D:\OpenClawData\training-index\state.json`。
 - 可通过 `TRAINING_DATA_DIR` 覆盖。
+- 本地 Agent 记忆不写入 `state.json`，单独保存在同目录的 `memory.json` 和 `conversation-history.jsonl`。
 
 主要数据集合：
 
@@ -207,6 +217,12 @@ D:\juzhou-agent\peixun
 - `attempts`：考试提交记录。
 - `contentDrafts`：后续文章/内容草稿预留。
 - `events`：业务事件日志。
+
+本地记忆文件：
+
+- `memory.json`：长期偏好、短期会话摘要、待确认记忆和记忆状态。
+- `conversation-history.jsonl`：老板端聊天消息和工具调用摘要，按 `sessionId` 追加。
+- `agent-traces.jsonl`：意图路由、防误判确认和执行轨迹。
 
 JSON 存储适合当前 MVP 和小团队使用。后续如果多人高并发或数据量增长，建议迁移到 SQLite/PostgreSQL。
 
@@ -350,7 +366,12 @@ GET  /api/reports/overview
 GET  /api/employees
 POST /api/agent/draft
 POST /api/agent/dispatch
+WS   /api/agent/stream
 POST /api/chat
+GET  /api/memory
+PATCH /api/memory/{memoryId}
+DELETE /api/memory/{memoryId}
+DELETE /api/memory
 POST /api/tasks/publish
 GET  /api/tasks
 GET  /api/tasks/{taskId}
@@ -425,7 +446,32 @@ training-service/src/ai
 - 根据任务生成考试题。
 - LLM 不可用或解析失败时停止生成，并向接口返回清晰错误；不再用本地规则生成讲义、答案或题目。
 
-### 6.4 RAG 检索层
+### 6.4 本地记忆层
+
+核心目录：
+
+```text
+training-service/src/memory
+```
+
+当前拆分：
+
+- `store.mjs`：读写 `memory.json`，追加 `conversation-history.jsonl`。
+- `policy.mjs`：判断哪些输入可记、待确认或禁止保存。
+- `extractor.mjs`：从用户输入和执行结果中提取记忆候选。
+- `retrieval.mjs`：按当前问题召回近期会话和长期偏好。
+- `prompt.mjs`：把记忆安全注入普通聊天、意图识别、培训默认参数和软文偏好。
+- `flow.mjs`：处理“查看记忆”“清空全部记忆”“保存/忽略记忆候选”等聊天动作。
+
+记忆使用原则：
+
+- 当前输入永远优先，记忆只补默认值，不覆盖明确指令。
+- 长期记忆只保存低风险偏好，例如软文长度/渠道/口吻、培训默认题数和及格分、用户纠正过的工作方式。
+- API Key、联系方式、成绩评价、删除/发布等高风险动作不自动保存。
+- 模糊偏好先进入 `pending`，前端展示确认卡片；确认后才转为 `active`。
+- 记忆不是事实库，产品参数、工艺、资料来源仍必须来自 RAG。
+
+### 6.5 RAG 检索层
 
 核心文件：
 
@@ -448,7 +494,7 @@ training-service/src/embedding.mjs
 - 合并 BM25 分数和语义分数。
 - 给模型提供去噪后的上下文。
 
-### 6.5 LLM 适配层
+### 6.6 LLM 适配层
 
 核心文件：
 
@@ -468,7 +514,7 @@ training-service/src/gateway
 - 保留 OpenClaw Gateway WebSocket 调用能力。
 - 普通聊天走直连大模型 API；培训讲义、答疑和出题也必须依赖可用模型 API，模型不可用时直接失败。
 
-### 6.6 数据存储层
+### 6.7 数据存储层
 
 核心文件：
 
@@ -486,7 +532,7 @@ training-service/src/store.mjs
 - 生成 ID 和 token。
 - 记录事件。
 
-### 6.7 OpenClaw 插件层
+### 6.8 OpenClaw 插件层
 
 目录：
 
@@ -606,6 +652,39 @@ sequenceDiagram
 - 确认卡片携带服务端签发的 `confirmationToken`，token 绑定原始消息和 skill，默认 15 分钟过期。
 - 后端执行 `confirmedSkill` 前会校验 token；缺 token、过期、换消息或换 skill 都拒绝执行。
 - `/api/agent/dispatch` 和 `/api/agent/stream` 会把消息摘要、决策、动作、确认状态和耗时写入数据目录的 `agent-traces.jsonl`，方便把误判样本补回 `npm run eval:intent`。
+
+### 7.5 记忆写入与使用链路
+
+老板端浏览器会在 `localStorage` 生成并复用 `sessionId`。`/api/agent/dispatch`、`/api/agent/stream`、`/api/chat` 支持传入 `sessionId` 和 `memoryMode`：
+
+```text
+用户输入
+  -> 读取最近会话和相关长期记忆
+  -> 判断是否为记忆管理命令
+  -> 注入普通聊天 / 意图识别 / skill 默认参数
+  -> 执行聊天或 skill
+  -> 提取低风险记忆候选
+  -> active 直接保存，pending 展示确认卡片
+  -> 追加 conversation-history.jsonl
+```
+
+当前用途：
+
+- 普通聊天：补充最近上下文和用户长期偏好。
+- 培训草稿：用户没明确写题数/及格分时，使用记忆里的默认题数和默认及格分。
+- 营销软文：用户没明确写渠道/长度/口吻时，使用记忆里的软文偏好。
+- 意图识别：把“用户曾纠正过的工作方式”作为辅助提示，但不让记忆直接触发发布、删除等高风险动作。
+
+记忆管理接口：
+
+```text
+GET    /api/memory
+PATCH  /api/memory/{memoryId}
+DELETE /api/memory/{memoryId}
+DELETE /api/memory
+```
+
+清空全部记忆属于高风险动作，必须先通过聊天入口获得确认 token，再调用 `DELETE /api/memory`。
 
 ## 8. RAG 策略
 
@@ -876,6 +955,9 @@ npm run smoke
 - 生成考试。
 - 提交成绩。
 - 报表汇总。
+- 软文生成。
+- 培训记录删除确认。
+- 记忆保存、默认参数生效和清空记忆确认。
 
 ### 12.3 RAG 评测
 
@@ -901,7 +983,26 @@ npm run eval:rag
 - 银嘉五项领先制造工艺。
 - 英文工艺名对应中文工艺。
 
-### 12.4 人工验收
+### 12.4 意图与记忆评测
+
+```powershell
+npm run eval:intent
+npm run eval:memory
+```
+
+`eval:intent` 覆盖培训发布、重新输入、确认发布、进度查询、删除确认、软文和普通聊天边界。
+
+`eval:memory` 覆盖：
+
+- “以后软文默认短一点，偏公众号”保存为长期偏好。
+- 新会话软文生成能召回该偏好。
+- “这次写长一点”覆盖默认记忆但不删除记忆。
+- “以后培训默认 10 道题 80 分”影响培训草稿默认参数。
+- API Key、删除培训记录等高风险内容不会写入长期记忆。
+- 模糊偏好进入 pending，确认 token 后才保存。
+- 记忆列表、删除和清空 API 正常工作。
+
+### 12.5 人工验收
 
 建议每次资料导入后人工确认：
 
@@ -936,7 +1037,16 @@ npm run eval:rag
 - 中期迁移 SQLite。
 - 正式多用户 SaaS 化时迁移 PostgreSQL。
 
-### 13.3 前端模块边界仍需继续维护
+### 13.3 记忆不是业务事实库
+
+记忆模块用于“用户偏好”和“会话连续性”，不应该作为产品事实、报价事实或培训资料事实来源。后续接入更多业务 skill 时仍需保持：
+
+- 产品参数、工艺信息、资料来源来自 RAG 知识库。
+- 报价、发布、删除、成绩等高风险动作不能由记忆自动触发。
+- 用户可查看、确认、归档、删除记忆。
+- 敏感信息过滤规则需要持续随真实输入补充。
+
+### 13.4 前端模块边界仍需继续维护
 
 `public/app.js` 已拆成无构建浏览器 ES module：
 
@@ -952,7 +1062,7 @@ public/src/ui.js
 
 后续如果页面继续增加，应继续按老板端、员工端、共享渲染组件和 API client 的边界拆分，而不是重新把逻辑堆回入口文件。
 
-### 13.4 登录密钥不是完整账号体系
+### 13.5 登录密钥不是完整账号体系
 
 当前 `TRAINING_ACCESS_KEY` 是共享登录密钥，适合内部小范围使用。正式上线需要：
 
@@ -961,7 +1071,7 @@ public/src/ui.js
 - 邀请链接权限控制。
 - 操作审计。
 
-### 13.5 大模型仍可能出现表达偏差
+### 13.6 大模型仍可能出现表达偏差
 
 项目已通过 RAG、来源白名单、结构化校验、确认 token、路由轨迹和评测减少幻觉与误执行，但不能保证模型每句话都完全正确。更严格的下一步是：
 
@@ -1031,6 +1141,7 @@ public/src/ui.js
 - 能使用直连大模型 API 完成讲义和试题生成。
 - 能使用 `bge-m3 + 本地向量索引 + BM25 hybrid` 做资料问答。
 - 能在向量服务不可用时回退 BM25 检索。
+- 能用本地记忆改善老板端普通聊天、培训默认参数和软文风格偏好。
 - 能打包为 Windows 便携包和服务器部署包。
 
 当前最关键的优化点仍然是资料质量，尤其是扫描型 PDF 的 OCR 和清洗。只要资料质量稳定，现有架构已经可以支撑内部培训 MVP 上线试用。

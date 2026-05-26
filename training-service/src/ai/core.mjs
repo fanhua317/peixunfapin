@@ -11,6 +11,7 @@ import {
   PROCESS_QUERY_RE,
 } from "./config.mjs";
 import { askLlmJson, askLlmStructured } from "./llm-json.mjs";
+import { marketingPreferencesFromMemory } from "../memory/index.mjs";
 
 function compactText(value, maxLength = 1600) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
@@ -396,6 +397,7 @@ export async function classifyTrainingIntent(state, message, options = {}) {
 已导入知识库：${JSON.stringify(kbList)}
 员工：${JSON.stringify(employeeList)}
 本地规则初判：${JSON.stringify(local)}
+${String(options.memoryHint || "").trim() ? `本地记忆提示：${String(options.memoryHint).trim()}\n` : ""}
 用户输入：${JSON.stringify(String(message || ""))}`;
   try {
     const result = await askLlmJson({ purpose: "intent", prompt, profile });
@@ -699,19 +701,21 @@ async function matchMarketingKnowledgeBase(state, instruction) {
   return best.chunkScore >= 0.55 || best.chunkScore >= 4 ? best.kb : null;
 }
 
-function articleChannel(instruction) {
+function articleChannel(instruction, memoryPreferences = {}) {
   const text = String(instruction || "");
   if (/朋友圈|私域|微信/.test(text)) return "朋友圈/私域";
   if (/公众号|推文/.test(text)) return "公众号";
   if (/阿里|国际站|B2B|b2b|平台/.test(text)) return "B2B平台";
   if (/官网|网站/.test(text)) return "官网";
+  if (memoryPreferences.channel) return memoryPreferences.channel;
   return "官网/公众号/B2B平台";
 }
 
-function articleLengthInstruction(instruction) {
+function articleLengthInstruction(instruction, memoryPreferences = {}) {
   const text = String(instruction || "");
   if (/短一点|简短|朋友圈|300字|五百字|500字/.test(text)) return "300-600字";
   if (/长文|详细|深度|完整|1500|一千五|2000|两千/.test(text)) return "1200-1600字";
+  if (memoryPreferences.lengthInstruction) return memoryPreferences.lengthInstruction;
   return "800-1200字";
 }
 
@@ -730,8 +734,9 @@ function insufficientMarketingArticle(message, warnings = []) {
   };
 }
 
-export async function generateMarketingArticle(state, { instruction }) {
+export async function generateMarketingArticle(state, { instruction, memoryContext } = {}) {
   const text = String(instruction || "").trim();
+  const memoryPreferences = marketingPreferencesFromMemory(text, memoryContext);
   const webSearchDisabled = requestedWebSearch(text);
   const warnings = webSearchDisabled ? ["当前版本未开启联网搜索，已仅基于本地知识库生成。"] : [];
   const knowledgeBase = await matchMarketingKnowledgeBase(state, text);
@@ -764,8 +769,9 @@ export async function generateMarketingArticle(state, { instruction }) {
 硬性要求：
 - 只允许依据给定资料，不要编造资料外事实，不要假装联网搜索。
 - ${webSearchDisabled ? "用户提到了联网搜索，但当前系统没有联网搜索能力；文章只能写本地资料已支持的内容。" : "不要引用互联网、行业报告或未给出的市场数据。"}
-- 文章面向客户营销，适合${articleChannel(text)}，正文长度${articleLengthInstruction(text)}。
+- 文章面向客户营销，适合${articleChannel(text, memoryPreferences)}，正文长度${articleLengthInstruction(text, memoryPreferences)}。
 - 语言要有销售转化感，但避免夸大、绝对化承诺和虚假排名。
+- ${memoryPreferences.lines.length ? `用户长期偏好：${memoryPreferences.lines.join("；")}。当前输入若有明确要求，必须优先按当前输入。` : "没有可用的用户长期偏好。"}
 - sourceRefs 必须从这个列表中选择：${JSON.stringify(sourceRefs)}
 - 只能输出 JSON，不要 Markdown 包裹。
 

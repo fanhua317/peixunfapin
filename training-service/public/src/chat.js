@@ -3,6 +3,22 @@ import { appendAssistantHtml, appendTyping, appendUserText, removeMessage, scrol
 import { escapeHtml, formatDate, renderQualitySummary, renderStageProgress } from "./ui.js";
 
 let currentDraft = null;
+const CHAT_SESSION_KEY = "juzhouTrainingChatSessionId";
+const chatSessionId = (() => {
+  const existing = localStorage.getItem(CHAT_SESSION_KEY);
+  if (existing) return existing;
+  const value = `boss-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  localStorage.setItem(CHAT_SESSION_KEY, value);
+  return value;
+})();
+
+function agentBody(payload = {}) {
+  return JSON.stringify({
+    sessionId: chatSessionId,
+    memoryMode: "auto",
+    ...payload,
+  });
+}
 
 function renderDraftCard(draft) {
   const matchedEmployees = (draft.employees || []).map((employee) => employee.temporary
@@ -250,28 +266,195 @@ function renderMarketingArticleResult(result) {
   `;
 }
 
+function renderMemoryListResult(result) {
+  const memories = result.memories || [];
+  if (!memories.length) {
+    return `<h2>本地记忆</h2><p class="muted">当前还没有保存的长期偏好或工作流经验。</p>`;
+  }
+  const items = memories.map((memory) => `
+    <li>
+      <strong>${escapeHtml(memory.text || memory.key)}</strong>
+      <span class="muted"> ${escapeHtml(memory.status)} ｜ ${escapeHtml(memory.key)}</span>
+      <button type="button" class="secondary" data-memory-delete="${escapeHtml(memory.id)}">删除</button>
+    </li>
+  `).join("");
+  return `<h2>本地记忆</h2><ul class="compact-list">${items}</ul>`;
+}
+
+function renderMemorySavedResult(result) {
+  const saved = result.memory?.saved || [];
+  if (!saved.length) return `<h2>记忆</h2><p class="muted">${escapeHtml(result.message || "没有新的记忆需要保存。")}</p>`;
+  return `
+    <h2>已保存记忆</h2>
+    <ul class="compact-list">${saved.map((memory) => `<li>${escapeHtml(memory.text || memory.key)}</li>`).join("")}</ul>
+  `;
+}
+
+function renderMemoryConfirmResult(result) {
+  const confirmation = result.confirmation || {};
+  const candidates = result.memory?.candidates || (confirmation.type === "candidate" ? [confirmation] : []);
+  if (confirmation.type === "clear") {
+    return `
+      <h2>${escapeHtml(confirmation.title || "确认清空记忆？")}</h2>
+      <div class="warning-box"><div>${escapeHtml(confirmation.description || "该操作会清空本地记忆。")}</div></div>
+    `;
+  }
+  return `
+    <h2>保存这条记忆？</h2>
+    <p class="muted">我识别到可能有用的长期偏好，请确认后再保存。</p>
+    <ul class="compact-list">${candidates.map((item) => `<li>${escapeHtml(item.memory?.text || item.description || "")}</li>`).join("")}</ul>
+  `;
+}
+
+function appendMemoryFeedback(result) {
+  if (result.memory?.saved?.length) {
+    appendAssistantHtml(renderMemorySavedResult({ memory: { saved: result.memory.saved } }));
+  }
+  if (result.memory?.candidates?.length) {
+    appendAssistantHtml(renderMemoryConfirmResult({ memory: { candidates: result.memory.candidates } }), memoryConfirmActionButtons({ memory: { candidates: result.memory.candidates } }));
+  }
+}
+
 function appendAgentResult(result) {
+  if (result.action === "memory_confirm") {
+    appendAssistantHtml(renderMemoryConfirmResult(result), memoryConfirmActionButtons(result));
+    return;
+  }
+  if (result.action === "memory_saved") {
+    appendAssistantHtml(renderMemorySavedResult(result));
+    return;
+  }
+  if (result.action === "memory_list") {
+    const article = appendAssistantHtml(renderMemoryListResult(result), [
+      { label: "刷新记忆", variant: "secondary", onClick: () => refreshMemoryList() },
+      { label: "清空记忆", variant: "secondary", onClick: () => requestClearMemory() },
+    ]);
+    wireMemoryListButtons(article);
+    return;
+  }
+  if (result.action === "memory_deleted" || result.action === "memory_archived" || result.action === "memory_cleared") {
+    appendAssistantHtml(`<h2>记忆已更新</h2><p class="muted">${escapeHtml(result.action)}</p>`);
+    return;
+  }
   if (result.action === "intent_confirm") {
     appendAssistantHtml(renderIntentConfirmResult(result), intentConfirmActionButtons(result));
     return;
   }
   if (result.action === "draft") {
     appendDraftResult(result);
+    appendMemoryFeedback(result);
     return;
   }
   if (result.action === "status") {
     appendAssistantHtml(renderTaskStatusResult(result.tasks));
+    appendMemoryFeedback(result);
     return;
   }
   if (result.action === "delete_records") {
     appendAssistantHtml(renderDeleteRecordsResult(result));
+    appendMemoryFeedback(result);
     return;
   }
   if (result.action === "marketing_article") {
     appendAssistantHtml(renderMarketingArticleResult(result));
+    appendMemoryFeedback(result);
     return;
   }
   appendAssistantHtml(renderChatAnswer(result.answer || "已处理。"));
+  appendMemoryFeedback(result);
+}
+
+function memoryConfirmActionButtons(result) {
+  const confirmation = result.confirmation || {};
+  if (confirmation.type === "clear") {
+    return [
+      { label: "确认清空", onClick: (button) => confirmClearMemory(confirmation, button) },
+      { label: "取消", variant: "secondary", onClick: (button) => cancelIntentConfirmation(button) },
+    ];
+  }
+  return [
+    { label: "保存", onClick: (button) => confirmMemoryCandidates(result.memory?.candidates || [confirmation], button) },
+    { label: "忽略", variant: "secondary", onClick: (button) => ignoreMemoryCandidates(result.memory?.candidates || [confirmation], button) },
+  ];
+}
+
+async function confirmMemoryCandidates(candidates, button) {
+  disableActionButtons(button);
+  try {
+    const saved = [];
+    for (const item of candidates) {
+      if (!item.memory?.id) continue;
+      const response = await api(`/api/memory/${encodeURIComponent(item.memory.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "active", confirmationToken: item.token || "" }),
+      });
+      saved.push(...(response.memory?.saved || []));
+    }
+    appendAssistantHtml(renderMemorySavedResult({ memory: { saved } }));
+  } catch (error) {
+    appendAssistantHtml(`<p class="error-text">${escapeHtml(error.message)}</p>`);
+  }
+}
+
+async function ignoreMemoryCandidates(candidates, button) {
+  disableActionButtons(button);
+  try {
+    for (const item of candidates) {
+      if (!item.memory?.id) continue;
+      await api(`/api/memory/${encodeURIComponent(item.memory.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "archived" }),
+      });
+    }
+    appendAssistantHtml(`<p class="muted">已忽略这次记忆候选。</p>`);
+  } catch (error) {
+    appendAssistantHtml(`<p class="error-text">${escapeHtml(error.message)}</p>`);
+  }
+}
+
+async function confirmClearMemory(confirmation, button) {
+  disableActionButtons(button);
+  try {
+    const response = await api("/api/memory", {
+      method: "DELETE",
+      body: JSON.stringify({ confirmationToken: confirmation.token || "" }),
+    });
+    appendAgentResult(response);
+  } catch (error) {
+    appendAssistantHtml(`<p class="error-text">${escapeHtml(error.message)}</p>`);
+  }
+}
+
+async function refreshMemoryList() {
+  try {
+    appendAgentResult(await api("/api/memory"));
+  } catch (error) {
+    appendAssistantHtml(`<p class="error-text">${escapeHtml(error.message)}</p>`);
+  }
+}
+
+async function requestClearMemory() {
+  try {
+    appendAgentResult(await api("/api/agent/dispatch", {
+      method: "POST",
+      body: agentBody({ message: "清空全部记忆" }),
+    }));
+  } catch (error) {
+    appendAssistantHtml(`<p class="error-text">${escapeHtml(error.message)}</p>`);
+  }
+}
+
+function wireMemoryListButtons(article) {
+  article.querySelectorAll("[data-memory-delete]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        appendAgentResult(await api(`/api/memory/${encodeURIComponent(button.dataset.memoryDelete || "")}`, { method: "DELETE" }));
+      } catch (error) {
+        appendAssistantHtml(`<p class="error-text">${escapeHtml(error.message)}</p>`);
+      }
+    });
+  });
 }
 
 function intentConfirmActionButtons(result) {
@@ -315,6 +498,8 @@ async function confirmIntentAction(result, button) {
     const response = await api("/api/agent/dispatch", {
       method: "POST",
       body: JSON.stringify({
+        sessionId: chatSessionId,
+        memoryMode: "auto",
         message,
         confirmedSkill: skill,
         confirmationToken: result.confirmation?.token || "",
@@ -339,7 +524,7 @@ async function sendIntentAsGeneralChat(result, button) {
   try {
     const response = await api("/api/chat", {
       method: "POST",
-      body: JSON.stringify({ message: result.message || "" }),
+      body: agentBody({ message: result.message || "" }),
     });
     removeMessage(progress);
     appendAgentResult(response);
@@ -406,7 +591,7 @@ async function dispatchUserMessageStream(message) {
         detail: "已连接，正在交给模型处理",
         progress: 22,
       }));
-      ws.send(JSON.stringify({ message }));
+      ws.send(agentBody({ message }));
     });
 
     ws.addEventListener("message", (event) => {
@@ -541,7 +726,7 @@ async function dispatchUserMessageHttp(message) {
   try {
     const result = await api("/api/agent/dispatch", {
       method: "POST",
-      body: JSON.stringify({ message }),
+      body: agentBody({ message }),
     });
     removeMessage(typing);
     appendAgentResult(result);

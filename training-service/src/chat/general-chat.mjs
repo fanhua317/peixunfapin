@@ -1,4 +1,5 @@
 import { askOpenAiCompatibleLLM, getDirectLlmRuntimeConfig, streamOpenAiCompatibleLLM } from "../direct-llm.mjs";
+import { renderMemorySystemSection } from "../memory/index.mjs";
 
 const GENERAL_CHAT_MODEL = process.env.TRAINING_GENERAL_CHAT_MODEL || process.env.TRAINING_LLM_MODEL;
 const GENERAL_CHAT_TIMEOUT_MS = Number(process.env.TRAINING_GENERAL_CHAT_TIMEOUT_MS || process.env.TRAINING_LLM_TIMEOUT_MS || 120_000);
@@ -9,13 +10,15 @@ function resolveThinking(text) {
     : "low";
 }
 
-function generalChatSystemPrompt() {
+function generalChatSystemPrompt(memoryContext = {}) {
+  const memorySection = renderMemorySystemSection(memoryContext);
   return [
     "你是苏州钜洲工业有限公司培训系统里的大模型聊天助手。",
     "普通问候、解释、闲聊和开放问题都按自然对话回答。",
     "如果用户明确要求发布培训、查询培训进度、生成员工学习链接、考试或报表，不要假装已经执行；提醒用户这类操作会交给系统内的培训技能处理。",
+    memorySection,
     "回答要简洁、自然、中文优先。",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 export function getGeneralChatRuntimeConfig() {
@@ -34,14 +37,14 @@ function assertGeneralChatConfigured() {
   return config;
 }
 
-export async function answerGeneralChat(message) {
+export async function answerGeneralChat(message, options = {}) {
   const text = String(message || "").trim();
   if (!text) {
     return { answer: "请先输入你的问题。", source: "llm-api" };
   }
   const config = assertGeneralChatConfigured();
   const result = await askOpenAiCompatibleLLM(text, {
-    system: generalChatSystemPrompt(),
+    system: generalChatSystemPrompt(options.memoryContext),
     thinking: resolveThinking(text),
     model: config.model,
     timeoutMs: GENERAL_CHAT_TIMEOUT_MS,
@@ -53,7 +56,7 @@ export async function answerGeneralChat(message) {
   };
 }
 
-export async function streamGeneralChat(message, { onDelta, signal } = {}) {
+export async function streamGeneralChat(message, { onDelta, signal, memoryContext } = {}) {
   const text = String(message || "").trim();
   if (!text) {
     return { answer: "请先输入你的问题。", source: "llm-api", route: "general_chat" };
@@ -61,7 +64,7 @@ export async function streamGeneralChat(message, { onDelta, signal } = {}) {
   const config = assertGeneralChatConfigured();
   let answer = "";
   for await (const event of streamOpenAiCompatibleLLM(text, {
-    system: generalChatSystemPrompt(),
+    system: generalChatSystemPrompt(memoryContext),
     thinking: resolveThinking(text),
     model: config.model,
     timeoutMs: GENERAL_CHAT_TIMEOUT_MS,

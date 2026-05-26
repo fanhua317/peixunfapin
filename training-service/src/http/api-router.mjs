@@ -4,6 +4,7 @@ import { handleAuth } from "./controllers/auth-controller.mjs";
 import { handleHealth } from "./controllers/health-controller.mjs";
 import { handleInvites } from "./controllers/invites-controller.mjs";
 import { handleKnowledge } from "./controllers/knowledge-controller.mjs";
+import { handleMemory } from "./controllers/memory-controller.mjs";
 import { handleAnswer, handleQuiz } from "./controllers/quiz-controller.mjs";
 import { handleReports, handleTasks } from "./controllers/tasks-controller.mjs";
 import { sendJson } from "./response.mjs";
@@ -14,6 +15,7 @@ const authenticatedHandlers = [
   handleReports,
   handleEmployees,
   handleAgent,
+  handleMemory,
   handleTasks,
   handleInvites,
   handleAnswer,

@@ -28,7 +28,7 @@ D:\juzhou-agent\peixun\training-service
 ```text
 D:\OpenClawData\training-raw    # 原始 PDF、Excel、CSV、TXT、Markdown
 D:\OpenClawData\training-clean  # 清洗后的 Markdown/TXT
-D:\OpenClawData\training-index  # 服务索引 state.json
+D:\OpenClawData\training-index  # state.json、memory.json、conversation-history.jsonl、索引文件
 D:\OpenClawData\qdrant          # 本机 Qdrant Docker 持久化目录
 ```
 
@@ -37,6 +37,15 @@ D:\OpenClawData\qdrant          # 本机 Qdrant Docker 持久化目录
 ```text
 D:\OpenClawData\training-index\state.json
 ```
+
+本地 Agent 记忆也放在同一数据目录，默认文件为：
+
+```text
+D:\OpenClawData\training-index\memory.json
+D:\OpenClawData\training-index\conversation-history.jsonl
+```
+
+`memory.json` 保存长期偏好、会话摘要和待确认记忆；`conversation-history.jsonl` 追加老板端聊天历史。它们不提交 Git，也不改变 `state.json` 的 `meta.version = 1`。
 
 也可以用环境变量覆盖：
 
@@ -69,7 +78,7 @@ npm run import:clean -- "D:\OpenClawData\training-clean" "电机培训资料库"
 
 ## 向量检索 / Qdrant
 
-当前服务支持 `关键词检索 + Qdrant 语义检索` 的混合 RAG。
+当前服务支持 `BM25 + 向量语义检索` 的混合 RAG。BM25 负责型号、参数、条款等精确召回，向量检索负责语义召回；向量索引不可用时会降级为 BM25。
 
 本机准备：
 
@@ -110,7 +119,7 @@ npm run qdrant:snapshot -- create
 npm run qdrant:snapshot -- list
 ```
 
-服务运行时默认启用混合检索；如需临时关闭向量检索并回退关键词检索：
+服务运行时默认启用混合检索；如需临时关闭向量检索并回退 BM25：
 
 ```powershell
 $env:TRAINING_HYBRID_RETRIEVAL="off"
@@ -135,10 +144,13 @@ $env:QDRANT_COLLECTION="training_chunks_bge_m3"
 $env:TRAINING_HYBRID_RETRIEVAL="on"
 ```
 
-LLM 调用默认仍走 OpenClaw：
+LLM 调用推荐使用 OpenAI-compatible API 直连 DeepSeek，也可以继续走 OpenClaw Gateway：
 
 ```powershell
-$env:TRAINING_LLM_PROVIDER="openclaw"
+$env:TRAINING_LLM_PROVIDER="auto"
+$env:TRAINING_LLM_BASE_URL="https://api.deepseek.com/v1"
+$env:TRAINING_LLM_MODEL="deepseek-chat"
+$env:TRAINING_LLM_API_KEY="..."
 ```
 
 ## 图片型 PDF 处理
@@ -170,6 +182,11 @@ D:\OpenClawData\training-clean
 - `GET /api/employees?q=销售部`
 - `POST /api/chat`
 - `POST /api/agent/draft`
+- `POST /api/agent/dispatch`
+- `GET /api/memory`
+- `PATCH /api/memory/{memoryId}`
+- `DELETE /api/memory/{memoryId}`
+- `DELETE /api/memory`
 - `POST /api/tasks/publish`
 - `GET /api/tasks`
 - `GET /api/tasks/{taskId}`
@@ -178,10 +195,21 @@ D:\OpenClawData\training-clean
 - `POST /api/quiz/generate`
 - `POST /api/quiz/submit`
 
+## 常用验证
+
+```powershell
+npm run check
+npm run smoke
+npm run eval:intent
+npm run eval:memory
+npm run eval:rag -- --retrieval-only
+```
+
 ## 当前限制
 
 - 服务器模式不建议运行 embedding 模型；embedding 推荐在本机离线构建后迁移 Qdrant snapshot。
 - Qdrant collection 的向量维度固定；更换 embedding 模型后需要重建 collection。
 - 图片型或扫描型 PDF 需要 OCR 后才能得到完整文本；当前清洗脚本只能直接抽取可复制文本。
 - 当前邀请链接没有手机号/企业身份校验，正式版需要补权限验证。
+- 记忆模块只用于老板端聊天连续性和默认偏好，不作为产品事实来源；敏感信息、高风险动作和一次性任务不会自动保存为长期记忆。
 

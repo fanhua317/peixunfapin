@@ -49,14 +49,15 @@ function resolveDraftEmployees(state, text, requestedAudience) {
   });
 }
 
-export function createTaskDraft(state, instruction) {
+export function createTaskDraft(state, instruction, options = {}) {
   const text = String(instruction || "").trim();
+  const memoryDefaults = options.memoryDefaults || {};
   const knowledgeBase = matchKnowledgeBase(state, text);
   const requestedAudience = parseRequestedAudience(text);
   const employees = resolveDraftEmployees(state, text, requestedAudience);
   const hasCustomEmployees = employees.some((employee) => employee.temporary === true);
-  const quizCount = parseNumberBefore(text, ["选择题", "判断题", "题"], 10);
-  const passScore = parsePassScore(text, 80);
+  const quizCount = parseNumberBefore(text, ["选择题", "判断题", "题"], Number(memoryDefaults.quizCount) || 10);
+  const passScore = parsePassScore(text, Number(memoryDefaults.passScore) || 80);
   const deadline = parseDeadline(text);
   const titleBase = knowledgeBase ? knowledgeBase.name.replace(/资料库$/, "") : "培训任务";
   const title = knowledgeBase ? (titleBase.endsWith("培训") ? titleBase : `${titleBase}培训`) : titleBase;

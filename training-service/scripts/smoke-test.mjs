@@ -120,6 +120,52 @@ try {
     throw new Error(`expected unmatched marketing article to be blocked, got ${JSON.stringify(noMatchArticleResponse)}`);
   }
 
+  const memorySessionId = "smoke-memory";
+  const marketingMemory = await request("/api/agent/dispatch", {
+    method: "POST",
+    body: JSON.stringify({ sessionId: memorySessionId, message: "以后软文默认短一点，偏公众号" }),
+  });
+  if (marketingMemory.action !== "memory_saved" || !marketingMemory.memory?.saved?.some((item) => item.key === "marketing.length")) {
+    throw new Error(`expected marketing memory saved, got ${JSON.stringify(marketingMemory)}`);
+  }
+  const trainingMemory = await request("/api/agent/dispatch", {
+    method: "POST",
+    body: JSON.stringify({ sessionId: memorySessionId, message: "以后培训默认 10 道题 80 分" }),
+  });
+  if (trainingMemory.action !== "memory_saved" || !trainingMemory.memory?.saved?.some((item) => item.key === "training.quizCount")) {
+    throw new Error(`expected training memory saved, got ${JSON.stringify(trainingMemory)}`);
+  }
+  const memoryDraft = await request("/api/agent/draft", {
+    method: "POST",
+    body: JSON.stringify({ sessionId: memorySessionId, instruction: "给王小明发布 A 产品基础培训" }),
+  });
+  if (memoryDraft.draft.quizCount !== 10 || memoryDraft.draft.passScore !== 80) {
+    throw new Error(`expected memory defaults in draft, got ${JSON.stringify(memoryDraft.draft)}`);
+  }
+  const memoryList = await request("/api/memory");
+  if (!memoryList.memories?.length) throw new Error("expected memory list to contain saved memories");
+  const clearConfirm = await request("/api/agent/dispatch", {
+    method: "POST",
+    body: JSON.stringify({ sessionId: memorySessionId, message: "清空全部记忆" }),
+  });
+  if (clearConfirm.action !== "memory_confirm" || clearConfirm.confirmation?.skill !== "clear_memory") {
+    throw new Error(`expected memory clear confirmation, got ${JSON.stringify(clearConfirm)}`);
+  }
+  const missingMemoryClearToken = await requestExpectError("/api/memory", {
+    method: "DELETE",
+    body: JSON.stringify({}),
+  });
+  if (missingMemoryClearToken.reason !== "missing_confirmation_token") {
+    throw new Error(`expected missing memory confirmation token, got ${JSON.stringify(missingMemoryClearToken)}`);
+  }
+  const clearMemoryResponse = await request("/api/memory", {
+    method: "DELETE",
+    body: JSON.stringify({ confirmationToken: clearConfirm.confirmation?.token }),
+  });
+  if (clearMemoryResponse.action !== "memory_cleared" || clearMemoryResponse.deleted < 2) {
+    throw new Error(`expected memory cleared, got ${JSON.stringify(clearMemoryResponse)}`);
+  }
+
   if (!health.llmConfigured) {
     const publishError = await requestExpectError("/api/tasks/publish", {
       method: "POST",
@@ -160,6 +206,7 @@ try {
       publishBlocked: true,
       deleteSkill: emptyDeleteResponse.action,
       marketingArticleBlocked: noMatchArticleResponse.article.insufficient,
+      memoryCleared: clearMemoryResponse.deleted,
       retrievalMode: health.retrievalMode,
     }, null, 2));
   } else {
@@ -287,6 +334,7 @@ try {
     qualityScore: qualityResponse.quality.qualityScore,
     reportCompleted: reportResponse.report.totals.completed,
     deletedTasks: deleteResponse.deleted.tasks,
+    memoryCleared: clearMemoryResponse.deleted,
   }, null, 2));
   }
 } finally {
