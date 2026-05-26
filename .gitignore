@@ -5,6 +5,7 @@ coverage/
 .cache/
 .tmp*/
 *.log
+training-service/.playwright-cli/
 
 # Local runtime data
 training-service/.tmp-smoke-data/

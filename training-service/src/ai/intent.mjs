@@ -1,1 +1,1 @@
-export { classifyTrainingIntent } from "./core.mjs";
+export { classifyTrainingIntent, isConfirmedSkillAllowed } from "./core.mjs";

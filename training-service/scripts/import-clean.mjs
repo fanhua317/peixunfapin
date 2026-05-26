@@ -1,7 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { mutateState, makeId, isoNow } from "../src/store.mjs";
-import { chunkMarkdown, chunkPlainText } from "../src/chunking.mjs";
+import { chunkSemanticDocument } from "../src/semantic-chunking.mjs";
 
 const inputDir = path.resolve(process.argv[2] || process.env.TRAINING_CLEAN_DIR || "D:\\OpenClawData\\training-clean");
 const kbName = process.argv[3] || process.env.TRAINING_KB_NAME || path.basename(inputDir) || "自定义培训资料库";
@@ -61,8 +61,12 @@ const imported = await mutateState(async (state) => {
 
   state.documents = state.documents.filter((doc) => doc.knowledgeBaseId !== kbId);
   state.chunks = state.chunks.filter((chunk) => chunk.knowledgeBaseId !== kbId);
+  state.chunkParents = (state.chunkParents || []).filter((parent) => parent.knowledgeBaseId !== kbId);
 
   let chunkCount = 0;
+  let parentCount = 0;
+  let tableRowParentCount = 0;
+  let maxChildChars = 0;
   for (const file of files) {
     const content = await readFile(file, "utf8");
     const relative = path.relative(inputDir, file);
@@ -78,17 +82,48 @@ const imported = await mutateState(async (state) => {
       status: "ready",
       size: info.size,
     });
-    const chunker = ext === "md" ? chunkMarkdown : chunkPlainText;
-    const chunks = chunker(content, { sourcePath: relative, title: path.basename(file) });
+    const semantic = chunkSemanticDocument(content, { sourcePath: relative, title: path.basename(file), ext });
+    const parentIdByKey = new Map();
+    for (const parent of semantic.parents) {
+      const parentId = makeId("parent");
+      parentIdByKey.set(parent.localKey, parentId);
+      state.chunkParents.push({
+        id: parentId,
+        knowledgeBaseId: kbId,
+        documentId: docId,
+        content: parent.content,
+        sourceRef: parent.sourceRef,
+        contentHash: parent.contentHash,
+        sectionPath: parent.sectionPath,
+        heading: parent.heading,
+        page: parent.page || null,
+        sourcePath: parent.sourcePath,
+        parentType: parent.parentType,
+        businessKeys: parent.businessKeys || {},
+        tokenLength: parent.tokenLength,
+        metadata: {
+          importedFrom: inputDir,
+          order: parent.order,
+        },
+      });
+      parentCount += 1;
+      if (parent.parentType === "table_row") tableRowParentCount += 1;
+    }
+    const chunks = semantic.chunks;
     if (!chunks.length) {
       chunks.push({
         content: content.slice(0, 900),
+        searchText: content.slice(0, 900),
         sourceRef: relative,
         sectionPath: [],
         heading: "",
         page: null,
         sourcePath: relative,
-        contentHash: "fallback-empty",
+        parentKey: "",
+        parentId: null,
+        childType: "empty_fallback",
+        businessKeys: {},
+        contentHash: "empty-content",
         tokenLength: Math.min(content.length, 900),
         keywords: [],
         order: 0,
@@ -99,13 +134,17 @@ const imported = await mutateState(async (state) => {
         id: makeId("chunk"),
         knowledgeBaseId: kbId,
         documentId: docId,
+        parentId: chunk.parentKey ? parentIdByKey.get(chunk.parentKey) || null : chunk.parentId || null,
         content: chunk.content,
+        searchText: chunk.searchText || chunk.content,
         sourceRef: chunk.sourceRef,
         contentHash: chunk.contentHash,
         sectionPath: chunk.sectionPath,
         heading: chunk.heading,
         page: chunk.page,
         sourcePath: chunk.sourcePath,
+        childType: chunk.childType || "snippet",
+        businessKeys: chunk.businessKeys || {},
         keywords: chunk.keywords,
         tokenLength: chunk.tokenLength,
         metadata: {
@@ -113,13 +152,15 @@ const imported = await mutateState(async (state) => {
           index,
           sectionPath: chunk.sectionPath,
           page: chunk.page,
+          parentKey: chunk.parentKey || "",
         },
       });
+      maxChildChars = Math.max(maxChildChars, String(chunk.content || "").length);
       chunkCount += 1;
     });
   }
 
-  return { kbId, kbName, fileCount: files.length, chunkCount };
+  return { kbId, kbName, fileCount: files.length, parentCount, chunkCount, tableRowParentCount, maxChildChars };
 });
 
 console.log(JSON.stringify(imported, null, 2));

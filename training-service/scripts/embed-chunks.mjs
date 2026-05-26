@@ -38,6 +38,7 @@ function buildPayload(state, chunk, model) {
     knowledgeBaseId: chunk.knowledgeBaseId,
     knowledgeBaseName: knowledgeBase?.name || "",
     documentId: chunk.documentId,
+    parentId: chunk.parentId || null,
     documentTitle: document?.title || "",
     sourcePath: chunk.sourcePath || document?.sourcePath || "",
     sourceRef: chunk.sourceRef || "",
@@ -45,8 +46,11 @@ function buildPayload(state, chunk, model) {
     sectionPath: chunk.sectionPath || [],
     page: chunk.page ?? null,
     keywords: chunk.keywords || [],
+    childType: chunk.childType || "",
+    businessKeys: chunk.businessKeys || {},
     tokenLength: chunk.tokenLength ?? (chunk.content ? chunk.content.length : 0),
     content: chunk.content || "",
+    searchText: chunk.searchText || "",
     contentHash: chunkHash(chunk),
     embeddingModel: model,
     embeddedAt: new Date().toISOString(),
@@ -56,7 +60,7 @@ function buildPayload(state, chunk, model) {
 
 function chunkText(chunk) {
   const heading = chunk.heading ? `${chunk.heading}\n\n` : "";
-  return `${heading}${chunk.content || ""}`.trim();
+  return `${heading}${chunk.searchText || chunk.content || ""}`.trim();
 }
 
 async function main() {

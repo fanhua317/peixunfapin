@@ -1,1 +1,1 @@
-export { generateTrainingMaterial, regenerateLocalTrainingMaterial } from "./core.mjs";
+export { generateTrainingMaterial } from "./core.mjs";

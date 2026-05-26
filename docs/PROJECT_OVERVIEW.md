@@ -1,6 +1,6 @@
 # 钜洲培训 Agent 项目总览文档
 
-更新时间：2026-05-19  
+更新时间：2026-05-20  
 项目目录：`D:\juzhou-agent\peixun`  
 业务数据目录：`D:\OpenClawData`
 
@@ -58,7 +58,7 @@
 4. 大模型可替换  
    通过 OpenAI-compatible API 直连 DeepSeek、Kimi、OpenAI 等模型，也保留 OpenClaw Gateway 接入能力。
 
-5. RAG 可降级  
+5. RAG 检索约束  
    本地向量索引、Qdrant、Ollama 不可用时，服务仍可回退关键词检索，不能因为语义检索离线导致业务完全不可用。
 
 6. 来源可追溯  
@@ -90,13 +90,28 @@ D:\juzhou-agent\peixun
 │   └── package-windows.ps1
 ├── training-plugin
 │   ├── README.md
-│   └── ...
+│   ├── openclaw.plugin.json
+│   └── src
+│       ├── index.ts
+│       ├── client.ts
+│       ├── config.ts
+│       ├── schemas.ts
+│       └── tools.ts
 └── training-service
     ├── package.json
     ├── public
     │   ├── index.html
-    │   └── app.js
+    │   ├── app.js
+    │   └── src
+    │       ├── api.js
+    │       ├── auth.js
+    │       ├── bootstrap.js
+    │       ├── chat.js
+    │       ├── invite.js
+    │       ├── messages.js
+    │       └── ui.js
     ├── scripts
+    │   ├── check-syntax.mjs
     │   ├── clean-raw.mjs
     │   ├── import-clean.mjs
     │   ├── embed-chunks.mjs
@@ -106,8 +121,26 @@ D:\juzhou-agent\peixun
     │   └── smoke-test.mjs
     └── src
         ├── server.mjs
+        ├── http
+        │   ├── app.mjs
+        │   ├── api-router.mjs
+        │   ├── auth.mjs
+        │   ├── request.mjs
+        │   ├── response.mjs
+        │   ├── static.mjs
+        │   └── controllers
         ├── store.mjs
-        ├── domain.mjs
+        ├── domain
+        │   ├── index.mjs
+        │   ├── drafts.mjs
+        │   ├── tasks.mjs
+        │   ├── invites.mjs
+        │   ├── quizzes.mjs
+        │   ├── reports.mjs
+        │   ├── answers.mjs
+        │   ├── employees.mjs
+        │   ├── knowledge.mjs
+        │   └── common.mjs
         ├── rag.mjs
         ├── quality.mjs
         ├── chunking.mjs
@@ -118,20 +151,21 @@ D:\juzhou-agent\peixun
         ├── qdrant.mjs
         ├── embedding.mjs
         ├── ai
+        │   ├── config.mjs
         │   ├── core.mjs
+        │   ├── llm-json.mjs
         │   ├── index.mjs
         │   ├── intent.mjs
         │   ├── material.mjs
         │   ├── answer.mjs
         │   └── quiz.mjs
+        ├── chat
+        │   └── general-chat.mjs
         ├── gateway
         │   ├── core.mjs
         │   ├── runtime.mjs
         │   ├── openclaw-client.mjs
-        │   ├── chat.mjs
         │   └── index.mjs
-        └── domain
-            └── quiz-fallback.mjs
 ```
 
 ## 5. 技术选型
@@ -146,11 +180,11 @@ D:\juzhou-agent\peixun
 
 ### 5.2 前端实现
 
-- 纯静态页面：`training-service/public/index.html` 和 `training-service/public/app.js`。
+- 纯静态页面：`training-service/public/index.html`、`training-service/public/app.js` 和 `public/src/*.js`。
 - 无 React/Vue 构建链。
 - 老板端和员工端共用一套前端入口，根据 URL 和接口数据切换视图。
 - 优点是打包简单、部署简单。
-- 缺点是 `app.js` 后续会继续变大，复杂交互增加后建议改成浏览器 ES module 拆分。
+- 当前已拆成浏览器 ES module，入口 `app.js` 只负责启动，聊天端、员工端、认证、API 和渲染工具分别维护。
 
 ### 5.3 数据存储
 
@@ -205,7 +239,8 @@ JSON 存储适合当前 MVP 和小团队使用。后续如果多人高并发或�
 
 - 服务器部署优先用直连模型 API。
 - OpenClaw 作为可选 Agent 宿主。
-- 出题、讲义生成、普通问答都走同一套 LLM 适配层。
+- 老板端先做意图路由：发布培训、查询进度等培训意图进入系统内置技能；普通聊天只走直连大模型 API。
+- 未配置 `TRAINING_LLM_API_KEY`、`DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY` 时，普通聊天明确报配置缺失，不使用本地话术。
 
 ### 5.5 RAG 与向量检索
 
@@ -272,7 +307,7 @@ dist\JuzhouAgentTrainingServer.zip
 ```mermaid
 flowchart TD
     A["浏览器页面<br/>老板端 / 员工端"] --> B["training-service HTTP API"]
-    B --> C["业务领域层<br/>domain.mjs"]
+    B --> C["业务领域层<br/>src/domain"]
     B --> D["AI 编排层<br/>src/ai"]
     D --> E["RAG 检索层<br/>rag / quality / chunking"]
     D --> F["LLM 适配层<br/>direct-llm / gateway"]
@@ -288,16 +323,16 @@ flowchart TD
 
 ```text
 training-service/src/server.mjs
+training-service/src/http/app.mjs
+training-service/src/http/api-router.mjs
 ```
 
 职责：
 
-- 提供静态页面。
-- 提供老板端 API。
-- 提供员工端 API。
-- 处理登录密钥和 Cookie。
+- `server.mjs` 只负责读取端口/主机、创建 HTTP server 并启动。
+- `src/http` 提供静态页面、认证、请求体解析、响应 helpers、API 路由和 controller。
+- controller 调用领域层和 AI 层，不直接保存业务状态。
 - 生成任务链接时根据请求地址或 `PUBLIC_BASE_URL` 拼接外部访问 URL。
-- 调用业务层和 AI 层。
 
 主要接口：
 
@@ -327,8 +362,12 @@ POST /api/quiz/submit
 核心文件：
 
 ```text
-training-service/src/domain.mjs
-training-service/src/domain/quiz-fallback.mjs
+training-service/src/domain/index.mjs
+training-service/src/domain/drafts.mjs
+training-service/src/domain/tasks.mjs
+training-service/src/domain/invites.mjs
+training-service/src/domain/quizzes.mjs
+training-service/src/domain/reports.mjs
 ```
 
 职责：
@@ -363,15 +402,11 @@ training-service/src/domain/quiz-fallback.mjs
 training-service/src/ai
 ```
 
-兼容入口：
-
-```text
-training-service/src/training-ai.mjs
-```
-
 当前拆分：
 
 - `core.mjs`：核心实现。
+- `config.mjs`：模型、思考强度、上下文长度和检索常量。
+- `llm-json.mjs`：结构化 JSON 调用和修复。
 - `index.mjs`：统一导出。
 - `intent.mjs`：意图识别导出入口。
 - `material.mjs`：培训讲义导出入口。
@@ -385,7 +420,7 @@ training-service/src/training-ai.mjs
 - 根据知识库生成培训讲义。
 - 根据问题生成 RAG 答案。
 - 根据任务生成考试题。
-- 在 LLM 不可用时提供本地 fallback。
+- LLM 不可用或解析失败时停止生成，并向接口返回清晰错误；不再用本地规则生成讲义、答案或题目。
 
 ### 6.4 RAG 检索层
 
@@ -417,7 +452,7 @@ training-service/src/embedding.mjs
 ```text
 training-service/src/direct-llm.mjs
 training-service/src/llm.mjs
-training-service/src/general-chat.mjs
+training-service/src/chat/general-chat.mjs
 training-service/src/gateway
 ```
 
@@ -428,7 +463,7 @@ training-service/src/gateway
 - 兼容 DeepSeek/Kimi/OpenAI 等服务。
 - 处理部分模型只允许 `temperature=1` 的错误。
 - 保留 OpenClaw Gateway WebSocket 调用能力。
-- 当 OpenClaw 不可用时，仍可走直连模型或本地 fallback。
+- 普通聊天走直连大模型 API；培训讲义、答疑和出题也必须依赖可用模型 API，模型不可用时直接失败。
 
 ### 6.6 数据存储层
 
@@ -454,6 +489,16 @@ training-service/src/store.mjs
 
 ```text
 training-plugin
+```
+
+内部结构：
+
+```text
+training-plugin/src/index.ts   # 插件入口，只注册工具
+training-plugin/src/client.ts  # 调用 training-service
+training-plugin/src/config.ts  # 插件配置和 token 读取
+training-plugin/src/schemas.ts # 工具参数 schema helper
+training-plugin/src/tools.ts   # 8 个 tool 定义
 ```
 
 插件暴露的工具名保持不变：
@@ -613,8 +658,8 @@ GET /api/knowledge-bases/{id}/quality
 5. 来源白名单  
    模型返回的 `sourceRef` 必须来自本次命中的 chunk。编造的来源不会被采纳。
 
-6. fallback 降级  
-   LLM 不可用或解析失败时，不再拼接大段原文，而是提炼短句或抽取表格字段。
+6. 模型不可用时停止输出  
+   LLM 不可用或解析失败时，不生成讲义、答案或题目，并返回明确配置错误。
 
 7. 答案质量标记  
    `/api/answer` 返回：
@@ -789,6 +834,8 @@ cd D:\juzhou-agent\peixun\training-service
 npm run check
 ```
 
+`npm run check` 会自动扫描 `src`、`public`、`scripts` 下的 `.mjs` 和 `.js` 文件执行 `node --check`，新增模块不需要手动追加到长命令中。
+
 ### 12.2 业务烟测
 
 ```powershell
@@ -864,17 +911,21 @@ npm run eval:rag
 - 中期迁移 SQLite。
 - 正式多用户 SaaS 化时迁移 PostgreSQL。
 
-### 13.3 前端单文件会继续变大
+### 13.3 前端模块边界仍需继续维护
 
-`public/app.js` 当前未拆分，是为了避免引入构建链和部署风险。后续如果页面继续增加，建议拆成浏览器 ES module：
+`public/app.js` 已拆成无构建浏览器 ES module：
 
 ```text
 public/src/api.js
-public/src/state.js
-public/src/boss-view.js
-public/src/employee-view.js
-public/src/components.js
+public/src/auth.js
+public/src/bootstrap.js
+public/src/chat.js
+public/src/invite.js
+public/src/messages.js
+public/src/ui.js
 ```
+
+后续如果页面继续增加，应继续按老板端、员工端、共享渲染组件和 API client 的边界拆分，而不是重新把逻辑堆回入口文件。
 
 ### 13.4 登录密钥不是完整账号体系
 
@@ -887,7 +938,7 @@ public/src/components.js
 
 ### 13.5 大模型仍可能出现表达偏差
 
-项目已通过 RAG、来源白名单、fallback 和评测减少幻觉，但不能保证模型每句话都完全正确。更严格的下一步是：
+项目已通过 RAG、来源白名单、结构化校验和评测减少幻觉，但不能保证模型每句话都完全正确。更严格的下一步是：
 
 - 答案句子级引用。
 - unsupported claim checker。

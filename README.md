@@ -47,6 +47,29 @@ D:\OpenClawData\ollama
 2. 再安装 OpenClaw 插件，让 Agent 调用 `training-service`。
 3. 最后再考虑小红书、公众号或企业微信等发布/通知渠道。
 
+## 当前架构
+
+`training-service` 已按轻量分层拆分：
+
+```text
+src/server.mjs      # 只负责启动原生 HTTP server
+src/http            # 请求解析、认证、静态文件、API controller
+src/domain          # 知识库、员工、任务、邀请、考试、报表业务逻辑
+src/ai              # 意图识别、讲义、答疑、出题、LLM JSON 调用
+public/src          # 无构建浏览器 ES modules
+```
+
+`training-plugin` 保留 8 个 OpenClaw tool 名不变，内部拆成配置、HTTP client、schema 和 tool 定义。
+
+常用验证：
+
+```powershell
+cd D:\juzhou-agent\peixun\training-service
+npm run check
+npm run smoke
+npm run eval:rag -- --retrieval-only
+```
+
 ## 打包给 Windows 用户
 
 生成绿色版 ZIP 和自解压安装 EXE：
@@ -65,7 +88,7 @@ dist\JuzhouAgentTraining-Setup.exe
 
 `-IncludeData` 会打包 `D:\OpenClawData\training-index`、`training-clean` 和 `training-vision`，不会打包原始 PDF、Qdrant、Ollama 或密钥。
 
-大模型出题/生成资料建议通过服务端环境变量配置：
+普通聊天和大模型出题/生成资料建议通过服务端环境变量配置：
 
 ```text
 TRAINING_LLM_PROVIDER=auto
@@ -73,6 +96,8 @@ TRAINING_LLM_BASE_URL=https://api.deepseek.com/v1
 TRAINING_LLM_MODEL=deepseek-chat
 TRAINING_LLM_API_KEY=你的 API Key
 ```
+
+网页老板端会先做意图路由：发布培训、查询进度等培训意图走系统内置技能；其他普通聊天只走直连大模型 API。未配置 `TRAINING_LLM_API_KEY`、`DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY` 时，普通聊天会明确报配置缺失，不使用本地话术。
 
 ## 打包部署到服务器
 

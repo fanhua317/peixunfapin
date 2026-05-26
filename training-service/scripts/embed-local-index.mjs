@@ -24,7 +24,7 @@ const dryRun = args.has("dry");
 
 function chunkText(chunk) {
   const heading = chunk.heading ? `${chunk.heading}\n\n` : "";
-  return `${heading}${chunk.content || ""}`.trim();
+  return `${heading}${chunk.searchText || chunk.content || ""}`.trim();
 }
 
 async function readExistingIndex(filePath) {
@@ -45,6 +45,8 @@ function buildEntry(chunk, vector) {
     documentId: chunk.documentId,
     sourcePath: chunk.sourcePath || "",
     sourceRef: chunk.sourceRef || "",
+    parentId: chunk.parentId || null,
+    childType: chunk.childType || "",
     contentHash: chunk.contentHash || "",
     embeddingVersion: chunkEmbeddingVersion(chunk, modelName),
     vector,

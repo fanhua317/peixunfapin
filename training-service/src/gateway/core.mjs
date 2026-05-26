@@ -2,15 +2,10 @@ import { randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { askOpenAiCompatibleLLM, getDirectLlmRuntimeConfig } from "../direct-llm.mjs";
 
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 const DEFAULT_AGENT_ID = "main";
 const DEFAULT_TIMEOUT_MS = 120_000;
-const DEFAULT_FLASH_MODEL = process.env.OPENCLAW_FLASH_MODEL || process.env.OPENCLAW_AI_MODEL || "deepseek/deepseek-v4-flash";
-const GENERAL_CHAT_SIMPLE_THINKING = process.env.OPENCLAW_GENERAL_CHAT_SIMPLE_THINKING || process.env.OPENCLAW_CHAT_SIMPLE_THINKING || "low";
-const GENERAL_CHAT_COMPLEX_THINKING = process.env.OPENCLAW_GENERAL_CHAT_COMPLEX_THINKING || process.env.OPENCLAW_CHAT_COMPLEX_THINKING || process.env.OPENCLAW_GENERAL_CHAT_THINKING || process.env.OPENCLAW_CHAT_THINKING || "medium";
-const GENERAL_CHAT_MODEL = process.env.OPENCLAW_GENERAL_CHAT_MODEL || process.env.OPENCLAW_CHAT_MODEL || DEFAULT_FLASH_MODEL;
 const sessionPatchCache = new Map();
 let callGatewayPromise;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -336,51 +331,8 @@ function latestAssistantTextAfter(messages, minSeq) {
   return "";
 }
 
-function fallbackReply(error) {
-  return [
-    "我已经把网页端设计成可转接 OpenClaw 的套壳，但当前 training-service 无法连接 OpenClaw Gateway。",
-    `原因：${error instanceof Error ? error.message : String(error)}`,
-    "请确认 OpenClaw Gateway 正在运行，并给 training-service 配置 OPENCLAW_GATEWAY_URL 以及 OPENCLAW_GATEWAY_TOKEN 或 OPENCLAW_GATEWAY_PASSWORD。若只需要培训出题和普通问答，也可以配置 TRAINING_LLM_API_KEY 走直连模型。",
-  ].join("\n");
-}
-
-function resolveGeneralChatThinking(text) {
-  return /(分析|方案|对比|比较|为什么|如何|怎么|策略|设计|优化|权衡|规划|推理|复杂|详细|深度|长文|报告)/.test(String(text || ""))
-    ? GENERAL_CHAT_COMPLEX_THINKING
-    : GENERAL_CHAT_SIMPLE_THINKING;
-}
-
 function shouldPatchSession() {
   return !["0", "false", "off", "no"].includes(String(process.env.OPENCLAW_SESSION_PATCH || "").toLowerCase());
-}
-
-function shouldUseDirectChatFallback() {
-  return !["0", "false", "off", "no"].includes(String(process.env.TRAINING_LLM_GENERAL_FALLBACK || process.env.OPENCLAW_GENERAL_CHAT_DIRECT_FALLBACK || "1").toLowerCase());
-}
-
-function directChatSystemPrompt() {
-  return [
-    "你是苏州矩洲工业有限公司培训系统的智能助手。",
-    "你可以帮助老板整理培训思路、解释培训资料、设计题目和说明操作步骤。",
-    "如果用户要发布培训任务、查询任务进度或生成考试链接，提醒用户在当前系统里继续确认草稿或使用明确指令；不要伪造已经发布成功。",
-  ].join("\n");
-}
-
-async function answerWithDirectModel(text, openClawError) {
-  if (!shouldUseDirectChatFallback()) return null;
-  const directConfig = getDirectLlmRuntimeConfig({ model: GENERAL_CHAT_MODEL });
-  if (!directConfig.apiKeyConfigured) return null;
-  const result = await askOpenAiCompatibleLLM(text, {
-    system: directChatSystemPrompt(),
-    thinking: resolveGeneralChatThinking(text),
-    model: GENERAL_CHAT_MODEL,
-    timeoutMs: Number(process.env.OPENCLAW_GENERAL_CHAT_TIMEOUT_MS || process.env.OPENCLAW_CHAT_TIMEOUT_MS || DEFAULT_TIMEOUT_MS),
-  });
-  return {
-    ...result,
-    source: "llm-api",
-    openClawFallbackReason: openClawError instanceof Error ? openClawError.message : String(openClawError || ""),
-  };
 }
 
 async function patchOpenClawSession({ base, sessionKey, thinking, model, timeoutMs }) {
@@ -505,31 +457,3 @@ export async function askOpenClaw(message, options = {}) {
   });
 }
 
-export async function answerGeneralChat(message) {
-  const text = String(message || "").trim();
-  if (!text) {
-    return { answer: "请先输入你的问题。", source: "fallback" };
-  }
-
-  try {
-    return await askOpenClaw(text, {
-      thinking: resolveGeneralChatThinking(text),
-      model: GENERAL_CHAT_MODEL,
-    });
-  } catch (error) {
-    try {
-      const directAnswer = await answerWithDirectModel(text, error);
-      if (directAnswer) return directAnswer;
-    } catch (directError) {
-      return {
-        answer: [
-          fallbackReply(error),
-          "",
-          `直连模型也暂时不可用：${directError instanceof Error ? directError.message : String(directError)}`,
-        ].join("\n"),
-        source: "fallback",
-      };
-    }
-    return { answer: fallbackReply(error), source: "fallback" };
-  }
-}

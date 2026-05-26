@@ -10,10 +10,11 @@
     "import:clean": "node scripts/import-clean.mjs",
     "embed:chunks": "node scripts/embed-chunks.mjs",
     "embed:local": "node scripts/embed-local-index.mjs",
+    "eval:intent": "node scripts/eval-intent.mjs",
     "eval:rag": "node scripts/eval-rag.mjs",
     "qdrant:snapshot": "node scripts/qdrant-snapshot.mjs",
     "render:pdf": "node scripts/render-pdf-pages.mjs",
-    "check": "node --check src/server.mjs && node --check src/store.mjs && node --check src/domain.mjs && node --check src/domain/quiz-fallback.mjs && node --check src/rag.mjs && node --check src/general-chat.mjs && node --check src/gateway/core.mjs && node --check src/gateway/index.mjs && node --check src/gateway/runtime.mjs && node --check src/gateway/openclaw-client.mjs && node --check src/gateway/chat.mjs && node --check src/llm.mjs && node --check src/direct-llm.mjs && node --check src/local-vector-index.mjs && node --check src/chunking.mjs && node --check src/embedding.mjs && node --check src/qdrant.mjs && node --check src/quality.mjs && node --check src/health.mjs && node --check src/training-ai.mjs && node --check src/ai/core.mjs && node --check src/ai/index.mjs && node --check src/ai/intent.mjs && node --check src/ai/material.mjs && node --check src/ai/answer.mjs && node --check src/ai/quiz.mjs && node --check public/app.js && node --check scripts/clean-raw.mjs && node --check scripts/render-pdf-pages.mjs && node --check scripts/import-clean.mjs && node --check scripts/embed-chunks.mjs && node --check scripts/embed-local-index.mjs && node --check scripts/qdrant-snapshot.mjs && node --check scripts/eval-rag.mjs && node --check scripts/smoke-test.mjs",
+    "check": "node scripts/check-syntax.mjs",
     "smoke": "node scripts/smoke-test.mjs"
   },
   "dependencies": {

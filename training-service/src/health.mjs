@@ -1,5 +1,5 @@
 import { EMBEDDING_DEFAULT_BASE_URL, EMBEDDING_DEFAULT_MODEL } from "./embedding.mjs";
-import { getOpenClawRuntimeStatus } from "./general-chat.mjs";
+import { getOpenClawRuntimeStatus } from "./gateway/index.mjs";
 import { getLlmRuntimeConfig } from "./llm.mjs";
 import { getLocalVectorIndexStatus } from "./local-vector-index.mjs";
 import { QDRANT_DEFAULT_BASE_URL, QDRANT_DEFAULT_COLLECTION } from "./qdrant.mjs";

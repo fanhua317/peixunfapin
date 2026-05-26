@@ -1,44 +1,16 @@
-import { askLLM } from "../llm.mjs";
 import { searchChunks, searchChunksHybrid } from "../rag.mjs";
-import { cleanQuestionText, isUsableTrainingChunk } from "../quality.mjs";
-
-const DEFAULT_FLASH_MODEL = process.env.OPENCLAW_FLASH_MODEL || process.env.OPENCLAW_AI_MODEL || "deepseek/deepseek-v4-flash";
-const DEFAULT_TRAINING_MODEL = process.env.OPENCLAW_TRAINING_MODEL || DEFAULT_FLASH_MODEL;
-const TRAINING_AI_SESSION_KEY = process.env.OPENCLAW_TRAINING_SESSION_KEY || "agent:main:training-service";
-const MAX_CONTEXT_CHARS = Number(process.env.TRAINING_AI_CONTEXT_CHARS || 12_000);
-const ANSWER_CONTEXT_LIMIT = Number(process.env.TRAINING_ANSWER_CONTEXT_LIMIT || 8);
-const LOW_VALUE_CONTEXT_RE = /(未能抽取|无法抽取|OCR|扫描件|复制文本|图片型 PDF|来源文件[:：]|页数[:：]|目录|封面|未识别文本|鏈兘|鎶藉彇|澶嶅埗鏂囨湰|鎵弿)/i;
-const PARAM_QUERY_RE = /(参数|范围|功率|机座|级数|能效|型号|尺寸|电压|电流|效率|YE\d|IE\d|kw|kW|pole|poles)/i;
-const PARAM_CHUNK_RE = /(机座范围|功率范围|级数|能效|机壳|列\s*2|Motor Model|Output\s*Power|standard\s*Eff)/i;
-const PROCESS_QUERY_RE = /(工艺|铸铝|品质|质量|检测|销售|话术|客户|介绍|附加损耗|转子|定子|冲剪|铁损|断条)/i;
-const FACTUAL_SOURCE_LIMIT = 8;
-const AI_PROFILE = {
-  intent: {
-    thinking: process.env.OPENCLAW_INTENT_THINKING || process.env.OPENCLAW_TRAINING_INTENT_THINKING || "minimal",
-    model: process.env.OPENCLAW_INTENT_MODEL || process.env.OPENCLAW_TRAINING_INTENT_MODEL || DEFAULT_TRAINING_MODEL,
-    timeoutMs: Number(process.env.OPENCLAW_INTENT_TIMEOUT_MS || process.env.OPENCLAW_TRAINING_TIMEOUT_MS || process.env.OPENCLAW_CHAT_TIMEOUT_MS || 45_000),
-  },
-  material: {
-    thinking: process.env.OPENCLAW_MATERIAL_THINKING || process.env.OPENCLAW_TRAINING_MATERIAL_THINKING || "low",
-    model: process.env.OPENCLAW_MATERIAL_MODEL || process.env.OPENCLAW_TRAINING_MATERIAL_MODEL || DEFAULT_TRAINING_MODEL,
-    timeoutMs: Number(process.env.OPENCLAW_MATERIAL_TIMEOUT_MS || process.env.OPENCLAW_TRAINING_TIMEOUT_MS || process.env.OPENCLAW_CHAT_TIMEOUT_MS || 150_000),
-  },
-  quiz: {
-    thinking: process.env.OPENCLAW_QUIZ_THINKING || process.env.OPENCLAW_TRAINING_QUIZ_THINKING || "medium",
-    model: process.env.OPENCLAW_QUIZ_MODEL || process.env.OPENCLAW_TRAINING_QUIZ_MODEL || DEFAULT_TRAINING_MODEL,
-    timeoutMs: Number(process.env.OPENCLAW_QUIZ_TIMEOUT_MS || process.env.OPENCLAW_TRAINING_TIMEOUT_MS || process.env.OPENCLAW_CHAT_TIMEOUT_MS || 180_000),
-  },
-  answer: {
-    thinking: process.env.OPENCLAW_ANSWER_THINKING || process.env.OPENCLAW_TRAINING_ANSWER_THINKING || "medium",
-    model: process.env.OPENCLAW_ANSWER_MODEL || process.env.OPENCLAW_TRAINING_ANSWER_MODEL || DEFAULT_TRAINING_MODEL,
-    timeoutMs: Number(process.env.OPENCLAW_ANSWER_TIMEOUT_MS || process.env.OPENCLAW_TRAINING_TIMEOUT_MS || process.env.OPENCLAW_CHAT_TIMEOUT_MS || 120_000),
-  },
-  repair: {
-    thinking: process.env.OPENCLAW_REPAIR_THINKING || process.env.OPENCLAW_TRAINING_REPAIR_THINKING || "minimal",
-    model: process.env.OPENCLAW_REPAIR_MODEL || process.env.OPENCLAW_TRAINING_REPAIR_MODEL || DEFAULT_TRAINING_MODEL,
-    timeoutMs: Number(process.env.OPENCLAW_REPAIR_TIMEOUT_MS || process.env.OPENCLAW_TRAINING_TIMEOUT_MS || process.env.OPENCLAW_CHAT_TIMEOUT_MS || 90_000),
-  },
-};
+import { isUsableTrainingChunk } from "../quality.mjs";
+import {
+  AI_PROFILE,
+  ANSWER_CONTEXT_LIMIT,
+  FACTUAL_SOURCE_LIMIT,
+  LOW_VALUE_CONTEXT_RE,
+  MAX_CONTEXT_CHARS,
+  PARAM_CHUNK_RE,
+  PARAM_QUERY_RE,
+  PROCESS_QUERY_RE,
+} from "./config.mjs";
+import { askLlmJson, askLlmStructured } from "./llm-json.mjs";
 
 function compactText(value, maxLength = 1600) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
@@ -78,130 +50,6 @@ function isLowValueContext(chunk) {
   if (!cleaned || cleaned.length < 16) return true;
   if (LOW_VALUE_CONTEXT_RE.test(cleaned) && !/(工艺|铸铝|检测|机座范围|功率范围|能效|附加损耗|客户|销售)/.test(cleaned)) return true;
   return false;
-}
-
-function splitReadableClauses(sentence) {
-  const cleaned = cleanReadableText(sentence, 360)
-    .replace(/^填补国家空白\s*/, "")
-    .replace(/^专业铸铝\s*/, "")
-    .replace(/^[，,；;:：\s]+/, "")
-    .replace(/[，,；;:：\s]+$/, "");
-  if (cleaned.length <= 90) return [cleaned];
-  const clauses = cleaned
-    .split(/[，,]/)
-    .flatMap((part) => part.split(/(?=这是因为|此外|同时|因此|常见|在这三种|低压铸铝|离心铸铝|压力铸铝)/))
-    .map((part) => cleanReadableText(part, 110).replace(/^[，,；;:：\s]+/, "").replace(/[，,；;:：\s]+$/, ""))
-    .filter((part) => part.length >= 8);
-  return clauses.length ? clauses : [compactText(cleaned, 110)];
-}
-
-function splitReadableSentences(value, limit = 4) {
-  return uniqueStrings((cleanReadableText(value, 1400).match(/[^。！？；;.!?]+[。！？；;.!?]?/g) || [])
-    .flatMap(splitReadableClauses)
-    .map((sentence) => cleanReadableText(sentence, 130))
-    .filter((sentence) => sentence.length >= 8 && !LOW_VALUE_CONTEXT_RE.test(sentence)))
-    .slice(0, limit);
-}
-
-const FALLBACK_TERM_HINTS = [
-  "附加损耗",
-  "低压铸铝",
-  "离心铸铝",
-  "压力铸铝",
-  "铸铝方式",
-  "铸铝转子",
-  "导条",
-  "端环",
-  "铁心",
-  "铁损检测仪",
-  "硅钢片",
-  "铸铝断条检测仪",
-  "不良转子",
-  "YE4",
-  "YE3",
-  "YE2",
-  "Y2",
-  "六级",
-  "四级",
-  "二级",
-  "级数",
-  "机座范围",
-  "功率范围",
-  "能效",
-  "五项领先制造工艺",
-  "高导电率铝转子铸铝工艺",
-  "High-Conductivity Rotor Aluminum Casting",
-  "专利号",
-  "ZL201810801154.9",
-  "客户",
-  "销售",
-  "专业知识",
-  "需求",
-  "痛点",
-];
-
-function fallbackQueryTerms(question) {
-  const text = String(question || "");
-  const hinted = FALLBACK_TERM_HINTS.filter((term) => text.includes(term));
-  const alnum = text.match(/[A-Za-z][A-Za-z0-9-]{1,}|\b[A-Z]{1,5}\d[A-Z]?\b|ZL\d+(?:\.\d+)?|\d+\s*(?:级|kw|KW|L)/g) || [];
-  const derived = [];
-  if (text.includes("压力铸铝")) derived.push("压铸");
-  return uniqueStrings([...hinted, ...derived, ...alnum]);
-}
-
-function fallbackSentenceScore(sentence, question, chunk, sentenceIndex) {
-  const text = `${sentence}\n${chunk?.sourceRef || ""}`;
-  const terms = fallbackQueryTerms(question);
-  let score = Math.max(0, 14 - sentenceIndex * 2);
-  let termHits = 0;
-  for (const term of terms) {
-    if (text.includes(term)) {
-      termHits += 1;
-      score += Math.max(18, Math.min(38, term.length * 4));
-    }
-  }
-  if (/(因为|因此|所以|最大|最佳|作用|用于|包括|对应|范围|功率|杜绝|把控|不同|增加|降低)/.test(sentence)) score += 18;
-  if (!termHits && !/(因为|因此|所以|不同|最大|最佳|增加|降低|导电率|电气性能)/.test(sentence)) score -= 40;
-  if (!/(专利|专利号|知识产权)/.test(String(question || "")) && /(专利|专利号|知识产权)/.test(sentence)) score -= 45;
-  if (/^(?:Sheet|第\s*\d+\s*条|列\s*\d+|[0-9.]+\s*)/i.test(sentence)) score -= 15;
-  if (LOW_VALUE_CONTEXT_RE.test(sentence)) score -= 80;
-  return score;
-}
-
-function fallbackAnswerEntries(chunks, question, limit = 4) {
-  const entries = [];
-  for (const [chunkIndex, chunk] of (chunks || []).entries()) {
-    const sentences = splitReadableSentences(chunk.content, 8);
-    for (const [sentenceIndex, sentence] of sentences.entries()) {
-      entries.push({
-        sentence,
-        chunk,
-        score: fallbackSentenceScore(sentence, question, chunk, sentenceIndex) - chunkIndex * 4,
-      });
-    }
-  }
-  const seen = new Set();
-  return entries
-    .sort((left, right) => right.score - left.score)
-    .filter((entry) => {
-      const key = entry.sentence.replace(/[，。；,.!?！？\s]/g, "");
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return entry.score > 20;
-    })
-    .slice(0, limit);
-}
-
-function chunksForAnswerEntries(entries, fallbackChunks) {
-  const selected = [];
-  const seen = new Set();
-  for (const entry of entries) {
-    const key = entry.chunk?.sourceRef || entry.chunk?.id;
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    selected.push(entry.chunk);
-  }
-  return selected.length ? selected.slice(0, FACTUAL_SOURCE_LIMIT) : fallbackChunks.slice(0, FACTUAL_SOURCE_LIMIT);
 }
 
 function retrievalModeFromChunks(chunks) {
@@ -251,100 +99,24 @@ function normalizeSourceRefs(rawRefs, chunks) {
   return matched.length ? uniqueStrings(matched).slice(0, FACTUAL_SOURCE_LIMIT) : allowed;
 }
 
-function extractJsonObject(text) {
-  const raw = String(text || "").trim();
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const unfenced = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-  const source = fenced ? fenced[1].trim() : unfenced;
-  const candidate = source.slice(source.indexOf("{"), source.lastIndexOf("}") + 1);
-  if (!candidate || !candidate.startsWith("{")) throw new Error("OpenClaw did not return a JSON object");
-  return JSON.parse(candidate);
-}
-
-async function askLlmJson({ purpose, prompt, profile }) {
-  const result = await askLLM(prompt, {
-    sessionKey: `${TRAINING_AI_SESSION_KEY}:${purpose}`,
-    thinking: profile.thinking,
-    model: profile.model,
-    timeoutMs: profile.timeoutMs,
-  });
-  return {
-    data: extractJsonObject(result.answer),
-    raw: result.answer,
-    runId: result.runId,
-    source: result.source || "openclaw",
-    thinking: result.thinking || profile.thinking,
-    model: result.model || profile.model,
-    sessionPatch: result.sessionPatch,
-  };
-}
-
-async function askLlmStructured({ purpose, prompt, profile, repairSchema }) {
-  const result = await askLLM(prompt, {
-    sessionKey: `${TRAINING_AI_SESSION_KEY}:${purpose}`,
-    thinking: profile.thinking,
-    model: profile.model,
-    timeoutMs: profile.timeoutMs,
-  });
-  try {
-    return {
-      data: extractJsonObject(result.answer),
-      raw: result.answer,
-      runId: result.runId,
-      source: result.source || "openclaw",
-      thinking: result.thinking || profile.thinking,
-      model: result.model || profile.model,
-      sessionPatch: result.sessionPatch,
-      format: "json",
-    };
-  } catch (error) {
-    if (repairSchema) {
-      try {
-        const repairProfile = AI_PROFILE.repair;
-        const repair = await askLLM(`请把下面内容转换成严格 JSON 对象。只能输出 JSON，不要 Markdown，不要解释。目标格式：${JSON.stringify(repairSchema)}\n\n原始内容：\n${result.answer}`, {
-          sessionKey: `${TRAINING_AI_SESSION_KEY}:${purpose}:repair`,
-          thinking: repairProfile.thinking,
-          model: repairProfile.model,
-          timeoutMs: repairProfile.timeoutMs,
-        });
-        return {
-          data: extractJsonObject(repair.answer),
-          raw: repair.answer,
-          runId: repair.runId,
-          source: repair.source || "openclaw",
-          thinking: repair.thinking || repairProfile.thinking,
-          model: repair.model || repairProfile.model,
-          sessionPatch: repair.sessionPatch,
-          format: "json",
-          repaired: true,
-        };
-      } catch {
-      }
-    }
-    return {
-      data: null,
-      raw: result.answer,
-      runId: result.runId,
-      source: result.source || "openclaw",
-      thinking: result.thinking || profile.thinking,
-      model: result.model || profile.model,
-      sessionPatch: result.sessionPatch,
-      format: "text",
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
 function getKnowledgeBase(state, knowledgeBaseId) {
   return state.knowledgeBases.find((kb) => kb.id === knowledgeBaseId) || null;
 }
 
+function modelRequiredError(feature, error) {
+  if (error instanceof Error && /需要可用的大模型 API/.test(error.message)) return error;
+  const detail = error instanceof Error ? error.message : String(error || "");
+  const required = new Error(`${feature}需要可用的大模型 API；请配置 TRAINING_LLM_API_KEY、DEEPSEEK_API_KEY 或 OPENAI_API_KEY 后重试。${detail ? ` 原因：${detail}` : ""}`);
+  required.statusCode = 503;
+  return required;
+}
+
 function selectContextChunks(state, { knowledgeBaseId, query, limit = 12 }) {
   const ranked = searchChunks(state, { knowledgeBaseId, query, limit });
-  const fallback = state.chunks.filter((chunk) => chunk.knowledgeBaseId === knowledgeBaseId).filter(isUsableTrainingChunk);
+  const supplemental = state.chunks.filter((chunk) => chunk.knowledgeBaseId === knowledgeBaseId).filter(isUsableTrainingChunk);
   const seen = new Set();
   const selected = [];
-  for (const chunk of [...ranked, ...fallback]) {
+  for (const chunk of [...ranked, ...supplemental]) {
     if (!chunk || seen.has(chunk.id)) continue;
     seen.add(chunk.id);
     selected.push(chunk);
@@ -381,7 +153,15 @@ function renderContext(chunks) {
   let total = 0;
   const lines = [];
   for (const chunk of chunks) {
-    const text = `[${chunk.sourceRef}]\n${chunk.content}`;
+    const matched = Array.isArray(chunk.matchedChunks) && chunk.matchedChunks.length
+      ? `\n\nMatched child snippets:\n${chunk.matchedChunks
+        .slice(0, 3)
+        .map((item, index) => `${index + 1}. ${item.preview || item.sourceRef || item.chunkId}`)
+        .join("\n")}`
+      : chunk.matchedPreview
+        ? `\n\nMatched child snippet:\n${chunk.matchedPreview}`
+        : "";
+    const text = `[${chunk.sourceRef}]\n${chunk.content}${matched}`;
     const remaining = MAX_CONTEXT_CHARS - total;
     if (remaining <= 0) break;
     const clipped = text.length > remaining ? text.slice(0, remaining) : text;
@@ -391,22 +171,140 @@ function renderContext(chunks) {
   return lines.join("\n\n---\n\n");
 }
 
+function isMarketingArticleIntent(text) {
+  const value = String(text || "");
+  if (/(软文|营销文章|推广文案|公众号文章|宣传文案|客户文章|宣传稿|营销稿|官网文章|推文|B2B\s*文案|b2b\s*文案)/i.test(value)) {
+    return true;
+  }
+  if (/(写|生成|做|来|出|整理|创作).*(产品介绍|品牌介绍|宣传介绍|营销内容|推广内容|客户内容)/.test(value) && !/(培训|考试|试题|考题|学习|课程)/.test(value)) {
+    return true;
+  }
+  return false;
+}
+
+const KNOWN_INTENT_SKILLS = new Set([
+  "create_training_draft",
+  "show_training_status",
+  "delete_training_records",
+  "generate_marketing_article",
+  "answer_general_chat",
+]);
+const OPERATION_INTENT_SKILLS = new Set([
+  "create_training_draft",
+  "show_training_status",
+  "delete_training_records",
+  "generate_marketing_article",
+]);
+const HIGH_RISK_INTENT_SKILLS = new Set(["delete_training_records"]);
+const DIRECT_OPERATION_CONFIDENCE = 0.7;
+const LOCAL_BYPASS_CONFIDENCE = 0.82;
+
+function normalizeIntentSkill(value) {
+  const skill = String(value || "").trim();
+  if (skill === "query_training_status") return "show_training_status";
+  if (skill === "general_chat") return "answer_general_chat";
+  return KNOWN_INTENT_SKILLS.has(skill) ? skill : "";
+}
+
+function normalizeAlternatives(value, selectedSkill) {
+  const raw = Array.isArray(value) ? value : [];
+  return raw
+    .map((item) => {
+      if (typeof item === "string") {
+        const skill = normalizeIntentSkill(item);
+        return skill && skill !== selectedSkill ? { skill, confidence: 0 } : null;
+      }
+      const skill = normalizeIntentSkill(item?.skill || item?.intent);
+      return skill && skill !== selectedSkill
+        ? {
+            skill,
+            intent: skill,
+            confidence: Number(item?.confidence) || 0,
+            reason: String(item?.reason || ""),
+          }
+        : null;
+    })
+    .filter(Boolean)
+    .slice(0, 3);
+}
+
+function needsIntentConfirmation(decision) {
+  if (!OPERATION_INTENT_SKILLS.has(decision.skill)) return false;
+  if (HIGH_RISK_INTENT_SKILLS.has(decision.skill)) return true;
+  return Number(decision.confidence || 0) < DIRECT_OPERATION_CONFIDENCE;
+}
+
+function normalizeIntentDecision(raw, extra = {}) {
+  const skill = normalizeIntentSkill(raw?.skill || raw?.intent) || "answer_general_chat";
+  const confidence = Math.max(0, Math.min(1, Number(raw?.confidence) || (skill === "answer_general_chat" ? 0.6 : 0.75)));
+  const decision = {
+    intent: skill,
+    skill,
+    confidence,
+    source: String(raw?.source || extra.source || "local"),
+    reason: String(raw?.reason || ""),
+    alternatives: normalizeAlternatives(raw?.alternatives, skill),
+    ...extra,
+  };
+  decision.needsConfirmation = Boolean(extra.confirmed)
+    ? false
+    : Boolean(raw?.needsConfirmation ?? needsIntentConfirmation(decision));
+  return decision;
+}
+
+export function isConfirmedSkillAllowed(value) {
+  return OPERATION_INTENT_SKILLS.has(normalizeIntentSkill(value));
+}
+
+function confirmedIntentDecision(value) {
+  const skill = normalizeIntentSkill(value);
+  if (!OPERATION_INTENT_SKILLS.has(skill)) return null;
+  return normalizeIntentDecision({
+    intent: skill,
+    skill,
+    confidence: 1,
+    source: "confirmed",
+    reason: "用户已确认执行该操作。",
+    needsConfirmation: false,
+  }, { confirmed: true });
+}
+
+function isStatusIntent(text) {
+  const value = String(text || "");
+  return (
+    /(查询|查看|看一下|看看|查一下).*(培训|学习|考试|任务|进度|完成情况|成绩|报表|状态)/.test(value) ||
+    /(培训|学习|考试|任务).*(进度|完成情况|成绩|报表|状态|谁完成|谁没完成|未完成|完成率|平均分)/.test(value) ||
+    /(谁完成|谁没完成|未完成|完成率|平均分|培训报表|学习报表|考试成绩)/.test(value)
+  );
+}
+
+function isTrainingDraftIntent(text) {
+  const value = String(text || "");
+  return (
+    /(发布|安排|创建|新建|布置|分配|指派|制定|建).*(培训|学习|考试|课程|题|计划|考察)/.test(value) ||
+    /给.+(培训|学习|考试|课程|考察)/.test(value) ||
+    /(出|生成|做)\s*\d+\s*(道)?\s*(题|考题|试题)/.test(value) ||
+    /(全部|所有|全员|全体).*(培训|学习|考试|课程|考察)/.test(value) ||
+    /(培训|学习|考试|课程).*(全部|所有|全员|全体|员工|人员)/.test(value) ||
+    /(及格|通过分数|截止时间|员工专属链接)/.test(value)
+  );
+}
+
 function localIntent(message) {
   const text = String(message || "");
-  if (/(查询|查看|进度|完成情况|成绩|谁完成|谁没完成|状态|报表)/.test(text)) {
-    return { intent: "query_training_status", confidence: 0.75, skill: "show_training_status", source: "local" };
+  if (/(删除|删掉|清空|清除|清理|移除|作废|撤销).*(培训记录|培训任务|任务记录|学习记录|考试记录|记录)|(?:培训记录|培训任务|任务记录|学习记录|考试记录).*(删除|删掉|清空|清除|清理|移除|作废|撤销)/.test(text)) {
+    return normalizeIntentDecision({ intent: "delete_training_records", confidence: 0.95, skill: "delete_training_records", source: "local", reason: "命中删除培训记录关键词。" });
   }
-  if (
-    /(发布|安排|创建|新建|布置|分配|指派|生成|制定|做|建).*(培训|学习|考试|课程|题|计划|考察)/.test(text) ||
-    /给.+(培训|学习|考试|课程)/.test(text) ||
-    /(出|生成|做)\s*\d+\s*(道)?\s*(题|考题|试题)/.test(text) ||
-    /(全部|所有|全员|全体).*(培训|学习|考试|课程|考察)/.test(text) ||
-    /(培训|学习|考试|课程).*(全部|所有|全员|全体|员工|人员)/.test(text) ||
-    /(及格|通过分数|截止时间|员工专属链接)/.test(text)
-  ) {
-    return { intent: "create_training_draft", confidence: 0.78, skill: "create_training_draft", source: "local" };
+  if (isStatusIntent(text)) {
+    return normalizeIntentDecision({ intent: "show_training_status", confidence: 0.82, skill: "show_training_status", source: "local", reason: "命中培训进度或成绩查询关键词。" });
   }
-  return { intent: "general_chat", confidence: 0.6, skill: "answer_general_chat", source: "local" };
+  if (isMarketingArticleIntent(text)) {
+    return normalizeIntentDecision({ intent: "generate_marketing_article", confidence: 0.86, skill: "generate_marketing_article", source: "local", reason: "命中营销文章生成关键词。" });
+  }
+  if (isTrainingDraftIntent(text)) {
+    return normalizeIntentDecision({ intent: "create_training_draft", confidence: 0.84, skill: "create_training_draft", source: "local", reason: "命中培训发布或出题安排关键词。" });
+  }
+  return normalizeIntentDecision({ intent: "answer_general_chat", confidence: 0.6, skill: "answer_general_chat", source: "local", reason: "未命中操作意图规则。" });
 }
 
 function cleanTrainingText(value) {
@@ -435,130 +333,16 @@ function splitTrainingSentences(value, limit = 4) {
     .slice(0, limit);
 }
 
-const MATERIAL_KEYWORD_RE = /(电机|三相|异步|同步|定子|转子|绕组|铁芯|铸铝|轴承|端盖|风叶|风罩|接线盒|铭牌|功率|电压|电流|转速|频率|效率|防护|绝缘|安装|选型|客户|销售|沟通|低压|转差|磁场|水泵|应用|能效|IE\d?)/i;
-const MATERIAL_NOISE_RE = /^(?:来源文件|页数|作成|日期|目录|第\s*\d+\s*页|福建新银嘉泵业有限公司|FUJIAN NEW YINJIA PUMP CO\.?,?\s*LTD\.?|YINJIA|A TRUSTED BRAND|YOUR RELIABLE PARTNER|\d+)$/i;
+export async function classifyTrainingIntent(state, message, options = {}) {
+  const confirmed = confirmedIntentDecision(options.confirmedSkill);
+  if (confirmed) return confirmed;
 
-function cleanMaterialPoint(value, maxLength = 180) {
-  const text = cleanTrainingText(String(value || "")
-    .replace(/[●○•▪▫□■◆◇►▶]/g, " ")
-    .replace(/^#+\s*/g, "")
-    .replace(/^\s*[-*·•○●▪▫□■◆◇►▶]+\s*/g, "")
-    .replace(/^\s*(?:第\s*)?\d+\s*(?:页)?\s*$/g, "")
-    .replace(/^\s*\d+\s+(?=\d+(?:\.\d+)+|\S)/g, "")
-    .replace(/\s+/g, " "));
-  return compactText(text, maxLength);
-}
-
-function isGoodMaterialPoint(value) {
-  const text = cleanMaterialPoint(value);
-  if (!text || text.length < 12) return false;
-  if (MATERIAL_NOISE_RE.test(text)) return false;
-  if (/^[\d\s.。,:：;；、-]+$/.test(text)) return false;
-  if (/[\u0400-\u04ff\u0600-\u06ff]/.test(text)) return false;
-  if (/^[A-Z]{1,5}\d[-A-Z0-9]*\s+\d/.test(text) && (text.match(/\d/g) || []).length >= 8) return false;
-  if ((text.match(/[A-Za-z0-9]/g) || []).length > text.length * 0.55 && (text.match(/[\u3400-\u9fff]/g) || []).length < 6) return false;
-  if (/有限公司/.test(text) && text.length < 40) return false;
-  if (/专利号[:：]?|发明专利/i.test(text)) return false;
-  if (/^Q[:：]/i.test(text)) return false;
-  if (/[，,、：:]$/.test(text)) return false;
-  if (/^(?:什么是|结构组成|规格参数|运行特性)$/.test(text)) return false;
-  if (text.length < 20 && !MATERIAL_KEYWORD_RE.test(text)) return false;
-  return isUsefulTrainingText(text);
-}
-
-function splitMaterialLine(line) {
-  const cleaned = cleanMaterialPoint(line);
-  if (!cleaned) return [];
-  if (cleaned.length <= 90) return [cleaned];
-  const pieces = cleaned.match(/[^。！？；;]+[。！？；;]?/g) || [cleaned];
-  return pieces.map((piece) => cleanMaterialPoint(piece)).filter(Boolean);
-}
-
-function materialCandidateLines(value) {
-  const lines = String(value || "")
-    .replace(/\r/g, "\n")
-    .split(/\n+|[●○•▪▫□■◆◇►▶]/g)
-    .flatMap((line) => splitMaterialLine(line));
-  return uniqueStrings(lines.filter(isGoodMaterialPoint));
-}
-
-function extractLearningPoints(value, limit = 4) {
-  return materialCandidateLines(value).slice(0, limit);
-}
-
-function extractSectionHeading(value) {
-  const lines = String(value || "")
-    .replace(/\r/g, "\n")
-    .split(/\n+/)
-    .map((line) => cleanMaterialPoint(line, 80))
-    .filter(Boolean);
-  const numbered = lines.find((line) => /^\d+(?:\.\d+)+\s*\S/.test(line) && line.length <= 60);
-  const heading = numbered || lines.find((line) => MATERIAL_KEYWORD_RE.test(line) && line.length >= 4 && line.length <= 40);
-  return heading ? heading.replace(/^\d+(?:\.\d+)+\s*/, "").trim() : "";
-}
-
-function materialChunkScore(chunk, task) {
-  const points = extractLearningPoints(chunk.content, 8);
-  if (!points.length) return -100;
-  const query = `${task.title || ""} ${task.instruction || ""}`;
-  const text = cleanTrainingText(`${chunk.content || ""} ${chunk.sourceRef || ""}`);
-  let score = points.length * 8 + Math.min(text.length / 120, 8) + Number(chunk.score || chunk.keywordScore || 0);
-  if (MATERIAL_KEYWORD_RE.test(text)) score += 8;
-  const sourceName = `${chunk.sourcePath || ""} ${chunk.sourceRef || ""}`;
-  if (/视觉识别补充/.test(sourceName)) score += 80;
-  if (/三相异步电动机|异步电机定转子|电机数据/.test(sourceName)) score += 4;
-  if (/定转子参数表-多语言|定转子参数表-(?:俄语|法语|英语|阿语)/.test(sourceName) && !/(参数表|俄语|法语|英语|阿语|多语言)/.test(query)) score -= 35;
-  if (/(产品3|Q[:：]|PK|话术)/.test(text) && !/(话术|问答|客户异议)/.test(query)) score -= 18;
-  if (!/(销售|客户|新人|业务|沟通)/.test(query) && /(产品3|销售|客户|话术|PK|需求)/.test(text)) score -= 10;
-  if (/^(?:#|来源文件|页数)/.test(String(chunk.content || "").trim())) score -= 8;
-  return score;
-}
-
-function selectFallbackMaterialChunks(state, task, limit = 10) {
-  const query = `${task.title || ""} ${task.instruction || ""}`;
-  const ranked = selectContextChunks(state, {
-    knowledgeBaseId: task.knowledgeBaseId,
-    query,
-    limit: 30,
-  });
-  const fallback = state.chunks
-    .filter((chunk) => chunk.knowledgeBaseId === task.knowledgeBaseId)
-    .filter(isUsableTrainingChunk);
-  const seen = new Set();
-  const candidates = [];
-  for (const chunk of [...ranked, ...fallback]) {
-    if (!chunk || !chunk.id || seen.has(chunk.id)) continue;
-    seen.add(chunk.id);
-    candidates.push(chunk);
+  const local = localIntent(message);
+  if (local.skill !== "answer_general_chat" && local.confidence >= LOCAL_BYPASS_CONFIDENCE) return local;
+  if (!["1", "true", "on", "yes"].includes(String(process.env.TRAINING_LLM_INTENT_ROUTER || "").toLowerCase())) {
+    return local;
   }
-  return candidates
-    .map((chunk) => ({
-      ...chunk,
-      materialScore: materialChunkScore(chunk, task),
-      sentences: extractLearningPoints(chunk.content, 5),
-      sectionHeading: extractSectionHeading(chunk.content),
-      clean: cleanTrainingText(chunk.content),
-    }))
-    .filter((chunk) => chunk.materialScore > 0 && chunk.sentences.length)
-    .sort((left, right) => right.materialScore - left.materialScore)
-    .slice(0, limit);
-}
 
-function inferModuleHeading(text, index) {
-  const value = cleanTrainingText(text);
-  const rules = [
-    [/定子|转子|绕组|铁芯|铸铝/, "电机结构与核心部件"],
-    [/功率|电压|电流|转速|效率|功率因数|防护|绝缘|参数|铭牌/, "关键参数与铭牌识读"],
-    [/启动|变频|运行|转差|转矩|调速|温升/, "运行特性与使用条件"],
-    [/选型|客户|销售|拒绝|话术|沟通|应用/, "客户沟通与销售应用"],
-    [/维护|检查|故障|安全|安装|保养/, "安装维护与安全要点"],
-  ];
-  const matched = rules.find(([pattern]) => pattern.test(value));
-  if (matched) return matched[1];
-  return `学习模块 ${index + 1}`;
-}
-
-export async function classifyTrainingIntent(state, message) {
   const kbList = state.knowledgeBases
     .filter((kb) => kb.status === "ready")
     .map((kb) => ({ id: kb.id, name: kb.name, aliases: kb.aliases || [] }));
@@ -566,87 +350,44 @@ export async function classifyTrainingIntent(state, message) {
     .filter((employee) => employee.status === "active")
     .map((employee) => ({ name: employee.name, department: employee.department, role: employee.role, aliases: employee.aliases || [] }));
   const profile = AI_PROFILE.intent;
-  const prompt = `你是苏州钜洲工业有限公司培训系统的意图路由器。优先使用 DeepSeek V4 Flash（如当前 OpenClaw 会话配置可用）并使用 ${profile.thinking} 思考强度。\n\n只能输出 JSON，不要输出解释。\n\n可调用 skill：\n1. create_training_draft：用户要发布、安排、生成、制定培训计划，或要求出题、考试、考察、给员工学习。\n2. show_training_status：用户要查培训进度、完成情况、成绩、报表。\n3. answer_general_chat：其他普通聊天。\n\n输出格式：{"intent":"create_training_draft|show_training_status|answer_general_chat","skill":"create_training_draft|show_training_status|answer_general_chat","confidence":0到1,"reason":"一句话原因"}\n\n已导入知识库：${JSON.stringify(kbList)}\n员工：${JSON.stringify(employeeList)}\n用户输入：${JSON.stringify(String(message || ""))}`;
+  const prompt = `你是苏州钜洲工业有限公司培训系统的意图路由器。优先使用 DeepSeek V4 Flash（如当前 OpenClaw 会话配置可用）并使用 ${profile.thinking} 思考强度。
+
+只能输出 JSON，不要输出解释。
+
+可调用 skill：
+1. create_training_draft：用户要发布、安排、生成、制定培训计划，或要求出题、考试、考察、给员工学习。
+2. show_training_status：用户要查培训进度、完成情况、成绩、报表。
+3. delete_training_records：用户要删除、清空、移除、作废培训记录或培训任务。
+4. generate_marketing_article：用户要写软文、营销文章、推广文案、公众号文章、产品介绍、宣传文案或客户文章。
+5. answer_general_chat：其他普通聊天、解释系统、闲聊、咨询“你是谁”等不执行系统操作的问题。
+
+判定规则：
+- 只有明确要求培训、学习、考试、员工链接或出题，才选 create_training_draft。
+- “重新输入：给某人发布培训...”是新的 create_training_draft，不是确认发布。
+- “确认发布/可以/发吧”这类短确认语不是后端 skill，由前端已有草稿处理；没有上下文时选 answer_general_chat。
+- 删除、清空、作废培训记录必须选 delete_training_records，但系统会再让用户确认。
+- 普通聊天不要因为出现“查看/生成/介绍”就误判为操作。
+
+输出格式：{"intent":"create_training_draft|show_training_status|delete_training_records|generate_marketing_article|answer_general_chat","skill":"create_training_draft|show_training_status|delete_training_records|generate_marketing_article|answer_general_chat","confidence":0到1,"reason":"一句话原因","alternatives":[{"skill":"备选skill","confidence":0到1,"reason":"一句话原因"}]}
+
+已导入知识库：${JSON.stringify(kbList)}
+员工：${JSON.stringify(employeeList)}
+本地规则初判：${JSON.stringify(local)}
+用户输入：${JSON.stringify(String(message || ""))}`;
   try {
     const result = await askLlmJson({ purpose: "intent", prompt, profile });
-    const intent = String(result.data.intent || result.data.skill || "");
-    if (["create_training_draft", "show_training_status", "answer_general_chat"].includes(intent)) {
-      return {
-        intent,
-        skill: String(result.data.skill || intent),
-        confidence: Number(result.data.confidence) || 0.8,
-        reason: String(result.data.reason || ""),
-        source: "openclaw",
-        runId: result.runId,
-        thinking: result.thinking,
-        model: result.model,
-        sessionPatch: result.sessionPatch,
-      };
-    }
+    if (!normalizeIntentSkill(result.data?.intent || result.data?.skill)) return local;
+    const decision = normalizeIntentDecision(result.data, {
+      source: result.source || "llm",
+      runId: result.runId,
+      thinking: result.thinking,
+      model: result.model,
+      sessionPatch: result.sessionPatch,
+    });
+    if (decision.skill) return decision;
   } catch {
   }
-  return localIntent(message);
-}
-
-function fallbackTrainingMaterial(state, task) {
-  const chunks = selectFallbackMaterialChunks(state, task, 10);
-  const cleanedChunks = chunks.filter((chunk) => isUsefulTrainingText(chunk.clean) || chunk.sentences.length);
-  const keyPoints = uniqueStrings(cleanedChunks.flatMap((chunk) => chunk.sentences)).slice(0, 8);
-  const modules = [];
-  for (const chunk of cleanedChunks) {
-    const inferredHeading = inferModuleHeading(chunk.clean, modules.length);
-    const finalHeading = /^学习模块/.test(inferredHeading) && chunk.sectionHeading ? chunk.sectionHeading : inferredHeading;
-    const existing = modules.find((item) => item.heading === finalHeading);
-    const points = chunk.sentences.slice(0, 3);
-    if (!points.length) continue;
-    if (existing) {
-      existing.points = uniqueStrings([...existing.points, ...points]).slice(0, 4);
-    } else {
-      modules.push({ heading: finalHeading, points });
-    }
-    if (modules.length >= 6) break;
-  }
-  if (!keyPoints.length) {
-    keyPoints.push(
-      "理解培训资料中的核心概念和适用场景。",
-      "掌握与岗位相关的关键参数、结构特点或业务规则。",
-      "能够结合实际客户问题或工作任务进行复述和应用。",
-    );
-  }
-  if (!modules.length) {
-    modules.push(
-      {
-        heading: "培训目标与学习路径",
-        points: ["先了解本次培训主题和岗位要求。", "再按资料重点完成核心概念学习。"],
-      },
-      {
-        heading: "核心知识与应用复盘",
-        points: keyPoints.slice(0, 3),
-      },
-    );
-  }
-  const fallbackSummary = `本次培训围绕${task.title}展开，重点覆盖${modules.map((item) => item.heading).slice(0, 4).join("、") || "资料核心知识"}，帮助学习者理解关键概念并完成后续考试。`;
-  const guideLines = [
-    `请先按模块完成${task.title}学习，理解每个概念对应的实际应用场景。`,
-    ...keyPoints.slice(0, 5).map((point, index) => `${index + 1}. ${point}`),
-    "学习结束后，请尝试用自己的话复述核心参数、结构特点和客户沟通要点，再进入在线考试。",
-  ];
-  return {
-    title: task.title,
-    summary: compactText(fallbackSummary, 260),
-    outline: modules,
-    keyPoints,
-    studyGuide: compactMultiline(guideLines.join("\n"), 1400),
-    practiceTips: ["先看模块标题，再逐条理解要点。", "遇到参数、结构、应用场景时，结合资料来源复盘。", "考试前重点复习模块卡片和必须掌握内容。"],
-    sourceRefs: uniqueStrings(chunks.map((chunk) => chunk.sourceRef)).slice(0, 12),
-    generatedBy: "fallback",
-    fallbackVersion: 2,
-    generatedAt: new Date().toISOString(),
-  };
-}
-
-export function regenerateLocalTrainingMaterial(state, task) {
-  return fallbackTrainingMaterial(state, task);
+  return local;
 }
 
 function looseJsonField(text, field) {
@@ -670,13 +411,16 @@ function cleanAnswerText(value) {
 
 function sourceObjects(chunks) {
   return chunks.map((chunk) => ({
-    chunkId: chunk.id,
+    chunkId: chunk.matchedChunkId || chunk.chunkId || chunk.id,
+    parentId: chunk.parentId || null,
+    matchedChunkId: chunk.matchedChunkId || chunk.chunkId || null,
     documentId: chunk.documentId,
     sourceRef: chunk.sourceRef,
     score: chunk.score,
     retrieval: chunk.retrieval,
     keywordScore: chunk.keywordScore,
     semanticScore: chunk.semanticScore,
+    matchedPreview: chunk.matchedPreview || "",
     contentPreview: cleanReadableText(chunk.content, 220),
   }));
 }
@@ -687,42 +431,6 @@ function retrievalConfidence(chunks, high = "high", medium = "medium") {
     return (top.score || 0) >= 0.55 ? high : medium;
   }
   return (top.score || 0) >= 4 ? high : medium;
-}
-
-function extractField(text, label) {
-  const match = String(text || "").match(new RegExp(`${label}\\s*[:：]\\s*([^\\n\\r]+)`));
-  return match ? cleanReadableText(match[1].replace(/^[-*]\s*/, ""), 80) : "";
-}
-
-function tableFactsFromChunk(chunk) {
-  const text = String(chunk?.content || "");
-  const fields = {
-    model: extractField(text, "列\\s*2") || extractField(text, "Motor Model"),
-    shell: extractField(text, "机壳"),
-    energy: extractField(text, "能效"),
-    poles: extractField(text, "级数"),
-    frameRange: extractField(text, "机座范围"),
-    powerRange: extractField(text, "功率范围") || extractField(text, "Output\\s*Power"),
-  };
-  return Object.values(fields).filter(Boolean).length >= 3 ? fields : null;
-}
-
-function buildTableAnswer(chunks, question) {
-  if (!PARAM_QUERY_RE.test(question)) return null;
-  const chunk = chunks.find((item) => tableFactsFromChunk(item));
-  const facts = tableFactsFromChunk(chunk);
-  if (!facts) return null;
-  const subject = [facts.model, facts.poles ? `${facts.poles}级` : "", facts.shell].filter(Boolean).join(" ");
-  const points = [
-    facts.frameRange ? `机座范围：${facts.frameRange}` : "",
-    facts.powerRange ? `功率范围：${facts.powerRange}` : "",
-    facts.energy ? `能效等级：${facts.energy}` : "",
-  ].filter(Boolean);
-  return {
-    answer: `${subject || "该型号"}的${points.join("，")}。`,
-    keyPoints: points,
-    chunk,
-  };
 }
 
 function buildAnswerQuality({ chunks, answer, sourceRefs, warnings = [], generatedBy = "" }) {
@@ -759,53 +467,11 @@ function withAnswerMetadata(payload, chunks, extra = {}) {
   };
 }
 
-function fallbackKnowledgeAnswer(chunks, question) {
-  const refined = refineContextChunks(chunks, question, 5);
-  if (!refined.length) {
-    return withAnswerMetadata({
-      answer: "当前知识库没有检索到足够相关的资料，建议换一个更具体的问题，或先补充、重新清洗对应资料。",
-      keyPoints: [],
-      caveats: ["未检索到相关资料片段。"],
-      sources: [],
-      sourceRefs: [],
-      confidence: "low",
-      generatedBy: "fallback",
-      warnings: ["no_relevant_sources"],
-    }, []);
-  }
-  const tableAnswer = buildTableAnswer(refined, question);
-  if (tableAnswer) {
-    return withAnswerMetadata({
-      answer: tableAnswer.answer,
-      keyPoints: tableAnswer.keyPoints,
-      caveats: [],
-      sources: sourceObjects([tableAnswer.chunk]),
-      sourceRefs: allowedSourceRefs([tableAnswer.chunk]),
-      confidence: retrievalConfidence([tableAnswer.chunk], "medium", "low"),
-      generatedBy: "fallback",
-    }, [tableAnswer.chunk]);
-  }
-  const entries = fallbackAnswerEntries(refined, question, 4);
-  const answerChunks = chunksForAnswerEntries(entries, refined);
-  const structuredPoints = entries.map((entry) => entry.sentence);
-  const structuredAnswer = structuredPoints.length
-    ? `资料中可确认：${structuredPoints.slice(0, 4).join("；")}`
-    : "当前资料能检索到相关片段，但可提炼的信息较少，建议结合引用来源复核。";
-  return withAnswerMetadata({
-    answer: compactMultiline(structuredAnswer, 900),
-    keyPoints: structuredPoints,
-    caveats: ["这是本地结构化整理结果，未扩展资料外信息。"],
-    sources: sourceObjects(answerChunks),
-    sourceRefs: allowedSourceRefs(answerChunks),
-    confidence: retrievalConfidence(answerChunks, "medium", "low"),
-    generatedBy: "fallback",
-  }, answerChunks);
-}
-
 function answerFromOpenClawText(raw, chunks, result) {
   const answer = cleanAnswerText(stripCodeFence(raw));
+  if (!answer) throw modelRequiredError("资料答疑", "大模型没有返回可显示内容");
   return {
-    answer: answer || fallbackKnowledgeAnswer(chunks, "").answer,
+    answer,
     keyPoints: splitTrainingSentences(answer, 6),
     caveats: [],
     sources: sourceObjects(chunks),
@@ -847,10 +513,7 @@ ${renderContext(chunks)}`;
   try {
     const result = await askLlmStructured({ purpose: `answer:${knowledgeBaseId}`, prompt, profile, repairSchema: answerSchema });
     if (!result.data) {
-      return {
-        ...fallbackKnowledgeAnswer(chunks, question),
-        parseWarning: result.error,
-      };
+      throw modelRequiredError("资料答疑", result.error || "大模型未返回结构化答案");
     }
     const data = result.data || {};
     const answer = cleanAnswerText(data.answer);
@@ -873,8 +536,8 @@ ${renderContext(chunks)}`;
       repaired: result.repaired === true,
       warnings,
     }, chunks);
-  } catch {
-    return fallbackKnowledgeAnswer(chunks, question);
+  } catch (error) {
+    throw modelRequiredError("资料答疑", error);
   }
 }
 
@@ -920,7 +583,7 @@ export async function generateKnowledgeAnswer(state, { knowledgeBaseId, question
       caveats: [],
       sources: [],
       confidence: "low",
-      generatedBy: "fallback",
+      generatedBy: "none",
     };
   }
   let chunks = [];
@@ -945,8 +608,166 @@ export async function generateKnowledgeAnswer(state, { knowledgeBaseId, question
     });
   }
   chunks = refineContextChunks(chunks, text, ANSWER_CONTEXT_LIMIT);
-  if (!chunks.length) return fallbackKnowledgeAnswer(chunks, text);
+  if (!chunks.length) throw new Error("当前知识库没有检索到足够相关的资料，已停止回答。");
   return await generateStrictKnowledgeAnswer({ knowledgeBaseId, question: text, chunks });
+}
+
+function requestedWebSearch(instruction) {
+  return /(联网|网上|网络|搜索|查一下|查找|检索|最新|外部资料|行业趋势|竞品|市场数据)/.test(String(instruction || ""));
+}
+
+function marketingSubjectText(instruction) {
+  return String(instruction || "")
+    .replace(/联网|网上|网络|搜索|查一下|查找|检索|最新|外部资料|行业趋势|竞品|市场数据/g, " ")
+    .replace(/写|生成|做|来|出|整理|创作|给我|帮我|一篇|关于|基于|根据/g, " ")
+    .replace(/软文|营销文章|推广文案|公众号文章|产品介绍|宣传文案|客户文章|宣传稿|营销稿|官网文章|推文|文章|文案/g, " ")
+    .replace(/短一点|简短|详细|完整|客户营销|客户|官网|公众号|朋友圈|阿里国际站|B2B|b2b|平台/g, " ")
+    .replace(/[，,。.!！?？:：；;\s]+/g, " ")
+    .trim();
+}
+
+function matchMarketingKnowledgeBase(state, instruction) {
+  const text = String(instruction || "").toLowerCase();
+  const subject = marketingSubjectText(instruction);
+  const ready = (state.knowledgeBases || []).filter((kb) => kb.status === "ready");
+  const scored = ready.map((kb) => {
+    const names = uniqueStrings([
+      kb.name,
+      String(kb.name || "").replace(/资料库|培训资料库|培训/g, ""),
+      ...(kb.aliases || []),
+    ]).filter((item) => item.length >= 2);
+    let score = 0;
+    let explicitNameMatch = false;
+    for (const name of names) {
+      const normalized = name.toLowerCase();
+      if (normalized && text.includes(normalized)) {
+        explicitNameMatch = true;
+        score += normalized.length >= 4 ? 6 : 3;
+      }
+    }
+    let chunkScore = 0;
+    if (subject.length >= 2) {
+      const matches = searchChunks(state, { knowledgeBaseId: kb.id, query: subject, limit: 3 });
+      chunkScore = matches.reduce((sum, chunk) => sum + Number(chunk.score || 0), 0);
+      score += chunkScore;
+    }
+    return { kb, score, explicitNameMatch, chunkScore };
+  }).sort((left, right) => right.score - left.score);
+  const best = scored[0];
+  if (!best) return null;
+  if (best.explicitNameMatch) return best.kb;
+  return best.chunkScore >= 4 ? best.kb : null;
+}
+
+function articleChannel(instruction) {
+  const text = String(instruction || "");
+  if (/朋友圈|私域|微信/.test(text)) return "朋友圈/私域";
+  if (/公众号|推文/.test(text)) return "公众号";
+  if (/阿里|国际站|B2B|b2b|平台/.test(text)) return "B2B平台";
+  if (/官网|网站/.test(text)) return "官网";
+  return "官网/公众号/B2B平台";
+}
+
+function articleLengthInstruction(instruction) {
+  const text = String(instruction || "");
+  if (/短一点|简短|朋友圈|300字|五百字|500字/.test(text)) return "300-600字";
+  if (/长文|详细|深度|完整|1500|一千五|2000|两千/.test(text)) return "1200-1600字";
+  return "800-1200字";
+}
+
+function insufficientMarketingArticle(message, warnings = []) {
+  return {
+    title: "资料不足，无法生成软文",
+    summary: message,
+    article: message,
+    sellingPoints: [],
+    sourceRefs: [],
+    warnings,
+    generatedBy: "none",
+    retrievalMode: "none",
+    insufficient: true,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+export async function generateMarketingArticle(state, { instruction }) {
+  const text = String(instruction || "").trim();
+  const webSearchDisabled = requestedWebSearch(text);
+  const warnings = webSearchDisabled ? ["当前版本未开启联网搜索，已仅基于本地知识库生成。"] : [];
+  const knowledgeBase = matchMarketingKnowledgeBase(state, text);
+  if (!knowledgeBase) {
+    const prefix = webSearchDisabled ? "当前版本未开启联网搜索，且" : "";
+    return insufficientMarketingArticle(`${prefix}本地知识库没有匹配到足够相关的产品资料，无法生成软文。`, warnings);
+  }
+
+  const chunks = await selectContextChunksHybrid(state, {
+    knowledgeBaseId: knowledgeBase.id,
+    query: text,
+    limit: 16,
+  });
+  if (!chunks.length) {
+    return insufficientMarketingArticle("本地知识库没有检索到足够相关的资料，无法生成软文。", warnings);
+  }
+
+  const sourceRefs = allowedSourceRefs(chunks);
+  const profile = AI_PROFILE.marketingArticle;
+  const articleSchema = {
+    title: "营销文章标题",
+    summary: "80-150字摘要",
+    article: "完整营销文章正文，按自然段换行",
+    sellingPoints: ["3-6个真实卖点"],
+    sourceRefs: ["必须来自给定来源列表"],
+    warnings: ["资料不足或表达限制"],
+  };
+  const prompt = `你是工业品营销内容策划。请基于给定资料，为客户营销场景生成一篇真实可信的中文软文。
+
+硬性要求：
+- 只允许依据给定资料，不要编造资料外事实，不要假装联网搜索。
+- ${webSearchDisabled ? "用户提到了联网搜索，但当前系统没有联网搜索能力；文章只能写本地资料已支持的内容。" : "不要引用互联网、行业报告或未给出的市场数据。"}
+- 文章面向客户营销，适合${articleChannel(text)}，正文长度${articleLengthInstruction(text)}。
+- 语言要有销售转化感，但避免夸大、绝对化承诺和虚假排名。
+- sourceRefs 必须从这个列表中选择：${JSON.stringify(sourceRefs)}
+- 只能输出 JSON，不要 Markdown 包裹。
+
+输出格式：${JSON.stringify(articleSchema)}
+
+用户需求：${JSON.stringify(text)}
+知识库：${JSON.stringify({ id: knowledgeBase.id, name: knowledgeBase.name, description: knowledgeBase.description || "", aliases: knowledgeBase.aliases || [] })}
+资料上下文：
+${renderContext(chunks)}`;
+
+  try {
+    const result = await askLlmStructured({ purpose: `marketing:${knowledgeBase.id}:${Date.now()}`, prompt, profile, repairSchema: articleSchema });
+    if (!result.data) throw modelRequiredError("营销软文生成", result.error || "大模型未返回结构化软文");
+    const data = result.data || {};
+    const article = cleanAnswerText(data.article);
+    if (!article) throw modelRequiredError("营销软文生成", "大模型没有返回可显示正文");
+    const normalizedSourceRefs = normalizeSourceRefs(data.sourceRefs, chunks);
+    const modelWarnings = Array.isArray(data.warnings) ? data.warnings : [data.warnings].filter(Boolean);
+    return {
+      title: compactText(data.title || `${knowledgeBase.name}营销软文`, 120),
+      summary: compactMultiline(data.summary, 360),
+      article: compactMultiline(article, 5200),
+      sellingPoints: uniqueStrings(data.sellingPoints).map((item) => cleanTrainingText(item)).filter(Boolean).slice(0, 8),
+      sourceRefs: normalizedSourceRefs,
+      warnings: uniqueStrings([...warnings, ...modelWarnings]).slice(0, 8),
+      sources: sourceObjects(chunks).filter((source) => normalizedSourceRefs.includes(source.sourceRef)),
+      knowledgeBase: {
+        id: knowledgeBase.id,
+        name: knowledgeBase.name,
+      },
+      generatedBy: result.source || "openclaw",
+      thinking: result.thinking || profile.thinking,
+      model: result.model || profile.model,
+      sessionPatch: result.sessionPatch,
+      runId: result.runId,
+      repaired: result.repaired === true,
+      retrievalMode: retrievalModeFromChunks(chunks),
+      generatedAt: new Date().toISOString(),
+    };
+  } catch (error) {
+    throw modelRequiredError("营销软文生成", error);
+  }
 }
 
 export async function generateTrainingMaterial(state, task) {
@@ -991,41 +812,9 @@ export async function generateTrainingMaterial(state, task) {
       repaired: result.repaired === true,
       generatedAt: new Date().toISOString(),
     };
-  } catch {
-    return fallbackTrainingMaterial(state, task);
+  } catch (error) {
+    throw modelRequiredError("培训讲义生成", error);
   }
-}
-
-function normalizeQuestion(raw, index, task, sourceRefs) {
-  const requestedType = task.quizType === "true_false" ? "true_false" : "single_choice";
-  const type = raw?.type === "true_false" || requestedType === "true_false" ? "true_false" : "single_choice";
-  const prompt = cleanQuestionText(raw?.prompt || `请根据培训资料回答第 ${index + 1} 题。`, 180);
-  const sourceRef = compactText(raw?.sourceRef || sourceRefs[index % Math.max(sourceRefs.length, 1)] || "培训资料", 180);
-  if (type === "true_false") {
-    const answer = String(raw?.correctAnswer || "正确").includes("错") ? "错误" : "正确";
-    return {
-      type,
-      prompt,
-      options: ["正确", "错误"],
-      correctAnswer: answer,
-      explanation: compactText(raw?.explanation || `参考资料：${sourceRef}`, 360),
-      sourceRef,
-    };
-  }
-  const correctAnswer = cleanQuestionText(raw?.correctAnswer || raw?.answer || "以上说法符合培训资料", 80);
-  const options = uniqueStrings([correctAnswer, ...(Array.isArray(raw?.options) ? raw.options : []).map((option) => cleanQuestionText(option, 80))]).slice(0, 4);
-  for (const option of ["只关注价格，不需要理解技术资料。", "客户问题可以不结合资料回答。", "培训内容与实际选型和销售沟通无关。", "无需确认客户应用场景。"]) {
-    if (options.length >= 4) break;
-    if (option !== correctAnswer) options.push(option);
-  }
-  return {
-    type,
-    prompt,
-    options,
-    correctAnswer,
-    explanation: compactText(raw?.explanation || `参考资料：${sourceRef}`, 360),
-    sourceRef,
-  };
 }
 
 function conciseOption(value, maxLength = 58) {
@@ -1093,7 +882,7 @@ async function generateQuizQuestionsStrict(state, task) {
     query: `${task.title} ${task.instruction}`,
     limit: Math.max(10, Math.min(count + 6, 24)),
   });
-  if (!chunks.length) return { questions: [], source: "fallback" };
+  if (!chunks.length) throw new Error("knowledge base has no usable chunks for quiz generation");
   const sourceRefs = allowedSourceRefs(chunks);
   const profile = AI_PROFILE.quiz;
   const quizSchema = {
@@ -1127,7 +916,7 @@ async function generateQuizQuestionsStrict(state, task) {
 ${renderContext(chunks)}`;
   try {
     const result = await askLlmStructured({ purpose: `quiz:${task.id}`, prompt, profile, repairSchema: quizSchema });
-    if (!result.data) return { questions: [], source: "fallback", error: result.error };
+    if (!result.data) throw modelRequiredError("考试出题", result.error || "大模型未返回结构化题目");
     const rawQuestions = Array.isArray(result.data.questions) ? result.data.questions : [];
     const normalized = rawQuestions
       .map((question, index) => normalizeQuestionStrict(question, index, task, chunks))
@@ -1140,8 +929,8 @@ ${renderContext(chunks)}`;
       sessionPatch: result.sessionPatch,
       runId: result.runId,
     };
-  } catch {
-    return { questions: [], source: "fallback" };
+  } catch (error) {
+    throw modelRequiredError("考试出题", error);
   }
 }
 

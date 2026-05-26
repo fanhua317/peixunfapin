@@ -6,6 +6,7 @@ const root = path.resolve(import.meta.dirname, "..");
 const tempDataDir = path.join(root, ".tmp-smoke-data");
 const port = 18787;
 const baseUrl = `http://127.0.0.1:${port}`;
+const directLlmConfigured = Boolean(process.env.TRAINING_LLM_API_KEY || process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY);
 
 async function request(pathname, options = {}) {
   const response = await fetch(`${baseUrl}${pathname}`, {
@@ -56,7 +57,8 @@ const child = spawn(process.execPath, ["src/server.mjs"], {
     PUBLIC_BASE_URL_MODE: "",
     TRAINING_DATA_DIR: tempDataDir,
     TRAINING_HEALTH_TIMEOUT_MS: process.env.TRAINING_HEALTH_TIMEOUT_MS || "300",
-    OPENCLAW_CHAT_TIMEOUT_MS: process.env.OPENCLAW_CHAT_TIMEOUT_MS || "3000",
+    OPENCLAW_CHAT_TIMEOUT_MS: process.env.OPENCLAW_CHAT_TIMEOUT_MS || (directLlmConfigured ? "120000" : "3000"),
+    TRAINING_LLM_TIMEOUT_MS: process.env.TRAINING_LLM_TIMEOUT_MS || "120000",
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -72,13 +74,20 @@ try {
     throw new Error(`unexpected health payload: ${JSON.stringify(health)}`);
   }
 
-  const chatResponse = await request("/api/chat", {
-    method: "POST",
-    body: JSON.stringify({ message: "今天天气怎么样？" }),
-  });
-
-  if (!chatResponse.answer) {
-    throw new Error("expected general chat answer");
+  let chatResponse;
+  try {
+    chatResponse = await request("/api/chat", {
+      method: "POST",
+      body: JSON.stringify({ message: "今天天气怎么样？" }),
+    });
+    if (!chatResponse.answer || chatResponse.source !== "llm-api") {
+      throw new Error(`expected general chat to use llm-api, got ${JSON.stringify(chatResponse)}`);
+    }
+  } catch (error) {
+    if (!/普通聊天需要配置大模型 API Key|TRAINING_LLM_API_KEY|DEEPSEEK_API_KEY|OPENAI_API_KEY/.test(error.message || "")) {
+      throw error;
+    }
+    chatResponse = { source: "llm-api-unconfigured" };
   }
 
   const draftResponse = await request("/api/agent/draft", {
@@ -92,7 +101,72 @@ try {
     throw new Error(`expected 2 employees, got ${draftResponse.draft.employees.length}`);
   }
 
-  const publishResponse = await request("/api/tasks/publish", {
+  const customDraftResponse = await request("/api/agent/draft", {
+    method: "POST",
+    body: JSON.stringify({
+      instruction: "给顾帅出一个关于电机的培训，出 1 道题。",
+    }),
+  });
+  const customEmployee = customDraftResponse.draft.employees[0];
+  if (customDraftResponse.draft.employees.length !== 1 || customEmployee.name !== "顾帅" || customEmployee.temporary !== true) {
+    throw new Error(`expected custom employee 顾帅, got ${JSON.stringify(customDraftResponse.draft.employees)}`);
+  }
+
+  const noMatchArticleResponse = await request("/api/agent/dispatch", {
+    method: "POST",
+    body: JSON.stringify({ message: "写一篇关于火锅的软文" }),
+  });
+  if (noMatchArticleResponse.action !== "marketing_article" || !noMatchArticleResponse.article?.insufficient) {
+    throw new Error(`expected unmatched marketing article to be blocked, got ${JSON.stringify(noMatchArticleResponse)}`);
+  }
+
+  if (!health.llmConfigured) {
+    const publishError = await requestExpectError("/api/tasks/publish", {
+      method: "POST",
+      body: JSON.stringify({ draft: draftResponse.draft }),
+    });
+    if (!/培训讲义生成需要可用的大模型 API|TRAINING_LLM_API_KEY|DEEPSEEK_API_KEY|OPENAI_API_KEY/.test(publishError.error || "")) {
+      throw new Error(`expected publish to require LLM API, got ${JSON.stringify(publishError)}`);
+    }
+    const emptyDeleteConfirm = await request("/api/agent/dispatch", {
+      method: "POST",
+      body: JSON.stringify({ message: "把之前的培训记录删掉" }),
+    });
+    if (emptyDeleteConfirm.action !== "intent_confirm" || emptyDeleteConfirm.decision?.skill !== "delete_training_records") {
+      throw new Error(`expected delete confirmation, got ${JSON.stringify(emptyDeleteConfirm)}`);
+    }
+    const emptyDeleteResponse = await request("/api/agent/dispatch", {
+      method: "POST",
+      body: JSON.stringify({ message: "把之前的培训记录删掉", confirmedSkill: "delete_training_records" }),
+    });
+    if (emptyDeleteResponse.action !== "delete_records" || emptyDeleteResponse.deleted.tasks !== 0) {
+      throw new Error(`expected empty delete result, got ${JSON.stringify(emptyDeleteResponse)}`);
+    }
+    console.log(JSON.stringify({
+      ok: true,
+      mode: "llm-unconfigured",
+      generalChatSource: chatResponse.source,
+      publishBlocked: true,
+      deleteSkill: emptyDeleteResponse.action,
+      marketingArticleBlocked: noMatchArticleResponse.article.insufficient,
+      retrievalMode: health.retrievalMode,
+    }, null, 2));
+  } else {
+    const marketingArticleResponse = await request("/api/agent/dispatch", {
+      method: "POST",
+      body: JSON.stringify({ message: "联网查一下再写一篇关于 A 产品的软文，短一点" }),
+    });
+    if (
+      marketingArticleResponse.action !== "marketing_article" ||
+      marketingArticleResponse.article?.insufficient ||
+      !marketingArticleResponse.article?.article ||
+      !marketingArticleResponse.article?.sourceRefs?.length ||
+      !marketingArticleResponse.article?.warnings?.some((warning) => /联网搜索/.test(warning))
+    ) {
+      throw new Error(`expected local marketing article with web-search warning, got ${JSON.stringify(marketingArticleResponse)}`);
+    }
+
+    const publishResponse = await request("/api/tasks/publish", {
     method: "POST",
     body: JSON.stringify({ draft: draftResponse.draft }),
   });
@@ -159,18 +233,40 @@ try {
     throw new Error("expected expired submit error");
   }
 
+  const deleteConfirm = await request("/api/agent/dispatch", {
+    method: "POST",
+    body: JSON.stringify({ message: "把之前的培训记录删掉" }),
+  });
+  if (deleteConfirm.action !== "intent_confirm" || deleteConfirm.confirmation?.risk !== "high") {
+    throw new Error(`expected delete confirmation, got ${JSON.stringify(deleteConfirm)}`);
+  }
+  const deleteResponse = await request("/api/agent/dispatch", {
+    method: "POST",
+    body: JSON.stringify({ message: "把之前的培训记录删掉", confirmedSkill: "delete_training_records" }),
+  });
+  if (deleteResponse.action !== "delete_records" || deleteResponse.deleted.tasks < 2 || deleteResponse.remainingTasks !== 0) {
+    throw new Error(`expected training records to be deleted, got ${JSON.stringify(deleteResponse)}`);
+  }
+  const postDeleteTasks = await request("/api/tasks");
+  if (postDeleteTasks.tasks.length !== 0) {
+    throw new Error(`expected no tasks after delete, got ${JSON.stringify(postDeleteTasks.tasks)}`);
+  }
+
   console.log(JSON.stringify({
     ok: true,
     taskId: publishResponse.task.id,
     inviteEmployee: inviteResponse.invite.employeeName,
     generalChatSource: chatResponse.source,
+    marketingArticleTitle: marketingArticleResponse.article.title,
     answerConfidence: answerResponse.confidence,
     questionCount: quizResponse.quiz.questions.length,
     score: submitResponse.attempt.score,
     retrievalMode: health.retrievalMode,
     qualityScore: qualityResponse.quality.qualityScore,
     reportCompleted: reportResponse.report.totals.completed,
+    deletedTasks: deleteResponse.deleted.tasks,
   }, null, 2));
+  }
 } finally {
   child.kill("SIGTERM");
   await new Promise((resolve) => child.once("exit", resolve));

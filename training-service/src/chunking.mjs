@@ -3,6 +3,9 @@ import { createHash } from "node:crypto";
 const DEFAULT_MAX_CHARS = 900;
 const DEFAULT_MIN_CHARS = 120;
 const DEFAULT_OVERLAP_CHARS = 80;
+const COMPANY_BOILERPLATE_RE = /(?:福建新银嘉泵业有限公司|FUJIAN\s+NEW\s+YINJIA\s+PUMP\s+CO\.?,?\s*LTD\.?|A\s+TRUSTED\s+BRAND|YOUR\s+RELIABLE\s+PARTNER|YINJIA)/gi;
+const OCR_PLACEHOLDER_RE = /(未能从.*(?:PDF|文件).*抽取|OCR|扫描件|复制文本|未抽取到|无法抽取)/i;
+const TRAINING_SIGNAL_RE = /(电机|三相|异步|定子|转子|绕组|铁芯|铸铝|导条|端环|铁损|断条|功率|电压|电流|转速|频率|效率|能效|机座|级数|型号|YE\d|IE\d|客户|销售|话术|售后|工艺|质量|品质|检测|参数|范围|标准|负载|附加损耗|专利|ZL\d+)/i;
 
 function normalizeText(value) {
   return String(value || "")
@@ -14,8 +17,132 @@ function normalizeText(value) {
     .trim();
 }
 
+function cleanChunkLine(value) {
+  const raw = String(value || "").trim();
+  const hadCompany = COMPANY_BOILERPLATE_RE.test(raw);
+  COMPANY_BOILERPLATE_RE.lastIndex = 0;
+  let line = raw
+    .replace(COMPANY_BOILERPLATE_RE, " ")
+    .replace(/[●○•▪▫□■◆◇►▶]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (hadCompany) {
+    line = line.replace(/^\d{1,3}\s+(?=\d+(?:\.\d+)+\s*[\u3400-\u9fffA-Za-z])/, "");
+    line = line.replace(/^\d{1,3}\s+(?=[\u3400-\u9fffA-Za-z]{3,})/, "");
+  }
+  if (/^(?:\d{1,3}|目录|contents|封面|YINJIA)$/i.test(line)) return "";
+  return line;
+}
+
+function cleanChunkContent(value) {
+  return normalizeText(value)
+    .split("\n")
+    .map(cleanChunkLine)
+    .filter(Boolean)
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function informativeText(value) {
+  return cleanChunkContent(value)
+    .replace(/^#{1,6}\s*/gm, "")
+    .replace(/[#*_`>]/g, "")
+    .replace(/来源文件[:：]\s*[^\s。；;\n]+/g, "")
+    .replace(/页数[:：]\s*\d+/g, "")
+    .replace(/页码[:：]\s*\d+/g, "")
+    .replace(/第\s*\d+\s*页/g, "")
+    .replace(/^[\s\d]+(?=\d+(?:\.\d+)+\s*[\u3400-\u9fffA-Za-z])/g, "")
+    .replace(/^[\s\d]+(?=[\u3400-\u9fffA-Za-z]{3,})/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isOcrPlaceholderText(value) {
+  return OCR_PLACEHOLDER_RE.test(String(value || ""));
+}
+
+function isLowValueStandalone(value) {
+  if (isOcrPlaceholderText(value)) return false;
+  const text = informativeText(value);
+  if (!text) return true;
+  if (/^(?:目录|contents|封面|结束|谢谢|感谢|期待下次再见)[！!。.\s]*$/i.test(text)) return true;
+  if (!TRAINING_SIGNAL_RE.test(text) && text.length < 36 && !/[。！？；;,.，：:]/.test(text)) return true;
+  return false;
+}
+
 function sha256Short(value) {
   return createHash("sha256").update(String(value || ""), "utf8").digest("hex").slice(0, 16);
+}
+
+function combineSourceRefs(left, right) {
+  const refs = [...new Set([
+    ...(left?.sourceRefs || [left?.sourceRef]),
+    ...(right?.sourceRefs || [right?.sourceRef]),
+  ].map((ref) => String(ref || "").trim()).filter(Boolean))];
+  if (!refs.length) return "";
+  if (refs.length === 1) return compactSourceRef(refs[0]);
+  const first = compactSourceRef(refs[0]);
+  const last = compactSourceRef(refs[refs.length - 1]);
+  return refs.length === 2 ? `${first} → ${last}` : `${first} → ${last}（共 ${refs.length} 段）`;
+}
+
+function compactSourceRef(ref) {
+  const value = String(ref || "").trim();
+  if (value.length <= 90) return value;
+  const [file, trail = ""] = value.split(" :: ");
+  const page = trail.match(/第\s*\d+\s*页/)?.[0] || "";
+  const heading = trail.split("/").map((part) => part.trim()).filter(Boolean).at(-1) || "";
+  return `${file}${page ? ` / ${page}` : heading ? ` / ${heading}` : ""}`.slice(0, 90);
+}
+
+function combinePieces(left, right) {
+  const sourceRefs = [...new Set([...(left.sourceRefs || [left.sourceRef]), ...(right.sourceRefs || [right.sourceRef])].filter(Boolean))];
+  return {
+    ...right,
+    content: `${left.content}\n\n${right.content}`.trim(),
+    sourceRef: combineSourceRefs(left, right),
+    sourceRefs,
+    sectionPath: right.sectionPath?.length ? right.sectionPath : left.sectionPath,
+    heading: right.heading || left.heading || "",
+    page: right.page || left.page || null,
+  };
+}
+
+function mergeSmallPieces(pieces, { minChars, maxChars }) {
+  const merged = [];
+  let pending = null;
+  const shouldMerge = (piece) => {
+    if (!piece || isOcrPlaceholderText(piece.content)) return false;
+    const text = informativeText(piece.content);
+    return isLowValueStandalone(piece.content) || (text.length > 0 && text.length < minChars);
+  };
+  for (const piece of pieces) {
+    if (shouldMerge(piece)) {
+      pending = pending ? combinePieces(pending, piece) : piece;
+      continue;
+    }
+    if (pending) {
+      const combined = combinePieces(pending, piece);
+      if (combined.content.length <= maxChars + minChars) {
+        merged.push(combined);
+        pending = null;
+        continue;
+      }
+      if (!isLowValueStandalone(pending.content)) merged.push(pending);
+      pending = null;
+    }
+    merged.push(piece);
+  }
+  if (pending) {
+    const last = merged[merged.length - 1];
+    if (last && `${last.content}\n\n${pending.content}`.length <= maxChars + minChars) {
+      merged[merged.length - 1] = combinePieces(last, pending);
+    } else if (!isLowValueStandalone(pending.content)) {
+      merged.push(pending);
+    }
+  }
+  return merged;
 }
 
 function clampLast(text, maxChars) {
@@ -228,48 +355,47 @@ export function chunkMarkdown(text, context = {}, options = {}) {
   const sourcePath = context.sourcePath || context.relativePath || context.title || "";
   const baseRef = sourcePath || context.title || "资料";
   const sections = parseSections(text);
-  const chunks = [];
-  let chunkIndex = 0;
-  const pushChunk = (section, content) => {
-    const trimmed = String(content || "").trim();
+  const pieces = [];
+  const makePiece = (section, content) => {
+    const trimmed = cleanChunkContent(content);
     if (!trimmed) return;
     const sectionPath = section.sectionPath || [];
     const headingPath = sectionPath.length ? sectionPath.join(" / ") : "";
-    const sourceRef = headingPath ? `${baseRef} :: ${headingPath}` : `${baseRef} #${chunkIndex + 1}`;
-    const contentHash = sha256Short(`${sourcePath}|${headingPath}|${trimmed}`);
-    chunks.push({
+    const sourceRef = headingPath ? `${baseRef} :: ${headingPath}` : `${baseRef} #${pieces.length + 1}`;
+    pieces.push({
       content: trimmed,
       sourceRef,
       sectionPath,
       heading: section.title || "",
       page: section.page || null,
       sourcePath,
-      contentHash,
-      tokenLength: trimmed.length,
-      keywords: deriveKeywords(trimmed),
-      order: chunkIndex,
     });
-    chunkIndex += 1;
   };
   for (const section of sections) {
     if (!section.content) {
       continue;
     }
     if (section.content.length <= maxChars) {
-      pushChunk(section, section.content);
+      makePiece(section, section.content);
       continue;
     }
     const blocks = sectionToBlocks(section.content);
     const packed = packBlocks(blocks, { maxChars, minChars, overlapChars });
     if (!packed.length) {
-      pushChunk(section, section.content.slice(0, maxChars));
+      makePiece(section, section.content.slice(0, maxChars));
       continue;
     }
     for (const piece of packed) {
-      pushChunk(section, piece);
+      makePiece(section, piece);
     }
   }
-  return chunks;
+  return mergeSmallPieces(pieces, { minChars, maxChars }).map((piece, index) => ({
+    ...piece,
+    contentHash: sha256Short(`${sourcePath}|${piece.sourceRef}|${piece.content}`),
+    tokenLength: piece.content.length,
+    keywords: deriveKeywords(piece.content),
+    order: index,
+  }));
 }
 
 export function chunkPlainText(text, context = {}, options = {}) {
@@ -280,17 +406,22 @@ export function chunkPlainText(text, context = {}, options = {}) {
   const baseRef = sourcePath || context.title || "资料";
   const paragraphs = splitParagraphs(text);
   const blocks = paragraphs.length ? paragraphs : [normalizeText(text)];
-  const packed = packBlocks(blocks, { maxChars, minChars, overlapChars });
-  return packed.map((content, index) => ({
-    content,
+  const packed = packBlocks(blocks, { maxChars, minChars, overlapChars })
+    .map((content, index) => ({
+      content: cleanChunkContent(content),
+      sourceRef: `${baseRef} #${index + 1}`,
+      sectionPath: [],
+      heading: "",
+      page: null,
+      sourcePath,
+    }))
+    .filter((piece) => piece.content);
+  return mergeSmallPieces(packed, { minChars, maxChars }).map((piece, index) => ({
+    ...piece,
     sourceRef: `${baseRef} #${index + 1}`,
-    sectionPath: [],
-    heading: "",
-    page: null,
-    sourcePath,
-    contentHash: sha256Short(`${sourcePath}||${content}`),
-    tokenLength: content.length,
-    keywords: deriveKeywords(content),
+    contentHash: sha256Short(`${sourcePath}||${piece.content}`),
+    tokenLength: piece.content.length,
+    keywords: deriveKeywords(piece.content),
     order: index,
   }));
 }

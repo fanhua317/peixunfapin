@@ -67,6 +67,7 @@ const defaultState = () => ({
       metadata: { section: "考试建议" },
     },
   ],
+  chunkParents: [],
   employees: [
     {
       id: "emp-wang-xiaoming",
@@ -117,7 +118,7 @@ export async function loadState() {
   await ensureDataDir();
   try {
     const raw = await readFile(statePath, "utf8");
-    return JSON.parse(raw);
+    return normalizeState(JSON.parse(raw));
   } catch (error) {
     if (error && error.code !== "ENOENT") {
       throw error;
@@ -126,6 +127,22 @@ export async function loadState() {
     await saveState(state);
     return state;
   }
+}
+
+function normalizeState(state) {
+  const value = state && typeof state === "object" ? state : defaultState();
+  value.knowledgeBases = Array.isArray(value.knowledgeBases) ? value.knowledgeBases : [];
+  value.documents = Array.isArray(value.documents) ? value.documents : [];
+  value.chunks = Array.isArray(value.chunks) ? value.chunks : [];
+  value.chunkParents = Array.isArray(value.chunkParents) ? value.chunkParents : [];
+  value.employees = Array.isArray(value.employees) ? value.employees : [];
+  value.tasks = Array.isArray(value.tasks) ? value.tasks : [];
+  value.invites = Array.isArray(value.invites) ? value.invites : [];
+  value.quizzes = Array.isArray(value.quizzes) ? value.quizzes : [];
+  value.attempts = Array.isArray(value.attempts) ? value.attempts : [];
+  value.contentDrafts = Array.isArray(value.contentDrafts) ? value.contentDrafts : [];
+  value.events = Array.isArray(value.events) ? value.events : [];
+  return value;
 }
 
 export async function saveState(state) {

@@ -1,12 +1,27 @@
 import { loadState } from "../src/store.mjs";
 import { getRuntimeHealth } from "../src/health.mjs";
 import { searchChunks, searchChunksHybrid } from "../src/rag.mjs";
-import { generateKnowledgeAnswer } from "../src/training-ai.mjs";
+import { generateKnowledgeAnswer } from "../src/ai/index.mjs";
 
 const args = new Set(process.argv.slice(2));
 const includeAnswers = !args.has("--no-answer") && !args.has("--retrieval-only");
 
 const tests = [
+  {
+    id: "ye3-ie3-four-business-row",
+    query: "YE3 IE3 4级 功率范围",
+    expected: ["YE3", "IE3", "级数: 4", "功率范围"],
+  },
+  {
+    id: "motor-structure-knowledge-point",
+    query: "三相异步电动机结构",
+    expected: ["三相异步电动机", "定子", "转子"],
+  },
+  {
+    id: "stator-rotor-sales-training",
+    query: "定子转子销售培训",
+    expected: ["定子", "转子", "销售"],
+  },
   {
     id: "casting-loss",
     query: "电机附加损耗和低压铸铝、离心铸铝、压力铸铝有什么关系？",
@@ -76,6 +91,8 @@ function expectedHits(hit, expected) {
 function compactHit(hit, expected) {
   return {
     id: hit?.id,
+    parentId: hit?.parentId,
+    matchedChunkId: hit?.matchedChunkId,
     retrieval: hit?.retrieval,
     score: Number(hit?.score || 0).toFixed(3),
     semanticScore: Number(hit?.semanticScore || 0).toFixed(3),

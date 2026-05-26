@@ -1,4 +1,4 @@
-import { askOpenClaw } from "./general-chat.mjs";
+import { askOpenClaw } from "./gateway/index.mjs";
 import { askOpenAiCompatibleLLM, getDirectLlmRuntimeConfig } from "./direct-llm.mjs";
 
 const DEFAULT_PROVIDER = process.env.TRAINING_LLM_PROVIDER || "auto";

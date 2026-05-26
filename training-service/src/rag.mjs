@@ -8,6 +8,7 @@ const CJK_RE = /[\u3400-\u9fff]/g;
 const HYBRID_ENABLED = !["0", "false", "off", "no"].includes(String(process.env.TRAINING_HYBRID_RETRIEVAL || "").toLowerCase());
 const SEMANTIC_WEIGHT = Number(process.env.TRAINING_SEMANTIC_WEIGHT || 0.7);
 const KEYWORD_WEIGHT = Number(process.env.TRAINING_KEYWORD_WEIGHT || 0.3);
+const PARAMETER_QUERY_RE = /(参数|范围|功率|机座|级数|能效|型号|尺寸|电压|电流|效率|YE\d|IE\d|Y2|kw|kW|pole|poles)/i;
 const HYBRID_COLLECTION = process.env.QDRANT_COLLECTION || QDRANT_DEFAULT_COLLECTION;
 const SEMANTIC_RETRY_MS = Number(process.env.TRAINING_SEMANTIC_RETRY_MS || 60_000);
 const SEMANTIC_BACKEND = String(process.env.TRAINING_VECTOR_BACKEND || process.env.TRAINING_SEMANTIC_BACKEND || "auto").toLowerCase();
@@ -66,8 +67,15 @@ function tokenize(value) {
   return [...latin, ...cjk, ...cjkBigrams].filter(Boolean);
 }
 
+function chunkSearchText(chunk) {
+  const businessKeys = chunk?.businessKeys && typeof chunk.businessKeys === "object"
+    ? Object.values(chunk.businessKeys).flat().join(" ")
+    : "";
+  return `${chunk?.searchText || ""} ${chunk?.content || ""} ${chunk?.sourceRef || ""} ${chunk?.heading || ""} ${businessKeys}`;
+}
+
 function scoreChunk(queryTokens, chunk) {
-  const haystack = normalizeText(`${chunk.content} ${chunk.sourceRef || ""}`);
+  const haystack = normalizeText(chunkSearchText(chunk));
   let score = 0;
   for (const token of queryTokens) {
     if (!token) continue;
@@ -78,7 +86,7 @@ function scoreChunk(queryTokens, chunk) {
   return score;
 }
 
-export function searchChunks(state, { knowledgeBaseId, query, limit = 5 }) {
+function searchChildChunks(state, { knowledgeBaseId, query, limit = 5 }) {
   const queryTokens = tokenize(query);
   const chunks = state.chunks
     .filter((chunk) => !knowledgeBaseId || chunk.knowledgeBaseId === knowledgeBaseId)
@@ -96,6 +104,103 @@ export function searchChunks(state, { knowledgeBaseId, query, limit = 5 }) {
   return chunks;
 }
 
+function parentById(state) {
+  return new Map((state.chunkParents || []).filter(Boolean).map((parent) => [String(parent.id), parent]));
+}
+
+function matchedPreview(chunk, maxLength = 220) {
+  const text = String(chunk?.content || chunk?.searchText || "").replace(/\s+/g, " ").trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function mergeRetrieval(left, right) {
+  const values = new Set(String(left || "").split("+").filter(Boolean));
+  for (const item of String(right || "").split("+").filter(Boolean)) values.add(item);
+  return [...values].join("+") || left || right || "keyword";
+}
+
+function parentContextForHit(parentMap, hit) {
+  const parent = hit?.parentId ? parentMap.get(String(hit.parentId)) : null;
+  if (!parent) {
+    return {
+      ...hit,
+      parentId: hit?.parentId || null,
+      matchedChunkId: hit?.id || hit?.chunkId || null,
+      matchedPreview: matchedPreview(hit),
+      matchedChunks: [{
+        chunkId: hit?.id || hit?.chunkId || null,
+        sourceRef: hit?.sourceRef || "",
+        childType: hit?.childType || "",
+        preview: matchedPreview(hit),
+        score: hit?.score || 0,
+      }],
+    };
+  }
+  const matchedChunkId = hit.id || hit.chunkId || null;
+  return {
+    ...parent,
+    id: parent.id,
+    chunkId: matchedChunkId,
+    parentId: parent.id,
+    matchedChunkId,
+    matchedPreview: matchedPreview(hit),
+    matchedChunks: [{
+      chunkId: matchedChunkId,
+      sourceRef: hit.sourceRef || parent.sourceRef || "",
+      childType: hit.childType || "",
+      preview: matchedPreview(hit),
+      score: hit.score || 0,
+    }],
+    score: hit.score || 0,
+    keywordScore: hit.keywordScore || 0,
+    keywordNormalized: hit.keywordNormalized || 0,
+    semanticScore: hit.semanticScore || 0,
+    semanticNormalized: hit.semanticNormalized || 0,
+    retrieval: hit.retrieval || "keyword",
+    childType: hit.childType || "",
+    searchText: `${hit.searchText || ""}\n\n${parent.content || ""}`.trim(),
+    businessKeys: { ...(parent.businessKeys || {}), ...(hit.businessKeys || {}) },
+  };
+}
+
+function expandParentMatches(state, matches, limit) {
+  const parentMap = parentById(state);
+  const merged = new Map();
+  for (const hit of matches || []) {
+    if (!hit) continue;
+    const context = parentContextForHit(parentMap, hit);
+    const key = String(context.parentId || context.id || context.matchedChunkId || "");
+    if (!key) continue;
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, context);
+      continue;
+    }
+    const existingScore = Number(existing.score || 0);
+    const nextScore = Number(context.score || 0);
+    const base = nextScore > existingScore ? context : existing;
+    const other = nextScore > existingScore ? existing : context;
+    merged.set(key, {
+      ...base,
+      score: Math.max(existingScore, nextScore),
+      keywordScore: Math.max(Number(existing.keywordScore || 0), Number(context.keywordScore || 0)),
+      semanticScore: Math.max(Number(existing.semanticScore || 0), Number(context.semanticScore || 0)),
+      retrieval: mergeRetrieval(existing.retrieval, context.retrieval),
+      matchedChunks: [...(base.matchedChunks || []), ...(other.matchedChunks || [])]
+        .filter((item, index, array) => item.chunkId && array.findIndex((entry) => entry.chunkId === item.chunkId) === index)
+        .slice(0, 5),
+      matchedPreview: base.matchedPreview || other.matchedPreview || "",
+    });
+  }
+  return [...merged.values()]
+    .sort((left, right) => Number(right.score || 0) - Number(left.score || 0))
+    .slice(0, Math.max(1, Math.min(Number(limit) || 5, 20)));
+}
+
+export function searchChunks(state, { knowledgeBaseId, query, limit = 5 }) {
+  return expandParentMatches(state, searchChildChunks(state, { knowledgeBaseId, query, limit }), limit);
+}
+
 function normalizeRange(values) {
   if (!values.length) return { min: 0, max: 0 };
   const min = Math.min(...values);
@@ -106,6 +211,46 @@ function normalizeRange(values) {
 function normalizeScore(value, range) {
   if (range.max === range.min) return value > 0 ? 1 : 0;
   return (value - range.min) / (range.max - range.min);
+}
+
+function queryWeights(query) {
+  if (PARAMETER_QUERY_RE.test(String(query || ""))) {
+    return { semantic: 0.15, keyword: 0.85 };
+  }
+  return { semantic: SEMANTIC_WEIGHT, keyword: KEYWORD_WEIGHT };
+}
+
+function cjkPoleNumber(value) {
+  const text = String(value || "");
+  const digit = text.match(/(\d+)\s*级/);
+  if (digit) return digit[1];
+  const mapped = new Map([
+    ["二", "2"],
+    ["两", "2"],
+    ["三", "3"],
+    ["四", "4"],
+    ["五", "5"],
+    ["六", "6"],
+    ["七", "7"],
+    ["八", "8"],
+  ]);
+  const match = text.match(/([二两三四五六七八])\s*级/);
+  return match ? mapped.get(match[1]) : "";
+}
+
+function exactParameterBoost(query, chunk) {
+  if (!PARAMETER_QUERY_RE.test(String(query || ""))) return 0;
+  const text = normalizeText(chunkSearchText(chunk));
+  const modelTokens = [...new Set((String(query || "").match(/\b(?:Y2|YE\d|IE\d)[A-Z0-9-]*/gi) || []).map((token) => token.toLowerCase()))];
+  let boost = 0;
+  for (const token of modelTokens) {
+    if (text.includes(token)) boost += 0.25;
+  }
+  const pole = cjkPoleNumber(query);
+  if (pole && (text.includes(`级数: ${pole}`) || text.includes(`级数：${pole}`) || text.includes(`${pole}级`))) boost += 0.25;
+  if (/(机座范围|功率范围|output power|motor model)/i.test(text)) boost += 0.25;
+  if (/电机数据汇总|sheet1/.test(text)) boost += 0.15;
+  return Math.min(boost, 0.8);
 }
 
 function chunkLookupBy(state, key) {
@@ -175,12 +320,16 @@ async function semanticSearch(state, { knowledgeBaseId, query, limit }) {
       chunkId: payload.chunkId || (localChunk ? localChunk.id : null),
       id: payload.chunkId || (localChunk ? localChunk.id : null),
       documentId: payload.documentId || localChunk?.documentId || null,
+      parentId: payload.parentId || localChunk?.parentId || null,
       knowledgeBaseId: payload.knowledgeBaseId || localChunk?.knowledgeBaseId || null,
       content: localChunk?.content || payload.content || "",
+      searchText: localChunk?.searchText || payload.searchText || "",
       sourceRef: payload.sourceRef || localChunk?.sourceRef || "",
       heading: payload.heading || localChunk?.heading || "",
       sectionPath: payload.sectionPath || localChunk?.sectionPath || [],
       page: payload.page ?? localChunk?.page ?? null,
+      childType: payload.childType || localChunk?.childType || "",
+      businessKeys: payload.businessKeys || localChunk?.businessKeys || {},
       semanticScore: typeof point.score === "number" ? point.score : 0,
       retrieval: "semantic",
     };
@@ -191,7 +340,8 @@ async function semanticSearch(state, { knowledgeBaseId, query, limit }) {
 
 export async function searchChunksHybrid(state, { knowledgeBaseId, query, limit = 8 }) {
   const safeLimit = Math.max(1, Math.min(Number(limit) || 8, 20));
-  const keywordMatches = searchChunks(state, { knowledgeBaseId, query, limit: safeLimit });
+  const weights = queryWeights(query);
+  const keywordMatches = searchChildChunks(state, { knowledgeBaseId, query, limit: safeLimit });
   const semanticMatches = HYBRID_ENABLED ? await semanticSearch(state, { knowledgeBaseId, query, limit: safeLimit }) : [];
   const merged = new Map();
   const keywordRange = normalizeRange(keywordMatches.map((chunk) => chunk.score || 0));
@@ -238,10 +388,10 @@ export async function searchChunksHybrid(state, { knowledgeBaseId, query, limit 
     .filter(isUsableTrainingChunk)
     .map((chunk) => ({
       ...chunk,
-      score: SEMANTIC_WEIGHT * (chunk.semanticNormalized || 0) + KEYWORD_WEIGHT * (chunk.keywordNormalized || 0),
+      score: weights.semantic * (chunk.semanticNormalized || 0) + weights.keyword * (chunk.keywordNormalized || 0) + exactParameterBoost(query, chunk),
     }))
     .sort((left, right) => right.score - left.score);
-  return ranked.slice(0, safeLimit);
+  return expandParentMatches(state, ranked.slice(0, safeLimit * 2), safeLimit);
 }
 
 export function isHybridSearchEnabled() {
