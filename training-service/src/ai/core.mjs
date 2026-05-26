@@ -235,6 +235,28 @@ function needsIntentConfirmation(decision) {
   return Number(decision.confidence || 0) < DIRECT_OPERATION_CONFIDENCE;
 }
 
+function appendDecisionReason(decision, reason) {
+  const current = String(decision.reason || "").trim();
+  decision.reason = current ? `${current} ${reason}` : reason;
+}
+
+function applyIntentConflictGuard(decision, local) {
+  if (!decision || !OPERATION_INTENT_SKILLS.has(decision.skill)) return decision;
+  if (HIGH_RISK_INTENT_SKILLS.has(decision.skill)) {
+    decision.needsConfirmation = true;
+    return decision;
+  }
+  if (!local || local.skill === decision.skill) return decision;
+  decision.needsConfirmation = true;
+  if (local.skill === "answer_general_chat") {
+    appendDecisionReason(decision, "该操作仅由 LLM 路由识别，已要求用户确认以避免误触发。");
+    return decision;
+  }
+  decision.alternatives = normalizeAlternatives([local, ...(decision.alternatives || [])], decision.skill);
+  appendDecisionReason(decision, `本地规则候选为 ${local.skill}，已要求用户确认。`);
+  return decision;
+}
+
 function normalizeIntentDecision(raw, extra = {}) {
   const skill = normalizeIntentSkill(raw?.skill || raw?.intent) || "answer_general_chat";
   const confidence = Math.max(0, Math.min(1, Number(raw?.confidence) || (skill === "answer_general_chat" ? 0.6 : 0.75)));
@@ -273,7 +295,7 @@ function confirmedIntentDecision(value) {
 function isStatusIntent(text) {
   const value = String(text || "");
   return (
-    /(查询|查看|看一下|看看|查一下).*(培训|学习|考试|任务|进度|完成情况|成绩|报表|状态)/.test(value) ||
+    /(查询|查看|看一下|看看|查一下).*(培训|学习|考试|任务).*(进度|完成情况|成绩|报表|状态|谁完成|谁没完成|未完成|完成率|平均分)/.test(value) ||
     /(培训|学习|考试|任务).*(进度|完成情况|成绩|报表|状态|谁完成|谁没完成|未完成|完成率|平均分)/.test(value) ||
     /(谁完成|谁没完成|未完成|完成率|平均分|培训报表|学习报表|考试成绩)/.test(value)
   );
@@ -385,7 +407,7 @@ export async function classifyTrainingIntent(state, message, options = {}) {
       model: result.model,
       sessionPatch: result.sessionPatch,
     });
-    if (decision.skill) return decision;
+    if (decision.skill) return applyIntentConflictGuard(decision, local);
   } catch {
   }
   return local;

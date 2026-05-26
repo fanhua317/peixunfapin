@@ -56,6 +56,8 @@ src/server.mjs      # 只负责启动原生 HTTP server
 src/http            # 请求解析、认证、静态文件、API controller
 src/domain          # 知识库、员工、任务、邀请、考试、报表业务逻辑
 src/ai              # 意图识别、讲义、答疑、出题、LLM JSON 调用
+src/intent-confirmation.mjs # 操作确认 token，防止误确认执行
+src/agent-trace.mjs # Agent 路由轨迹 JSONL 日志
 public/src          # 无构建浏览器 ES modules
 ```
 
@@ -68,6 +70,7 @@ cd D:\juzhou-agent\peixun\training-service
 npm run check
 npm run smoke
 npm run eval:rag -- --retrieval-only
+npm run eval:intent
 ```
 
 ## 打包给 Windows 用户
@@ -98,6 +101,8 @@ TRAINING_LLM_API_KEY=你的 API Key
 ```
 
 网页老板端会先做意图路由：发布培训、查询进度等培训意图走系统内置技能；其他普通聊天只走直连大模型 API。未配置 `TRAINING_LLM_API_KEY`、`DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY` 时，普通聊天会明确报配置缺失，不使用本地话术。
+
+意图路由采用防误判机制：本地规则先判断高置信操作，模糊表达可交给 LLM router，低置信或高风险操作返回确认卡片。确认执行时必须带服务端签发的 `confirmationToken`，token 会绑定原始消息和 skill，过期、缺失或消息被替换都会拒绝执行。每次 `/api/agent/dispatch` 和 `/api/agent/stream` 的路由结果会写入数据目录下的 `agent-traces.jsonl`，可用 `TRAINING_AGENT_TRACE=0` 关闭。
 
 ## 打包部署到服务器
 

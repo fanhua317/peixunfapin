@@ -314,7 +314,11 @@ async function confirmIntentAction(result, button) {
   try {
     const response = await api("/api/agent/dispatch", {
       method: "POST",
-      body: JSON.stringify({ message, confirmedSkill: skill }),
+      body: JSON.stringify({
+        message,
+        confirmedSkill: skill,
+        confirmationToken: result.confirmation?.token || "",
+      }),
     });
     removeMessage(progress);
     appendAgentResult(response);

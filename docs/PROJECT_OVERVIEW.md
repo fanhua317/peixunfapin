@@ -1,6 +1,6 @@
 # 钜洲培训 Agent 项目总览文档
 
-更新时间：2026-05-20  
+更新时间：2026-05-26
 项目目录：`D:\juzhou-agent\peixun`  
 业务数据目录：`D:\OpenClawData`
 
@@ -114,11 +114,12 @@ D:\juzhou-agent\peixun
     │   ├── check-syntax.mjs
     │   ├── clean-raw.mjs
     │   ├── import-clean.mjs
-    │   ├── embed-chunks.mjs
-    │   ├── embed-local-index.mjs
-    │   ├── eval-rag.mjs
-    │   ├── qdrant-snapshot.mjs
-    │   └── smoke-test.mjs
+        │   ├── embed-chunks.mjs
+        │   ├── embed-local-index.mjs
+        │   ├── eval-intent.mjs
+        │   ├── eval-rag.mjs
+        │   ├── qdrant-snapshot.mjs
+        │   └── smoke-test.mjs
     └── src
         ├── server.mjs
         ├── http
@@ -145,6 +146,8 @@ D:\juzhou-agent\peixun
         ├── quality.mjs
         ├── chunking.mjs
         ├── health.mjs
+        ├── intent-confirmation.mjs
+        ├── agent-trace.mjs
         ├── direct-llm.mjs
         ├── llm.mjs
         ├── local-vector-index.mjs
@@ -535,7 +538,7 @@ sequenceDiagram
     Store-->>Domain: 草稿数据
     Domain-->>API: 返回草稿
     API-->>Boss: 展示确认卡片
-    Boss->>API: 确认发布
+    Boss->>API: 确认发布草稿
     API->>Domain: publishTask
     Domain->>Store: 创建 task 和 invite
     API-->>Boss: 返回员工专属链接
@@ -581,6 +584,28 @@ sequenceDiagram
     API->>Store: 保存 attempt
     API-->>Emp: 返回分数和解析
 ```
+
+### 7.4 Agent 防误判与确认链路
+
+老板端聊天入口不会让模型直接执行所有动作。当前路由链路是：
+
+```text
+用户输入
+  -> 本地规则初判
+  -> 可选 LLM JSON router
+  -> 置信度 / 风险门控
+  -> 确认卡片或执行 skill
+  -> 写入 agent-traces.jsonl
+```
+
+关键约束：
+
+- 删除培训记录属于高风险操作，即使命中本地规则也必须二次确认。
+- 低置信操作意图返回 `intent_confirm`，前端可选择“确认执行 / 当普通聊天 / 重新输入”。
+- LLM 单独识别出的操作意图，如果本地规则没有支持，会先要求确认，避免模型过度调用工具。
+- 确认卡片携带服务端签发的 `confirmationToken`，token 绑定原始消息和 skill，默认 15 分钟过期。
+- 后端执行 `confirmedSkill` 前会校验 token；缺 token、过期、换消息或换 skill 都拒绝执行。
+- `/api/agent/dispatch` 和 `/api/agent/stream` 会把消息摘要、决策、动作、确认状态和耗时写入数据目录的 `agent-traces.jsonl`，方便把误判样本补回 `npm run eval:intent`。
 
 ## 8. RAG 策略
 
@@ -938,12 +963,13 @@ public/src/ui.js
 
 ### 13.5 大模型仍可能出现表达偏差
 
-项目已通过 RAG、来源白名单、结构化校验和评测减少幻觉，但不能保证模型每句话都完全正确。更严格的下一步是：
+项目已通过 RAG、来源白名单、结构化校验、确认 token、路由轨迹和评测减少幻觉与误执行，但不能保证模型每句话都完全正确。更严格的下一步是：
 
 - 答案句子级引用。
 - unsupported claim checker。
 - 低置信度强制返回“资料不足”。
 - 前端展示关键来源片段，方便人工核验。
+- 持续把真实误判样本加入 `eval:intent` 和 `eval:rag`。
 
 ## 14. 后续优化路线
 

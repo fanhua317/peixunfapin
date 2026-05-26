@@ -1,7 +1,9 @@
 import { createTaskDraft, deleteTrainingRecords, getTaskStatus, searchEmployees } from "../../domain/index.mjs";
 import { classifyTrainingIntent, generateMarketingArticle, isConfirmedSkillAllowed } from "../../ai/index.mjs";
+import { appendAgentTrace } from "../../agent-trace.mjs";
 import { answerGeneralChat } from "../../chat/general-chat.mjs";
 import { getRuntimeHealth, getVectorIndexStatus } from "../../health.mjs";
+import { createIntentConfirmationToken, verifyIntentConfirmationToken } from "../../intent-confirmation.mjs";
 import { getKnowledgeBaseQuality } from "../../quality.mjs";
 import { loadState, mutateState } from "../../store.mjs";
 import { readBody } from "../request.mjs";
@@ -53,12 +55,15 @@ function intentLabel(skill) {
 }
 
 function intentConfirmPayload(message, decision) {
+  const confirmation = createIntentConfirmationToken(message, decision.skill);
   return {
     action: "intent_confirm",
     message,
     decision,
     confirmation: {
       skill: decision.skill,
+      token: confirmation.token,
+      expiresAt: confirmation.expiresAt,
       title: decision.skill === "delete_training_records" ? "确认删除培训记录？" : `确认${intentLabel(decision.skill)}？`,
       description: decision.skill === "delete_training_records"
         ? "删除会移除匹配的培训任务、学习链接、试卷和答题记录；知识库和员工名单不会删除。"
@@ -68,45 +73,70 @@ function intentConfirmPayload(message, decision) {
   };
 }
 
-async function sendDecisionResult(res, state, message, decision) {
+function validateConfirmedSkill({ confirmedSkill, confirmationToken, message }) {
+  if (!confirmedSkill) return null;
+  if (!isConfirmedSkillAllowed(confirmedSkill)) {
+    return { status: 400, error: "unsupported confirmedSkill" };
+  }
+  const verification = verifyIntentConfirmationToken(confirmationToken, { message, skill: confirmedSkill });
+  if (!verification.ok) {
+    return {
+      status: 409,
+      error: "invalid intent confirmation",
+      reason: verification.reason,
+    };
+  }
+  return { ok: true, verification };
+}
+
+async function buildDecisionResult(state, message, decision) {
   if (decision.needsConfirmation) {
-    sendJson(res, 200, intentConfirmPayload(message, decision));
-    return true;
+    return { status: 200, payload: intentConfirmPayload(message, decision) };
   }
   if (decision.skill === "create_training_draft" || decision.intent === "create_training_draft") {
-    sendJson(res, 200, {
+    return { status: 200, payload: {
       action: "draft",
       decision,
       draft: await createEnrichedTaskDraft(state, message),
-    });
-    return true;
+    } };
   }
   if (decision.skill === "show_training_status" || decision.intent === "show_training_status") {
-    sendJson(res, 200, {
+    return { status: 200, payload: {
       action: "status",
       decision,
       tasks: state.tasks.map((task) => getTaskStatus(state, task.id)),
-    });
-    return true;
+    } };
   }
   if (decision.skill === "delete_training_records" || decision.intent === "delete_training_records") {
     const result = await mutateState((currentState) => deleteTrainingRecords(currentState, { instruction: message }));
-    sendJson(res, 200, {
+    return { status: 200, payload: {
       ...result,
       decision,
-    });
-    return true;
+    } };
   }
   if (decision.skill === "generate_marketing_article" || decision.intent === "generate_marketing_article") {
-    sendJson(res, 200, {
+    return { status: 200, payload: {
       action: "marketing_article",
       decision,
       article: await generateMarketingArticle(state, { instruction: message }),
-    });
-    return true;
+    } };
   }
-  await sendGeneralChat(res, message, decision);
-  return true;
+  try {
+    return { status: 200, payload: {
+      action: "chat",
+      decision,
+      ...(await answerGeneralChat(message)),
+    } };
+  } catch (error) {
+    return { status: 503, payload: {
+      action: "chat",
+      decision,
+      error: error instanceof Error ? error.message : String(error),
+      source: "llm-api",
+      route: "general_chat",
+      llmConfigured: false,
+    } };
+  }
 }
 
 export async function handleAgent(req, res, url) {
@@ -118,16 +148,57 @@ export async function handleAgent(req, res, url) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/agent/dispatch") {
+    const startedAt = Date.now();
     const body = await readBody(req);
     const message = body.message || body.instruction || "";
     const confirmedSkill = String(body.confirmedSkill || "").trim();
-    if (confirmedSkill && !isConfirmedSkillAllowed(confirmedSkill)) {
-      sendJson(res, 400, { error: "unsupported confirmedSkill" });
+    const confirmationToken = String(body.confirmationToken || "").trim();
+    const confirmation = validateConfirmedSkill({ confirmedSkill, confirmationToken, message });
+    if (confirmation && !confirmation.ok) {
+      const payload = { error: confirmation.error, reason: confirmation.reason };
+      sendJson(res, confirmation.status, payload);
+      await appendAgentTrace({
+        transport: "http",
+        route: "/api/agent/dispatch",
+        message,
+        confirmedSkill,
+        confirmationTokenPresent: Boolean(confirmationToken),
+        error: `${confirmation.error}:${confirmation.reason || ""}`,
+        result: payload,
+        latencyMs: Date.now() - startedAt,
+      });
       return true;
     }
     const state = await loadState();
     const decision = await classifyTrainingIntent(state, message, { confirmedSkill });
-    await sendDecisionResult(res, state, message, decision);
+    try {
+      const { status, payload } = await buildDecisionResult(state, message, decision);
+      sendJson(res, status, payload);
+      await appendAgentTrace({
+        transport: "http",
+        route: "/api/agent/dispatch",
+        message,
+        confirmedSkill,
+        confirmationTokenPresent: Boolean(confirmationToken),
+        confirmationVerified: confirmation?.ok === true,
+        decision,
+        result: payload,
+        latencyMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      await appendAgentTrace({
+        transport: "http",
+        route: "/api/agent/dispatch",
+        message,
+        confirmedSkill,
+        confirmationTokenPresent: Boolean(confirmationToken),
+        confirmationVerified: confirmation?.ok === true,
+        decision,
+        error: error instanceof Error ? error.message : String(error),
+        latencyMs: Date.now() - startedAt,
+      });
+      throw error;
+    }
     return true;
   }
 

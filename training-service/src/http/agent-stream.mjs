@@ -1,7 +1,9 @@
 import { classifyTrainingIntent, generateMarketingArticle, isConfirmedSkillAllowed } from "../ai/index.mjs";
+import { appendAgentTrace } from "../agent-trace.mjs";
 import { streamGeneralChat } from "../chat/general-chat.mjs";
 import { createTaskDraft, deleteTrainingRecords, getTaskStatus } from "../domain/index.mjs";
 import { getRuntimeHealth, getVectorIndexStatus } from "../health.mjs";
+import { createIntentConfirmationToken, verifyIntentConfirmationToken } from "../intent-confirmation.mjs";
 import { getKnowledgeBaseQuality } from "../quality.mjs";
 import { loadState, mutateState } from "../store.mjs";
 import { isAuthenticated } from "./auth.mjs";
@@ -17,6 +19,7 @@ function parseClientPayload(raw) {
   return {
     message: String(payload.message || payload.instruction || "").trim(),
     confirmedSkill: String(payload.confirmedSkill || "").trim(),
+    confirmationToken: String(payload.confirmationToken || "").trim(),
   };
 }
 
@@ -40,12 +43,15 @@ function intentLabel(skill) {
 }
 
 function intentConfirmPayload(message, decision) {
+  const confirmation = createIntentConfirmationToken(message, decision.skill);
   return {
     action: "intent_confirm",
     message,
     decision,
     confirmation: {
       skill: decision.skill,
+      token: confirmation.token,
+      expiresAt: confirmation.expiresAt,
       title: decision.skill === "delete_training_records" ? "确认删除培训记录？" : `确认${intentLabel(decision.skill)}？`,
       description: decision.skill === "delete_training_records"
         ? "删除会移除匹配的培训任务、学习链接、试卷和答题记录；知识库和员工名单不会删除。"
@@ -55,64 +61,140 @@ function intentConfirmPayload(message, decision) {
   };
 }
 
+function validateConfirmedSkill({ confirmedSkill, confirmationToken, message }) {
+  if (!confirmedSkill) return null;
+  if (!isConfirmedSkillAllowed(confirmedSkill)) {
+    return { status: 1008, error: "unsupported confirmedSkill" };
+  }
+  const verification = verifyIntentConfirmationToken(confirmationToken, { message, skill: confirmedSkill });
+  if (!verification.ok) {
+    return {
+      status: 1008,
+      error: "invalid intent confirmation",
+      reason: verification.reason,
+    };
+  }
+  return { ok: true, verification };
+}
+
 async function handleStreamMessage(socket, raw, abortController) {
+  const startedAt = Date.now();
   const body = parseClientPayload(raw);
-  if (body.confirmedSkill && !isConfirmedSkillAllowed(body.confirmedSkill)) {
-    sendWsJson(socket, { type: "error", error: "unsupported confirmedSkill" });
-    closeWebSocket(socket, 1008, "unsupported confirmedSkill");
+  const confirmation = validateConfirmedSkill(body);
+  if (confirmation && !confirmation.ok) {
+    sendWsJson(socket, { type: "error", error: confirmation.error, reason: confirmation.reason });
+    await appendAgentTrace({
+      transport: "ws",
+      route: "/api/agent/stream",
+      message: body.message,
+      confirmedSkill: body.confirmedSkill,
+      confirmationTokenPresent: Boolean(body.confirmationToken),
+      error: `${confirmation.error}:${confirmation.reason || ""}`,
+      result: { action: "error" },
+      latencyMs: Date.now() - startedAt,
+    });
+    closeWebSocket(socket, confirmation.status, confirmation.error);
     return;
   }
   const state = await loadState();
   const decision = await classifyTrainingIntent(state, body.message, { confirmedSkill: body.confirmedSkill });
 
   if (decision.needsConfirmation) {
+    const payload = intentConfirmPayload(body.message, decision);
     sendWsJson(socket, {
       type: "result",
-      payload: intentConfirmPayload(body.message, decision),
+      payload,
     });
     sendWsJson(socket, { type: "done", action: "intent_confirm" });
+    await appendAgentTrace({
+      transport: "ws",
+      route: "/api/agent/stream",
+      message: body.message,
+      confirmedSkill: body.confirmedSkill,
+      confirmationTokenPresent: Boolean(body.confirmationToken),
+      confirmationVerified: confirmation?.ok === true,
+      decision,
+      result: payload,
+      latencyMs: Date.now() - startedAt,
+    });
     closeWebSocket(socket);
     return;
   }
 
   if (decision.skill === "create_training_draft" || decision.intent === "create_training_draft") {
+    const payload = {
+      action: "draft",
+      decision,
+      draft: await createEnrichedTaskDraft(state, body.message),
+    };
     sendWsJson(socket, {
       type: "result",
-      payload: {
-        action: "draft",
-        decision,
-        draft: await createEnrichedTaskDraft(state, body.message),
-      },
+      payload,
     });
     sendWsJson(socket, { type: "done", action: "draft" });
+    await appendAgentTrace({
+      transport: "ws",
+      route: "/api/agent/stream",
+      message: body.message,
+      confirmedSkill: body.confirmedSkill,
+      confirmationTokenPresent: Boolean(body.confirmationToken),
+      confirmationVerified: confirmation?.ok === true,
+      decision,
+      result: payload,
+      latencyMs: Date.now() - startedAt,
+    });
     closeWebSocket(socket);
     return;
   }
 
   if (decision.skill === "show_training_status" || decision.intent === "show_training_status") {
+    const payload = {
+      action: "status",
+      decision,
+      tasks: state.tasks.map((task) => getTaskStatus(state, task.id)),
+    };
     sendWsJson(socket, {
       type: "result",
-      payload: {
-        action: "status",
-        decision,
-        tasks: state.tasks.map((task) => getTaskStatus(state, task.id)),
-      },
+      payload,
     });
     sendWsJson(socket, { type: "done", action: "status" });
+    await appendAgentTrace({
+      transport: "ws",
+      route: "/api/agent/stream",
+      message: body.message,
+      confirmedSkill: body.confirmedSkill,
+      confirmationTokenPresent: Boolean(body.confirmationToken),
+      confirmationVerified: confirmation?.ok === true,
+      decision,
+      result: payload,
+      latencyMs: Date.now() - startedAt,
+    });
     closeWebSocket(socket);
     return;
   }
 
   if (decision.skill === "delete_training_records" || decision.intent === "delete_training_records") {
     const result = await mutateState((currentState) => deleteTrainingRecords(currentState, { instruction: body.message }));
+    const payload = {
+      ...result,
+      decision,
+    };
     sendWsJson(socket, {
       type: "result",
-      payload: {
-        ...result,
-        decision,
-      },
+      payload,
     });
     sendWsJson(socket, { type: "done", action: "delete_records" });
+    await appendAgentTrace({
+      transport: "ws",
+      route: "/api/agent/stream",
+      message: body.message,
+      confirmedSkill: body.confirmedSkill,
+      confirmationTokenPresent: Boolean(body.confirmationToken),
+      confirmationVerified: confirmation?.ok === true,
+      decision,
+      result: payload,
+      latencyMs: Date.now() - startedAt,
+    });
     closeWebSocket(socket);
     return;
   }
@@ -125,15 +207,27 @@ async function handleStreamMessage(socket, raw, abortController) {
       source: "llm-api",
       route: "marketing_article",
     });
+    const payload = {
+      action: "marketing_article",
+      decision,
+      article: await generateMarketingArticle(state, { instruction: body.message }),
+    };
     sendWsJson(socket, {
       type: "result",
-      payload: {
-        action: "marketing_article",
-        decision,
-        article: await generateMarketingArticle(state, { instruction: body.message }),
-      },
+      payload,
     });
     sendWsJson(socket, { type: "done", action: "marketing_article" });
+    await appendAgentTrace({
+      transport: "ws",
+      route: "/api/agent/stream",
+      message: body.message,
+      confirmedSkill: body.confirmedSkill,
+      confirmationTokenPresent: Boolean(body.confirmationToken),
+      confirmationVerified: confirmation?.ok === true,
+      decision,
+      result: payload,
+      latencyMs: Date.now() - startedAt,
+    });
     closeWebSocket(socket);
     return;
   }
@@ -149,14 +243,26 @@ async function handleStreamMessage(socket, raw, abortController) {
     signal: abortController.signal,
     onDelta: (delta) => sendWsJson(socket, { type: "delta", delta }),
   });
+  const payload = {
+    action: "chat",
+    decision,
+    ...result,
+  };
   sendWsJson(socket, {
     type: "done",
     action: "chat",
-    payload: {
-      action: "chat",
-      decision,
-      ...result,
-    },
+    payload,
+  });
+  await appendAgentTrace({
+    transport: "ws",
+    route: "/api/agent/stream",
+    message: body.message,
+    confirmedSkill: body.confirmedSkill,
+    confirmationTokenPresent: Boolean(body.confirmationToken),
+    confirmationVerified: confirmation?.ok === true,
+    decision,
+    result: payload,
+    latencyMs: Date.now() - startedAt,
   });
   closeWebSocket(socket);
 }

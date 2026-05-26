@@ -82,6 +82,84 @@ const cases = [
     skill: "show_training_status",
     needsConfirmation: false,
   },
+  {
+    name: "status with scores",
+    message: "看看这次考试成绩和谁没完成",
+    skill: "show_training_status",
+    needsConfirmation: false,
+  },
+  {
+    name: "question about system is chat",
+    message: "帮我介绍一下这个系统怎么工作",
+    skill: "answer_general_chat",
+    needsConfirmation: false,
+  },
+  {
+    name: "generic generate is chat",
+    message: "帮我生成一个想法",
+    skill: "answer_general_chat",
+    needsConfirmation: false,
+  },
+  {
+    name: "generic search is chat",
+    message: "查一下火锅怎么做",
+    skill: "answer_general_chat",
+    needsConfirmation: false,
+  },
+  {
+    name: "explain motor is chat",
+    message: "给王小明讲一下电机是什么",
+    skill: "answer_general_chat",
+    needsConfirmation: false,
+  },
+  {
+    name: "training design discussion is chat",
+    message: "帮我看看培训应该怎么设计比较合理",
+    skill: "answer_general_chat",
+    needsConfirmation: false,
+  },
+  {
+    name: "delete knowledge base is not training records",
+    message: "删除知识库",
+    skill: "answer_general_chat",
+    needsConfirmation: false,
+  },
+  {
+    name: "delete quiz wording is not record deletion",
+    message: "把这句话里的考试题三个字删掉",
+    skill: "answer_general_chat",
+    needsConfirmation: false,
+  },
+  {
+    name: "explicit all training delete requires confirmation",
+    message: "清空全部培训任务记录",
+    skill: "delete_training_records",
+    needsConfirmation: true,
+  },
+  {
+    name: "quiz assignment draft",
+    message: "给王小明出 10 道电机选择题，80 分及格",
+    skill: "create_training_draft",
+    needsConfirmation: false,
+  },
+  {
+    name: "study assignment draft",
+    message: "安排王小明下周学习电机资料",
+    skill: "create_training_draft",
+    needsConfirmation: false,
+  },
+  {
+    name: "marketing article for unmatched topic still article skill",
+    message: "写一篇关于火锅的软文",
+    skill: "generate_marketing_article",
+    needsConfirmation: false,
+  },
+  {
+    name: "web search marketing request is article skill",
+    message: "联网查一下电机资料再写软文",
+    skill: "generate_marketing_article",
+    needsConfirmation: false,
+  },
 ];
 
 const results = [];
@@ -112,10 +190,16 @@ for (const item of cases) {
 }
 
 const failed = results.filter((result) => !result.ok);
+const bySkill = results.reduce((acc, result) => {
+  const skill = result.actual.skill || "unknown";
+  acc[skill] = (acc[skill] || 0) + 1;
+  return acc;
+}, {});
 console.log(JSON.stringify({
   ok: failed.length === 0,
   total: results.length,
   failed: failed.length,
+  bySkill,
   results,
 }, null, 2));
 

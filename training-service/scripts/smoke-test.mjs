@@ -135,9 +135,20 @@ try {
     if (emptyDeleteConfirm.action !== "intent_confirm" || emptyDeleteConfirm.decision?.skill !== "delete_training_records") {
       throw new Error(`expected delete confirmation, got ${JSON.stringify(emptyDeleteConfirm)}`);
     }
-    const emptyDeleteResponse = await request("/api/agent/dispatch", {
+    const missingDeleteToken = await requestExpectError("/api/agent/dispatch", {
       method: "POST",
       body: JSON.stringify({ message: "把之前的培训记录删掉", confirmedSkill: "delete_training_records" }),
+    });
+    if (missingDeleteToken.reason !== "missing_confirmation_token") {
+      throw new Error(`expected missing confirmation token error, got ${JSON.stringify(missingDeleteToken)}`);
+    }
+    const emptyDeleteResponse = await request("/api/agent/dispatch", {
+      method: "POST",
+      body: JSON.stringify({
+        message: "把之前的培训记录删掉",
+        confirmedSkill: "delete_training_records",
+        confirmationToken: emptyDeleteConfirm.confirmation?.token,
+      }),
     });
     if (emptyDeleteResponse.action !== "delete_records" || emptyDeleteResponse.deleted.tasks !== 0) {
       throw new Error(`expected empty delete result, got ${JSON.stringify(emptyDeleteResponse)}`);
@@ -240,9 +251,20 @@ try {
   if (deleteConfirm.action !== "intent_confirm" || deleteConfirm.confirmation?.risk !== "high") {
     throw new Error(`expected delete confirmation, got ${JSON.stringify(deleteConfirm)}`);
   }
-  const deleteResponse = await request("/api/agent/dispatch", {
+  const missingDeleteToken = await requestExpectError("/api/agent/dispatch", {
     method: "POST",
     body: JSON.stringify({ message: "把之前的培训记录删掉", confirmedSkill: "delete_training_records" }),
+  });
+  if (missingDeleteToken.reason !== "missing_confirmation_token") {
+    throw new Error(`expected missing confirmation token error, got ${JSON.stringify(missingDeleteToken)}`);
+  }
+  const deleteResponse = await request("/api/agent/dispatch", {
+    method: "POST",
+    body: JSON.stringify({
+      message: "把之前的培训记录删掉",
+      confirmedSkill: "delete_training_records",
+      confirmationToken: deleteConfirm.confirmation?.token,
+    }),
   });
   if (deleteResponse.action !== "delete_records" || deleteResponse.deleted.tasks < 2 || deleteResponse.remainingTasks !== 0) {
     throw new Error(`expected training records to be deleted, got ${JSON.stringify(deleteResponse)}`);
