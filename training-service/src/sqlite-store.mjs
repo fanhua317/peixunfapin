@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-export const SQLITE_SCHEMA_VERSION = 1;
+export const SQLITE_SCHEMA_VERSION = 2;
 
 const STATE_COLLECTIONS = [
   { key: "knowledgeBases", table: "knowledge_bases" },
@@ -127,6 +127,7 @@ function ensureSchema(db) {
   `);
   for (const collection of STATE_COLLECTIONS) ensureRowTable(db, collection.table);
   ensureRowTable(db, "memories");
+  ensureRowTable(db, "jobs");
   db.exec(`
     CREATE TABLE IF NOT EXISTS memory_sessions (
       id TEXT PRIMARY KEY,

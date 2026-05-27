@@ -345,6 +345,11 @@ button:disabled {
   box-shadow: none;
 }
 
+.secondary.danger {
+  background: #fff1ec;
+  color: #a13a1c;
+}
+
 .hero .secondary {
   background: rgba(255,255,255,.16);
   color: white;
@@ -1136,6 +1141,123 @@ button:disabled {
   font-weight: 900;
 }
 
+.button-row,
+.job-row-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.job-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.job-stat {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 48px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  box-shadow: none;
+}
+
+.job-stat.active {
+  border-color: var(--brand);
+  background: #eef5ff;
+}
+
+.job-list,
+.trace-list {
+  display: grid;
+  gap: 12px;
+}
+
+.job-row,
+.trace-row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fff;
+}
+
+.job-row.status-running,
+.job-row.status-queued {
+  background: #f7faff;
+}
+
+.job-row.status-failed,
+.trace-row.has-error {
+  border-color: #f2b8a2;
+  background: #fff8f4;
+}
+
+.job-row-main,
+.trace-main {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+
+.job-title {
+  font-weight: 900;
+  color: var(--text);
+  line-height: 1.35;
+}
+
+.job-events {
+  max-height: 220px;
+  overflow: auto;
+}
+
+.job-events li {
+  display: grid;
+  grid-template-columns: minmax(150px, 220px) 1fr;
+  gap: 10px;
+}
+
+.trace-filter {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(150px, max-content) minmax(130px, max-content) minmax(110px, max-content) max-content max-content max-content;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.trace-filter input,
+.trace-filter select {
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+}
+
+.inline-check {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.trace-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+  color: var(--muted);
+}
+
 .command-box {
   margin: 8px 0;
   padding: 12px;
@@ -1326,6 +1448,19 @@ button:disabled {
   }
 
   .import-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .trace-filter {
+    grid-template-columns: 1fr;
+  }
+
+  .job-row-main,
+  .trace-main {
+    flex-direction: column;
+  }
+
+  .job-events li {
     grid-template-columns: 1fr;
   }
 

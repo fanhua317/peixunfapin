@@ -211,6 +211,7 @@ D:\juzhou-agent\peixun
 - `TRAINING_STORAGE=sqlite|json` 控制存储模式，默认 `sqlite`；`json` 用于临时回滚。
 - 首次 SQLite 启动会从旧版 `state.json` 和 `memory.json` 导入，导入前保留 `.backup-时间戳.json`。
 - `conversation-history.jsonl`、`agent-traces.jsonl`、本地向量索引和 Qdrant 不迁入 SQLite，继续作为追加文件或外部索引存在。
+- SQLite 内部 schemaVersion 当前为 2，新增 `jobs` 表保存异步导入和本地向量索引任务；`state.json meta.version` 仍保持 1。
 - 本地向量索引默认保存在同目录的 `vector-index-{model}.json`，例如 `vector-index-bge-m3.json`。
 
 主要数据集合：
@@ -225,6 +226,7 @@ D:\juzhou-agent\peixun
 - `attempts`：考试提交记录。
 - `contentDrafts`：后续文章/内容草稿预留。
 - `events`：业务事件日志。
+- `jobs`：异步任务队列，第一版覆盖知识库导入和本地向量索引重建。
 
 本地运行文件：
 
@@ -234,6 +236,7 @@ D:\juzhou-agent\peixun
 - `memory.json`：长期偏好、短期会话摘要、待确认记忆和记忆状态。
 - `conversation-history.jsonl`：老板端聊天消息和工具调用摘要，按 `sessionId` 追加。
 - `agent-traces.jsonl`：意图路由、防误判确认和执行轨迹。
+- `jobs.json`：JSON 回滚模式下的异步任务队列。
 - `vector-index-bge-m3.json`：可选的本地向量索引，使用 local vector backend 时生成。
 
 SQLite 采用“集合分表 + 完整 JSON 原文保留”的兼容方案，外层 domain/controller 仍通过 `loadState`、`saveState`、`mutateState` 和 memory store API 访问数据。这样既提升本地持久化可靠性，又保留 JSON 导出和回滚能力。正式多用户 SaaS 化时再考虑 PostgreSQL。
@@ -302,12 +305,14 @@ SQLite 采用“集合分表 + 完整 JSON 原文保留”的兼容方案，外�
 - `npm run import:clean`：导入清洗后的 Markdown/TXT。
 - `npm run render:pdf`：把扫描型 PDF 渲染为图片页，供后续 OCR 或视觉识别。
 - `/imports`：老板端导入管理页，支持本机目录导入和浏览器上传。
+- `/jobs`：老板端任务中心，查看导入和本地向量索引任务状态、进度、错误和结果摘要。
+- `/traces`：Agent Trace 可视化页，查看脱敏意图路由轨迹。
 
 当前限制：
 
 - 可复制文本 PDF 可以自动抽取。
 - 扫描型 PDF 暂时只能识别为 OCR 占位或渲染为图片，完整 OCR 仍需后续接入。
-- 页面导入后 BM25 立即可用，向量索引需要按提示手动运行 `npm run embed:local` 重建。
+- 页面导入会进入异步任务队列；导入成功后 BM25 立即可用，并默认自动创建当前知识库的本地向量索引任务。embedding 失败不会回滚知识库，任务中心会显示失败原因。
 
 ### 5.7 部署与打包
 
@@ -385,6 +390,14 @@ POST /api/agent/draft
 POST /api/agent/dispatch
 WS   /api/agent/stream
 POST /api/chat
+GET  /api/jobs
+GET  /api/jobs/{jobId}
+POST /api/jobs/{jobId}/cancel
+POST /api/jobs/import/directory
+POST /api/jobs/import/upload
+POST /api/jobs/embed
+GET  /api/traces
+GET  /api/traces/{traceId}
 GET  /api/memory
 PATCH /api/memory/{memoryId}
 DELETE /api/memory/{memoryId}
@@ -489,7 +502,21 @@ training-service/src/memory
 - 模糊偏好先进入 `pending`，前端展示确认卡片；确认后才转为 `active`。
 - 记忆不是事实库，产品参数、工艺、资料来源仍必须来自 RAG。
 
-### 6.5 RAG 检索层
+### 6.5 异步任务与 Trace 层
+
+核心目录：
+```text
+training-service/src/jobs
+training-service/src/traces.mjs
+```
+
+职责：
+- `jobs` 负责本地异步任务队列，第一版覆盖知识库导入和本地向量索引重建。
+- SQLite 模式下任务保存在 `training.db` 的 `jobs` 表，JSON 回滚模式下保存在 `jobs.json`。
+- `/jobs` 页面展示任务状态、阶段进度、错误、结果摘要和取消操作。
+- `/traces` 页面读取 `agent-traces.jsonl`，只展示脱敏消息预览、意图、skill、确认状态、action、耗时和错误。
+
+### 6.6 RAG 检索层
 
 核心文件：
 
@@ -512,7 +539,7 @@ training-service/src/embedding.mjs
 - 合并 BM25 分数和语义分数。
 - 给模型提供去噪后的上下文。
 
-### 6.6 LLM 适配层
+### 6.7 LLM 适配层
 
 核心文件：
 
@@ -532,7 +559,7 @@ training-service/src/gateway
 - 保留 OpenClaw Gateway WebSocket 调用能力。
 - 普通聊天走直连大模型 API；培训讲义、答疑和出题也必须依赖可用模型 API，模型不可用时直接失败。
 
-### 6.7 数据存储层
+### 6.8 数据存储层
 
 核心文件：
 
@@ -546,11 +573,12 @@ training-service/src/store.mjs
 - 根据 `TRAINING_STORAGE` 加载 SQLite 或 JSON 状态。
 - 初始化默认 state。
 - 保存 state，SQLite 模式写入 `training.db`，JSON 模式写入 `state.json`。
+- 保存异步任务，SQLite 模式写入 `training.db`，JSON 模式写入 `jobs.json`。
 - 提供 mutation 辅助。
 - 生成 ID 和 token。
 - 记录事件。
 
-### 6.8 OpenClaw 插件层
+### 6.9 OpenClaw 插件层
 
 目录：
 
@@ -670,6 +698,7 @@ sequenceDiagram
 - 确认卡片携带服务端签发的 `confirmationToken`，token 绑定原始消息和 skill，默认 15 分钟过期。
 - 后端执行 `confirmedSkill` 前会校验 token；缺 token、过期、换消息或换 skill 都拒绝执行。
 - `/api/agent/dispatch` 和 `/api/agent/stream` 会把消息摘要、决策、动作、确认状态和耗时写入数据目录的 `agent-traces.jsonl`，方便把误判样本补回 `npm run eval:intent`。
+- `/traces` 页面和 `/api/traces` 只读取脱敏摘要，不展示完整聊天内容或 API Key。
 
 ### 7.5 记忆写入与使用链路
 
@@ -949,7 +978,7 @@ npm run backup:verify -- --from <backup.zip>
 npm run restore:data -- --from <backup.zip> --force
 ```
 
-`backup:data` 默认输出到 `TRAINING_DATA_DIR\backups`。备份包包含通过 SQLite backup API 生成的 `training.db` 快照、`state.json` / `memory.json` 回滚副本、聊天/路由 JSONL、本地向量索引和 `manifest.json` 校验清单。恢复默认只校验，必须加 `--force` 才会覆盖；覆盖前脚本会自动为当前数据生成一份安全备份。恢复前建议先停止服务。
+`backup:data` 默认输出到 `TRAINING_DATA_DIR\backups`。备份包包含通过 SQLite backup API 生成的 `training.db` 快照、`state.json` / `memory.json` 回滚副本、聊天/路由 JSONL、JSON 模式任务队列、本地向量索引和 `manifest.json` 校验清单。恢复默认只校验，必须加 `--force` 才会覆盖；覆盖前脚本会自动为当前数据生成一份安全备份。恢复前建议先停止服务。
 
 如果使用 Qdrant，还需要额外备份 Qdrant volume 或 collection snapshot；如果只使用 BM25，则没有向量索引也能运行，但语义召回会下降。清洗后的资料目录 `training-clean` 也建议一起保留，方便重建 SQLite 数据、Qdrant 或本地向量索引。
 
@@ -966,6 +995,7 @@ npm run restore:data -- --from <backup.zip> --force
 | `TRAINING_STORAGE` | 主存储模式 | `sqlite`，回滚时设为 `json` |
 | `TRAINING_SQLITE_PATH` | SQLite 数据库路径 | 默认 `${TRAINING_DATA_DIR}/training.db` |
 | `TRAINING_SQLITE_BUSY_TIMEOUT_MS` | SQLite 忙等待超时 | `5000` |
+| `TRAINING_JOB_CONCURRENCY` | 本地异步任务并发数 | `1` |
 | `TRAINING_LLM_PROVIDER` | LLM 提供方 | `auto` |
 | `TRAINING_LLM_BASE_URL` | 模型 API 地址 | `https://api.deepseek.com/v1` |
 | `TRAINING_LLM_MODEL` | 模型名 | `deepseek-chat` 或兼容模型 |
@@ -1001,9 +1031,11 @@ npm run migrate:sqlite -- --dry
 npm run migrate:sqlite
 npm run eval:backup
 npm run eval:import
+npm run eval:jobs
+npm run eval:traces
 ```
 
-`eval:sqlite` 使用临时目录验证 JSON 导入、SQLite 读写、记忆迁移和 JSON 导出。`eval:backup` 使用临时目录验证备份、校验、无 `--force` 恢复演练、强制恢复和恢复后可读性。`eval:import` 验证本机目录导入、上传导入、同名知识库覆盖以及任务/邀请/考试/记忆不受影响。`migrate:sqlite` 面向当前 `TRAINING_DATA_DIR`，执行前会保留原 `state.json` / `memory.json` 备份。
+`eval:sqlite` 使用临时目录验证 JSON 导入、SQLite 读写、记忆迁移和 JSON 导出。`eval:backup` 使用临时目录验证备份、校验、无 `--force` 恢复演练、强制恢复和恢复后可读性。`eval:import` 验证同步导入服务。`eval:jobs` 验证异步导入、自动 embedding 子任务、取消、重启恢复和 JSON 任务存储。`eval:traces` 验证脱敏 Trace 读取和过滤。`migrate:sqlite` 面向当前 `TRAINING_DATA_DIR`，执行前会保留原 `state.json` / `memory.json` 备份。
 
 ### 12.3 业务烟测
 

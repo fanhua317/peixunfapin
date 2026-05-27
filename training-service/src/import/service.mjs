@@ -87,7 +87,7 @@ async function summarizeKnowledgeBases() {
   return { runtime, knowledgeBases };
 }
 
-async function runExclusiveImport(type, work) {
+export async function runExclusiveImport(type, work) {
   if (activeImport) {
     const error = new Error(`已有导入任务正在运行：${activeImport.type}`);
     error.statusCode = 409;
@@ -101,13 +101,24 @@ async function runExclusiveImport(type, work) {
   }
 }
 
+function throwIfCancelled(signal) {
+  if (signal?.aborted) {
+    const error = new Error("任务已取消");
+    error.code = "JOB_CANCELLED";
+    throw error;
+  }
+}
+
 function shouldClean({ cleanMode, extensions }) {
   if (cleanMode === "clean") return true;
   if (cleanMode === "direct") return false;
   return hasAnyExt(extensions, CLEAN_REQUIRED_EXTENSIONS);
 }
 
-async function importPreparedDirectory({ sourceDir, kbName, aliases, cleanMode, stagingDir }) {
+export async function importPreparedDirectory({ sourceDir, kbName, aliases, cleanMode, stagingDir, onProgress, signal }) {
+  const report = typeof onProgress === "function" ? onProgress : async () => {};
+  throwIfCancelled(signal);
+  await report({ percent: 8, stage: "scan", label: "扫描资料目录", detail: sourceDir });
   const files = await walkFiles(sourceDir, { extensions: ALLOWED_IMPORT_EXTENSIONS });
   if (!files.length) throw new Error("没有找到支持导入的文件。");
   const extensions = uniqueExtensions(files);
@@ -120,6 +131,8 @@ async function importPreparedDirectory({ sourceDir, kbName, aliases, cleanMode, 
   let cleanResult = null;
   const inputDir = clean ? path.join(stagingDir, "clean") : sourceDir;
   if (clean) {
+    throwIfCancelled(signal);
+    await report({ percent: 24, stage: "clean", label: "清洗原始资料", detail: `${files.length} 个文件` });
     cleanResult = await cleanRawDirectory({ rawDir: sourceDir, cleanDir: inputDir });
     if (cleanResult.failed) {
       throw new Error(`清洗失败 ${cleanResult.failed} 个文件：${cleanResult.failures.map((item) => item.input).join(", ")}`);
@@ -127,9 +140,14 @@ async function importPreparedDirectory({ sourceDir, kbName, aliases, cleanMode, 
     if (!cleanResult.cleaned) throw new Error("清洗后没有生成可导入的 Markdown 文件。");
   }
 
+  throwIfCancelled(signal);
+  await report({ percent: clean ? 62 : 36, stage: "import", label: "语义切片并写入知识库", detail: inputDir });
   const imported = await importCleanDirectory({ inputDir, kbName, aliases });
+  throwIfCancelled(signal);
+  await report({ percent: 88, stage: "quality", label: "计算知识库质量", detail: imported.kbName });
   const overview = await summarizeKnowledgeBases();
   const quality = overview.knowledgeBases.find((kb) => kb.id === imported.kbId)?.quality || null;
+  await report({ percent: 100, stage: "done", label: "导入完成", detail: imported.kbName });
   return {
     ok: true,
     mode: clean ? "cleaned" : "direct",
@@ -154,7 +172,7 @@ export async function getImportOverview() {
       allowedExtensions: [...ALLOWED_IMPORT_EXTENSIONS],
       maxUploadBytes: importMaxUploadBytes(),
       maxUploadMB: Math.round(importMaxUploadBytes() / 1024 / 1024),
-      vectorRebuild: "manual",
+      vectorRebuild: "async-job",
     },
     retrievalMode: overview.runtime.retrievalMode,
     knowledgeBases: overview.knowledgeBases,
@@ -176,28 +194,33 @@ export async function importFromDirectory({ inputDir, kbName, aliases = [], clea
   });
 }
 
+export async function stageUploadedFiles({ files, stagingDir }) {
+  const list = Array.isArray(files) ? files : [];
+  if (!list.length) throw new Error("没有收到上传文件。");
+  const totalBytes = list.reduce((sum, file) => sum + Number(file.content?.length || 0), 0);
+  if (totalBytes > importMaxUploadBytes()) {
+    throw new Error(`上传文件总量超过限制：${Math.round(importMaxUploadBytes() / 1024 / 1024)}MB`);
+  }
+  const uploadDir = path.join(stagingDir, "upload");
+  await mkdir(uploadDir, { recursive: true });
+  let index = 0;
+  for (const file of list) {
+    const relative = safeRelativePath(file.relativePath || file.filename, `upload-${index}${path.extname(file.filename || "") || ".txt"}`);
+    const ext = path.extname(relative).toLowerCase();
+    if (!ALLOWED_IMPORT_EXTENSIONS.has(ext)) throw new Error(`不支持的文件类型：${relative}`);
+    const target = path.resolve(uploadDir, relative);
+    if (!target.startsWith(uploadDir)) throw new Error(`非法上传路径：${relative}`);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, file.content);
+    index += 1;
+  }
+  return { uploadDir, fileCount: list.length, totalBytes };
+}
+
 export async function importUploadedFiles({ files, kbName, aliases = [], cleanMode = "auto" }) {
   return await runExclusiveImport("upload", async () => {
-    const list = Array.isArray(files) ? files : [];
-    if (!list.length) throw new Error("没有收到上传文件。");
-    const totalBytes = list.reduce((sum, file) => sum + Number(file.content?.length || 0), 0);
-    if (totalBytes > importMaxUploadBytes()) {
-      throw new Error(`上传文件总量超过限制：${Math.round(importMaxUploadBytes() / 1024 / 1024)}MB`);
-    }
     const stagingDir = path.join(dataDir, "imports", `upload-${timestampId()}`);
-    const uploadDir = path.join(stagingDir, "upload");
-    await mkdir(uploadDir, { recursive: true });
-    let index = 0;
-    for (const file of list) {
-      const relative = safeRelativePath(file.relativePath || file.filename, `upload-${index}${path.extname(file.filename || "") || ".txt"}`);
-      const ext = path.extname(relative).toLowerCase();
-      if (!ALLOWED_IMPORT_EXTENSIONS.has(ext)) throw new Error(`不支持的文件类型：${relative}`);
-      const target = path.resolve(uploadDir, relative);
-      if (!target.startsWith(uploadDir)) throw new Error(`非法上传路径：${relative}`);
-      await mkdir(path.dirname(target), { recursive: true });
-      await writeFile(target, file.content);
-      index += 1;
-    }
+    const { uploadDir } = await stageUploadedFiles({ files, stagingDir });
     return await importPreparedDirectory({
       sourceDir: uploadDir,
       kbName: kbName || "上传资料库",

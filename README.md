@@ -20,6 +20,8 @@ node D:\juzhou-agent\peixun\training-service\src\server.mjs
 ```text
 http://127.0.0.1:8787/
 http://127.0.0.1:8787/imports
+http://127.0.0.1:8787/jobs
+http://127.0.0.1:8787/traces
 ```
 
 3. 可选：在 OpenClaw 中安装插件，让外部 Agent 调用培训工具：
@@ -52,6 +54,7 @@ state.json                 # 旧版业务状态；首次迁移来源、export:js
 memory.json                # 旧版长期记忆；首次迁移来源、export:json 回滚目标
 conversation-history.jsonl # 老板端聊天和工具调用历史，按 session 追加
 agent-traces.jsonl         # 意图路由和确认链路轨迹
+jobs.json                  # JSON 回滚模式下的异步任务队列
 vector-index-bge-m3.json   # 可选，本地向量索引
 ```
 
@@ -75,10 +78,12 @@ src/domain          # 知识库、员工、任务、邀请、考试、报表业�
 src/ai              # 意图识别、讲义、答疑、出题、软文、LLM JSON 调用
 src/memory          # 本地短期会话记忆、长期偏好记忆、记忆策略和召回
 src/import          # 资料清洗、网页上传、本机目录导入和语义切片写入
+src/jobs            # 本地异步任务队列，执行导入和本地向量索引重建
 src/semantic-chunking.mjs # 业务语义切片，生成 parent-child RAG 结构
 src/rag.mjs         # BM25 + 向量混合检索，命中 child 后展开 parent
 src/intent-confirmation.mjs # 操作确认 token，防止误确认执行
 src/agent-trace.mjs # Agent 路由轨迹 JSONL 日志
+src/traces.mjs      # 脱敏 Agent Trace 查询
 public/src          # 无构建浏览器 ES modules
 ```
 
@@ -97,6 +102,8 @@ public/src          # 无构建浏览器 ES modules
 cd D:\juzhou-agent\peixun\training-service
 npm run check
 npm run eval:import
+npm run eval:jobs
+npm run eval:traces
 npm run eval:sqlite
 npm run smoke
 npm run eval:rag -- --retrieval-only
@@ -122,7 +129,7 @@ npm run backup:verify -- --from D:\OpenClawData\training-index\backups\training-
 npm run restore:data -- --from D:\OpenClawData\training-index\backups\training-backup-YYYYMMDD-HHmmss.zip --force
 ```
 
-`backup:data` 默认输出到 `TRAINING_DATA_DIR\backups`，包含 `training.db` 快照、JSON 回滚副本、聊天/路由日志和本地向量索引。恢复属于高风险操作，执行 `--force` 前建议先停止服务；脚本会在覆盖前自动为当前数据再做一份安全备份。
+`backup:data` 默认输出到 `TRAINING_DATA_DIR\backups`，包含 `training.db` 快照、JSON 回滚副本、聊天/路由日志、JSON 模式任务队列和本地向量索引。恢复属于高风险操作，执行 `--force` 前建议先停止服务；脚本会在覆盖前自动为当前数据再做一份安全备份。
 
 ## 打包给 Windows 用户
 
@@ -156,6 +163,8 @@ TRAINING_SQLITE_BUSY_TIMEOUT_MS=5000
 网页老板端会先做意图路由：发布培训、查询进度等培训意图走系统内置技能；其他普通聊天只走直连大模型 API。未配置 `TRAINING_LLM_API_KEY`、`DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY` 时，普通聊天会明确报配置缺失，不使用本地话术。
 
 意图路由采用防误判机制：本地规则先判断高置信操作，模糊表达可交给 LLM router，低置信或高风险操作返回确认卡片。确认执行时必须带服务端签发的 `confirmationToken`，token 会绑定原始消息和 skill，过期、缺失或消息被替换都会拒绝执行。每次 `/api/agent/dispatch` 和 `/api/agent/stream` 的路由结果会写入数据目录下的 `agent-traces.jsonl`，可用 `TRAINING_AGENT_TRACE=0` 关闭。
+
+老板端新增 `/jobs` 任务中心和 `/traces` Trace 页面。`/imports` 页面提交导入后会创建后台任务，导入成功后自动创建当前知识库的本地向量索引任务；如果 Ollama/bge-m3 不可用，embedding 子任务会失败并显示原因，但已导入知识库仍可用 BM25 检索。Trace 页面只展示脱敏摘要，不展示完整聊天内容。
 
 老板端聊天已加入本地记忆模块：前端会为浏览器生成 `sessionId`，服务端用最近会话和可召回的长期偏好改善普通聊天、培训草稿默认题数/及格分、软文长度/渠道/口吻。记忆不是事实库，产品资料仍必须来自 RAG；删除、发布、成绩、API Key、联系方式等敏感或高风险内容不会自动写入长期记忆。用户可以在聊天里说“查看记忆”“清空全部记忆”，也可以通过 `/api/memory` 查看、确认、归档或删除记忆。
 

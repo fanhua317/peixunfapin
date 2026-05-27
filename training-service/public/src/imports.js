@@ -54,7 +54,7 @@ function renderOverview() {
         <div>
           <p class="section-kicker">导入管理</p>
           <h1>知识库导入与质量检查</h1>
-          <p>支持本机目录导入和浏览器上传。导入后 BM25 立即可用，向量索引按页面提示手动重建。</p>
+          <p>支持本机目录导入和浏览器上传。导入会进入后台任务队列，完成后 BM25 立即可用，并自动创建本地向量索引任务。</p>
         </div>
         <a class="nav-button secondary" href="/">返回聊天</a>
       </div>
@@ -131,12 +131,47 @@ function renderImportResult(result) {
       <div><span>表格行父块</span><strong>${escapeHtml(imported.tableRowParentCount || 0)} 个</strong></div>
       <div><span>最长子块</span><strong>${escapeHtml(imported.maxChildChars || 0)} 字</strong></div>
       <div><span>导入模式</span><strong>${escapeHtml(result.mode || "-")}</strong></div>
+      <div><span>向量任务</span><strong>${escapeHtml(result.embeddingJobId || "未创建")}</strong></div>
     </div>
     ${warnings ? `<div class="warning-box"><ul class="compact-list">${warnings}</ul></div>` : `<p class="muted">资料已导入，BM25 检索可立即使用。</p>`}
-    <div class="task-section-title">向量索引手动重建</div>
+    <div class="task-section-title">向量索引</div>
     <pre class="command-box">${escapeHtml(result.embedCommands?.knowledgeBase || "npm run embed:local -- --full")}</pre>
-    <p class="muted">如果想重建全部知识库索引，可运行：${escapeHtml(result.embedCommands?.full || "npm run embed:local -- --full")}</p>
+    <p class="muted">页面导入会自动创建当前知识库的向量索引任务；如需手动重建，仍可运行上面的命令。</p>
   </div>`;
+}
+
+function renderJobCreated(job) {
+  return `<div class="result-card">
+    <h2>导入任务已创建</h2>
+    <p class="muted">任务会在后台执行，导入成功后会自动创建当前知识库的本地向量索引任务。</p>
+    ${renderStageProgress({
+      label: job.progress?.label || "等待执行",
+      detail: job.progress?.detail || job.id,
+      progress: job.progress?.percent || 0,
+    })}
+    <div class="button-row">
+      <a class="nav-button" href="/jobs">打开任务中心</a>
+    </div>
+  </div>`;
+}
+
+async function waitForJob(jobId) {
+  let last = null;
+  for (let index = 0; index < 180; index += 1) {
+    const result = await api(`/api/jobs/${encodeURIComponent(jobId)}`);
+    last = result.job;
+    if (last.status === "succeeded") return last;
+    if (["failed", "cancelled"].includes(last.status)) {
+      const error = new Error(last.error || `任务${last.status === "cancelled" ? "已取消" : "失败"}`);
+      error.job = last;
+      throw error;
+    }
+    setResult(renderJobCreated(last));
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  const error = new Error("任务仍在后台执行，请到任务中心查看。");
+  error.job = last;
+  throw error;
 }
 
 function setResult(html) {
@@ -162,16 +197,19 @@ async function handleDirectoryImport(event) {
   setResult(renderStageProgress({ label: "读取目录中", detail: "正在检查本机资料目录", progress: 22 }));
   try {
     setResult(renderStageProgress({ label: "导入知识库中", detail: "正在清洗、切片并写入数据库", progress: 55 }));
-    const result = await api("/api/imports/directory", {
+    const { job } = await api("/api/jobs/import/directory", {
       method: "POST",
       body: JSON.stringify({
         inputDir: formValue(form, "inputDir"),
         kbName: formValue(form, "kbName"),
         aliases: formValue(form, "aliases"),
         cleanMode: formValue(form, "cleanMode"),
+        autoEmbed: true,
       }),
     });
-    setResult(renderImportResult(result));
+    setResult(renderJobCreated(job));
+    const completed = await waitForJob(job.id);
+    setResult(renderImportResult(completed.result || {}));
     overview = await api("/api/imports");
     document.querySelector(".import-kb-grid").innerHTML = (overview.knowledgeBases || []).map(renderKbCard).join("");
   } catch (error) {
@@ -210,8 +248,11 @@ async function handleUploadImport(event) {
       formData.append("files", file, file.name);
     });
     setResult(renderStageProgress({ label: "导入知识库中", detail: "上传完成后正在清洗和切片", progress: 58 }));
-    const result = await api("/api/imports/upload", { method: "POST", body: formData });
-    setResult(renderImportResult(result));
+    formData.append("autoEmbed", "true");
+    const { job } = await api("/api/jobs/import/upload", { method: "POST", body: formData });
+    setResult(renderJobCreated(job));
+    const completed = await waitForJob(job.id);
+    setResult(renderImportResult(completed.result || {}));
     overview = await api("/api/imports");
     document.querySelector(".import-kb-grid").innerHTML = (overview.knowledgeBases || []).map(renderKbCard).join("");
   } catch (error) {

@@ -120,7 +120,7 @@ try {
   const overview = await getImportOverview();
   assert(overview.knowledgeBases.some((kb) => kb.id === first.imported.kbId), "overview should include directory kb");
   assert(overview.knowledgeBases.some((kb) => kb.id === upload.imported.kbId), "overview should include upload kb");
-  assert(overview.config.vectorRebuild === "manual", "expected manual vector rebuild config");
+  assert(overview.config.vectorRebuild === "async-job", "expected async vector rebuild config");
   results.push({ name: "import overview", ok: true, knowledgeBases: overview.knowledgeBases.length });
 
   console.log(JSON.stringify({ ok: true, tempDir, total: results.length, results }, null, 2));

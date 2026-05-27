@@ -18,6 +18,8 @@
     "eval:sqlite": "node scripts/eval-sqlite.mjs",
     "eval:backup": "node scripts/eval-backup.mjs",
     "eval:import": "node scripts/eval-import.mjs",
+    "eval:jobs": "node scripts/eval-jobs.mjs",
+    "eval:traces": "node scripts/eval-traces.mjs",
     "eval:intent": "node scripts/eval-intent.mjs",
     "eval:memory": "node scripts/eval-memory.mjs",
     "eval:rag": "node scripts/eval-rag.mjs",

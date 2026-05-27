@@ -137,6 +137,7 @@ export async function createDataBackup(options = {}) {
     await writeJson(path.join(stagingDir, "memory.json"), memory);
     await copyOptionalRuntimeFile(conversationHistoryPath, stagingDir, "conversation-history.jsonl");
     await copyOptionalRuntimeFile(path.join(dataDir, "agent-traces.jsonl"), stagingDir, "agent-traces.jsonl");
+    await copyOptionalRuntimeFile(path.join(dataDir, "jobs.json"), stagingDir, "jobs.json");
     await copyVectorIndexes(stagingDir);
 
     const stagedFiles = (await collectFiles(stagingDir)).filter((file) => file.path !== "manifest.json");
@@ -294,6 +295,7 @@ export async function restoreDataBackup(options = {}) {
       file.path === "memory.json" ||
       file.path === "conversation-history.jsonl" ||
       file.path === "agent-traces.jsonl" ||
+      file.path === "jobs.json" ||
       /^vector-index-.+\.json$/i.test(file.path)
     ) {
       restored.push(await writeRestoredFile(file.path, data));
