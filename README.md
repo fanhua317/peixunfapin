@@ -101,6 +101,8 @@ npm run eval:intent
 npm run eval:memory
 ```
 
+`eval:rag -- --retrieval-only` 当前固定覆盖 30 条电机业务问题，重点检查型号参数、结构原理、制造工艺、质量检测、销售话术、多语言资料和标准资料的 Top1/Top3 命中。
+
 SQLite 迁移和 JSON 回滚导出：
 
 ```powershell

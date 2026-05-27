@@ -307,6 +307,8 @@ npm run eval:memory
 npm run eval:rag -- --retrieval-only
 ```
 
+RAG 检索评测用例维护在 `scripts/fixtures/rag-eval-cases.mjs`，当前共 30 条。默认建议先跑 `--retrieval-only`，以 Top1/Top3 命中、hybrid 是否不低于 BM25 和分类统计作为检索质量回归门槛；完整 `npm run eval:rag` 会额外调用大模型检查答案来源、长度和 OCR 占位。
+
 ## 当前限制
 
 - 服务器模式不建议运行大规模 embedding 构建；embedding 推荐在本机离线构建后迁移 Qdrant snapshot 或本地向量索引。
