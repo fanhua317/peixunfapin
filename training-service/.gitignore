@@ -1,3 +1,9 @@
 data/
 *.log
 .env
+*.db
+*.db-shm
+*.db-wal
+memory.json
+conversation-history.jsonl
+agent-traces.jsonl

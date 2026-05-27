@@ -38,6 +38,8 @@ chmod +x start-server.sh
 ./start-server.sh
 ```
 
+The start script installs production dependencies with `npm ci --omit=dev` on first run, including the native SQLite module.
+
 On Windows Server, install Node.js 24 LTS and run PowerShell as Administrator:
 
 ```powershell
@@ -64,14 +66,21 @@ data/training-index
 Back up these files regularly:
 
 ```text
-data/training-index/state.json
-data/training-index/memory.json
+data/training-index/training.db
+data/training-index/training.db-shm
+data/training-index/training.db-wal
 data/training-index/conversation-history.jsonl
 data/training-index/agent-traces.jsonl
 data/training-index/vector-index-bge-m3.json
 ```
 
-`state.json` is the business state. `memory.json` and `conversation-history.jsonl` are the local Agent memory files. `agent-traces.jsonl` is useful for intent-routing diagnostics. `vector-index-bge-m3.json` only exists when the local vector backend is used.
+`training.db` is the default business state and local memory database. `conversation-history.jsonl` remains an append-only chat history file, and `agent-traces.jsonl` is useful for intent-routing diagnostics. `vector-index-bge-m3.json` only exists when the local vector backend is used.
+
+On first SQLite startup, old `state.json` and `memory.json` files are imported automatically and kept as backups. To temporarily roll back to JSON storage, set:
+
+```text
+TRAINING_STORAGE=json
+```
 
 ## RAG With bge-m3
 
@@ -92,5 +101,5 @@ TRAINING_VECTOR_BACKEND=local
 TRAINING_EMBEDDING_MODEL=bge-m3
 ```
 
-If you run Qdrant instead, keep the Qdrant volume or snapshot together with `state.json`; otherwise retrieval will fall back to BM25 until vectors are rebuilt or restored.
+If you run Qdrant instead, keep the Qdrant volume or snapshot together with `training.db`; otherwise retrieval will fall back to BM25 until vectors are rebuilt or restored.
 

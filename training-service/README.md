@@ -28,31 +28,50 @@ D:\juzhou-agent\peixun\training-service
 ```text
 D:\OpenClawData\training-raw    # 原始 PDF、Excel、CSV、TXT、Markdown
 D:\OpenClawData\training-clean  # 清洗后的 Markdown/TXT
-D:\OpenClawData\training-index  # state.json、memory.json、conversation-history.jsonl、本地向量索引
+D:\OpenClawData\training-index  # training.db、JSON 回滚文件、conversation-history.jsonl、本地向量索引
 D:\OpenClawData\qdrant          # 本机 Qdrant Docker 持久化目录
 ```
 
-默认索引文件：
+默认主数据库：
+
+```text
+D:\OpenClawData\training-index\training.db
+D:\OpenClawData\training-index\training.db-shm
+D:\OpenClawData\training-index\training.db-wal
+```
+
+旧版 JSON 文件仍保留为首次迁移来源和回滚导出目标：
 
 ```text
 D:\OpenClawData\training-index\state.json
-```
-
-本地 Agent 记忆也放在同一数据目录，默认文件为：
-
-```text
 D:\OpenClawData\training-index\memory.json
 D:\OpenClawData\training-index\conversation-history.jsonl
 D:\OpenClawData\training-index\agent-traces.jsonl
 D:\OpenClawData\training-index\vector-index-bge-m3.json
 ```
 
-`memory.json` 保存长期偏好、会话摘要和待确认记忆；`conversation-history.jsonl` 追加老板端聊天历史；`agent-traces.jsonl` 记录意图路由和确认链路；`vector-index-bge-m3.json` 是可选的本地向量索引。它们不提交 Git，也不改变 `state.json` 的 `meta.version = 1`。
+`training.db` 保存业务状态和长期记忆；`conversation-history.jsonl` 追加老板端聊天历史；`agent-traces.jsonl` 记录意图路由和确认链路；`vector-index-bge-m3.json` 是可选的本地向量索引。它们不提交 Git。导出的 `state.json` 仍保持 `meta.version = 1`，用于回滚和兼容。
 
 也可以用环境变量覆盖：
 
 ```powershell
 $env:TRAINING_DATA_DIR="D:\OpenClawData\training-index"
+$env:TRAINING_STORAGE="sqlite"
+npm start
+```
+
+SQLite 默认启用。首次启动时，如果 `training.db` 不存在或尚未初始化，会自动从 `state.json` 和 `memory.json` 导入并保留备份。手动迁移与回滚导出：
+
+```powershell
+npm run migrate:sqlite -- --dry
+npm run migrate:sqlite
+npm run export:json
+```
+
+如需临时回退旧 JSON 存储：
+
+```powershell
+$env:TRAINING_STORAGE="json"
 npm start
 ```
 
@@ -150,7 +169,7 @@ Qdrant 方式：
 
 1. 本机运行 `npm run clean:raw`、`npm run import:clean`、`npm run embed:chunks`。
 2. 在本机 Qdrant 为 collection 创建 snapshot：`npm run qdrant:snapshot -- create`。
-3. 传输 `state.json`、`memory.json`、清洗资料和 Qdrant snapshot 到服务器。
+3. 传输 `training.db`、清洗资料和 Qdrant snapshot 到服务器；如果从旧版本升级，也可传输 `state.json`、`memory.json` 让服务首次启动自动迁移。
 4. 服务器用 Docker 运行 Qdrant 并恢复 snapshot。
 5. 服务器启动 `node src/server.mjs` 或使用 `pm2/systemd` 管理。
 
@@ -158,6 +177,7 @@ Qdrant 方式：
 
 ```powershell
 $env:TRAINING_DATA_DIR="D:\OpenClawData\training-index"
+$env:TRAINING_STORAGE="sqlite"
 $env:QDRANT_URL="http://127.0.0.1:6333"
 $env:QDRANT_COLLECTION="training_chunks_bge_m3"
 $env:TRAINING_HYBRID_RETRIEVAL="on"
@@ -253,6 +273,7 @@ D:\OpenClawData\training-clean
 
 ```powershell
 npm run check
+npm run eval:sqlite
 npm run smoke
 npm run eval:intent
 npm run eval:memory

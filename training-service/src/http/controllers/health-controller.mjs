@@ -1,5 +1,5 @@
 import { getRuntimeHealth } from "../../health.mjs";
-import { dataDir, loadState } from "../../store.mjs";
+import { dataDir, getStorageStatus, loadState } from "../../store.mjs";
 import { sendJson } from "../response.mjs";
 
 export async function handleHealth(req, res, url) {
@@ -26,6 +26,7 @@ export async function handleHealth(req, res, url) {
     llmConfigured: runtime.llmConfigured,
     retrievalMode: runtime.retrievalMode,
     dataDir,
+    storage: getStorageStatus(),
     counts: state ? {
       knowledgeBases: state.knowledgeBases?.length || 0,
       documents: state.documents?.length || 0,

@@ -415,21 +415,21 @@ A：目前不适合作为独立能力。当前图片目录更像图片恢复和�
 
 ## 9. 数据与存储
 
-### Q36：当前为什么继续用 state.json？
+### Q36：为什么从 state.json 迁移到 SQLite？
 
-A：项目当前是 MVP，数据规模和并发要求较低。`state.json` 简单、可迁移、便于本地部署，也方便快速验证业务闭环。
+A：`state.json` 在 MVP 阶段很适合快速验证业务闭环，但随着培训任务、邀请、考试、记忆和后续 skill 增加，JSON 文件会遇到并发写入、局部查询、备份恢复和数据校验的问题。
 
-但它不是长期方案。后续如果报价、发布、视频和权限都接入，应考虑 SQLite、PostgreSQL 或独立业务数据库。
+当前已默认接入 SQLite：`training.db` 保存业务状态和长期记忆，`state.json` 和 `memory.json` 保留为首次迁移来源和 `export:json` 回滚格式。这样仍保持本地部署简单，同时比单个 JSON 文件更可靠。正式多租户 SaaS 化时再考虑 PostgreSQL。
 
 ### Q37：记忆存储怎么实现？
 
-A：当前把业务状态和 Agent 记忆分开存储。
+A：当前把业务状态和 Agent 记忆统一迁移到 SQLite，但仍保持逻辑分层。
 
-- `state.json` 继续保存知识库、任务、邀请、考试和报表等业务状态，`meta.version` 仍是 1。
-- `memory.json` 保存长期偏好、会话摘要、待确认记忆和记忆状态。
+- `training.db` 保存知识库、任务、邀请、考试、报表、长期偏好、会话摘要、待确认记忆和记忆状态。
+- `state.json` 和 `memory.json` 是旧版兼容文件，首次启动 SQLite 会自动导入，`npm run export:json` 可以重新导出。
 - `conversation-history.jsonl` 追加完整聊天和工具调用摘要，按 `sessionId` 区分会话。
 
-这些文件都放在 `TRAINING_DATA_DIR` 下，默认是 `D:\OpenClawData\training-index`，不提交 Git。这样既保留了当前 MVP 的轻量部署方式，又避免把大量聊天历史塞进业务状态文件。
+这些文件都放在 `TRAINING_DATA_DIR` 下，默认是 `D:\OpenClawData\training-index`，不提交 Git。大量聊天历史继续放在 JSONL 里，避免把日志塞进主数据库。
 
 ## 10. 安全与可靠性
 
@@ -474,13 +474,14 @@ A：目前主要有：
 
 ```powershell
 npm run check
+npm run eval:sqlite
 npm run smoke
 npm run eval:rag -- --retrieval-only
 npm run eval:intent
 npm run eval:memory
 ```
 
-`check` 检查语法，`smoke` 跑核心业务闭环，`eval:rag` 验证检索效果，`eval:intent` 验证意图路由，`eval:memory` 验证记忆保存、召回、覆盖和敏感信息拦截。
+`check` 检查语法，`eval:sqlite` 验证 JSON 导入、SQLite 读写、记忆迁移和 JSON 导出，`smoke` 跑核心业务闭环，`eval:rag` 验证检索效果，`eval:intent` 验证意图路由，`eval:memory` 验证记忆保存、召回、覆盖和敏感信息拦截。
 
 ### Q42：为什么要单独做意图评测？
 
@@ -522,7 +523,7 @@ A：普通套壳主要是把用户消息转发给大模型。这个项目有业�
 
 A：可以诚实说：
 
-- 当前持久化还是 `state.json`，不适合多人高并发。
+- 当前持久化已升级为 SQLite，但仍是单机本地数据库，不适合直接包装成多租户 SaaS。
 - 业务语义切片目前主要覆盖培训和软文资料，法律、报价、合同等新领域还要补领域规则。
 - 当前没有完整企业账号权限体系。
 - 报价、发布、视频生成还未完全接入。
@@ -584,7 +585,7 @@ A：因为当前项目是本地部署 MVP，核心要求是少依赖、可控、
   + 用户确认/删除接口
 ```
 
-这样能先满足普通聊天连续性、培训默认参数和软文风格偏好。后续如果业务规模扩大，再把 `memory.json` 迁移到数据库或接入专业 memory service。
+这样能先满足普通聊天连续性、培训默认参数和软文风格偏好。当前长期记忆已随业务状态一起迁入 SQLite，后续如果业务规模扩大，再考虑 PostgreSQL 或专业 memory service。
 
 ### Q54：短期记忆和长期记忆怎么区分？
 
@@ -626,6 +627,6 @@ A：不会把记忆当事实库。项目里明确区分：
 - 视频生成 skill 的 CLI/API 适配方案。
 - 法律、报价、合同等新领域的业务语义切片规则。
 - BGE-M3、本地向量库、reranker 的具体选型。
-- 记忆模块从 JSON 迁移到数据库或外部 memory service 的方案。
-- 数据库从 `state.json` 迁移到 SQLite/PostgreSQL 的方案。
+- SQLite 备份恢复、schema migration 和数据校验方案。
+- 从单机 SQLite 迁移到 PostgreSQL 或外部 memory service 的方案。
 - 面试中更适合表达的项目难点、取舍和结果指标。

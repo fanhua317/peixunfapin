@@ -11,6 +11,8 @@ export HOST="${HOST:-0.0.0.0}"
 export PORT="${PORT:-8787}"
 export PUBLIC_BASE_URL_MODE="${PUBLIC_BASE_URL_MODE:-request}"
 export TRAINING_DATA_DIR="${TRAINING_DATA_DIR:-$(pwd)/data/training-index}"
+export TRAINING_STORAGE="${TRAINING_STORAGE:-sqlite}"
+export TRAINING_SQLITE_BUSY_TIMEOUT_MS="${TRAINING_SQLITE_BUSY_TIMEOUT_MS:-5000}"
 export TRAINING_LLM_PROVIDER="${TRAINING_LLM_PROVIDER:-auto}"
 export TRAINING_LLM_BASE_URL="${TRAINING_LLM_BASE_URL:-https://api.deepseek.com/v1}"
 export TRAINING_LLM_MODEL="${TRAINING_LLM_MODEL:-deepseek-chat}"
@@ -21,4 +23,7 @@ export TRAINING_EMBEDDING_MODEL="${TRAINING_EMBEDDING_MODEL:-bge-m3}"
 export TRAINING_RAG_EMBEDDING_TIMEOUT_MS="${TRAINING_RAG_EMBEDDING_TIMEOUT_MS:-8000}"
 
 mkdir -p "$TRAINING_DATA_DIR"
+if [ ! -d "training-service/node_modules/better-sqlite3" ]; then
+  (cd training-service && npm ci --omit=dev)
+fi
 exec node training-service/src/server.mjs

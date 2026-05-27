@@ -41,14 +41,20 @@ D:\OpenClawData\qdrant
 D:\OpenClawData\ollama
 ```
 
-`training-index` 下除了业务状态 `state.json`，还会保存本地 Agent 记忆、路由轨迹和本地向量索引：
+`training-index` 下默认使用 SQLite 保存业务状态和本地 Agent 记忆，旧版 JSON 仍保留为首次迁移来源和回滚导出格式：
 
 ```text
-memory.json                # 长期偏好、会话摘要、待确认记忆
+training.db                # 默认主数据库：知识库、任务、邀请、考试、记忆
+training.db-shm            # SQLite WAL 辅助文件，可能存在
+training.db-wal            # SQLite WAL 辅助文件，可能存在
+state.json                 # 旧版业务状态；首次迁移来源、export:json 回滚目标
+memory.json                # 旧版长期记忆；首次迁移来源、export:json 回滚目标
 conversation-history.jsonl # 老板端聊天和工具调用历史，按 session 追加
 agent-traces.jsonl         # 意图路由和确认链路轨迹
 vector-index-bge-m3.json   # 可选，本地向量索引
 ```
+
+默认 `TRAINING_STORAGE=sqlite`，如需临时回退旧文件存储可设置 `TRAINING_STORAGE=json`。
 
 ## 推荐开发顺序
 
@@ -88,10 +94,19 @@ public/src          # 无构建浏览器 ES modules
 ```powershell
 cd D:\juzhou-agent\peixun\training-service
 npm run check
+npm run eval:sqlite
 npm run smoke
 npm run eval:rag -- --retrieval-only
 npm run eval:intent
 npm run eval:memory
+```
+
+SQLite 迁移和 JSON 回滚导出：
+
+```powershell
+npm run migrate:sqlite -- --dry
+npm run migrate:sqlite
+npm run export:json
 ```
 
 ## 打包给 Windows 用户
@@ -119,6 +134,8 @@ TRAINING_LLM_PROVIDER=auto
 TRAINING_LLM_BASE_URL=https://api.deepseek.com/v1
 TRAINING_LLM_MODEL=deepseek-chat
 TRAINING_LLM_API_KEY=你的 API Key
+TRAINING_STORAGE=sqlite
+TRAINING_SQLITE_BUSY_TIMEOUT_MS=5000
 ```
 
 网页老板端会先做意图路由：发布培训、查询进度等培训意图走系统内置技能；其他普通聊天只走直连大模型 API。未配置 `TRAINING_LLM_API_KEY`、`DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY` 时，普通聊天会明确报配置缺失，不使用本地话术。
@@ -127,7 +144,7 @@ TRAINING_LLM_API_KEY=你的 API Key
 
 老板端聊天已加入本地记忆模块：前端会为浏览器生成 `sessionId`，服务端用最近会话和可召回的长期偏好改善普通聊天、培训草稿默认题数/及格分、软文长度/渠道/口吻。记忆不是事实库，产品资料仍必须来自 RAG；删除、发布、成绩、API Key、联系方式等敏感或高风险内容不会自动写入长期记忆。用户可以在聊天里说“查看记忆”“清空全部记忆”，也可以通过 `/api/memory` 查看、确认、归档或删除记忆。
 
-知识库导入使用业务语义切片：`state.json` 里保留 `chunkParents` 作为父级业务上下文，`chunks` 作为检索子块并带 `parentId`、`childType`、`businessKeys`、`searchText`。检索时 BM25 和向量都命中 child，生成讲义、答疑、出题和软文时再展开 parent。
+知识库导入使用业务语义切片：SQLite 中保留 `chunkParents` 作为父级业务上下文，`chunks` 作为检索子块并带 `parentId`、`childType`、`businessKeys`、`searchText`。检索时 BM25 和向量都命中 child，生成讲义、答疑、出题和软文时再展开 parent。执行 `npm run export:json` 时仍会导出兼容的 `state.json`。
 
 ## 打包部署到服务器
 

@@ -59,6 +59,12 @@ New-Item -ItemType Directory -Force -Path (Join-Path $stageRoot "data\training-i
 
 Copy-Item -LiteralPath $NodePath -Destination (Join-Path $stageRoot "runtime\node.exe") -Force
 Copy-Directory -Source (Join-Path $repoRoot "training-service") -Destination (Join-Path $stageRoot "training-service") -ExcludeDirs @("data", ".tmp-smoke-data", "node_modules", "dist") -ExcludeFiles @("*.log")
+Push-Location (Join-Path $stageRoot "training-service")
+try {
+  npm ci --omit=dev
+} finally {
+  Pop-Location
+}
 Copy-Directory -Source (Join-Path $repoRoot "training-plugin") -Destination (Join-Path $stageRoot "training-plugin") -ExcludeDirs @("node_modules", "dist") -ExcludeFiles @("*.log")
 Copy-Item -LiteralPath (Join-Path $repoRoot "README.md") -Destination (Join-Path $stageRoot "README.md") -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "openclaw.training.example.json5") -Destination (Join-Path $stageRoot "openclaw.training.example.json5") -Force
@@ -73,6 +79,8 @@ if ($IncludeData) {
 $configEnv = @"
 # Juzhou Agent Training runtime config
 # Fill TRAINING_LLM_API_KEY to enable direct model calls for training drafts and quizzes.
+TRAINING_STORAGE=sqlite
+TRAINING_SQLITE_BUSY_TIMEOUT_MS=5000
 TRAINING_LLM_PROVIDER=auto
 TRAINING_LLM_BASE_URL=https://api.deepseek.com/v1
 TRAINING_LLM_MODEL=deepseek-chat
@@ -91,6 +99,8 @@ set "APP_DIR=%~dp0"
 set "PORT=$Port"
 set "HOST=127.0.0.1"
 set "TRAINING_DATA_DIR=%APP_DIR%data\training-index"
+set "TRAINING_STORAGE=sqlite"
+set "TRAINING_SQLITE_BUSY_TIMEOUT_MS=5000"
 set "OPENCLAW_CHAT_TIMEOUT_MS=3000"
 if exist "%APP_DIR%config.env" (
   for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%APP_DIR%config.env") do (

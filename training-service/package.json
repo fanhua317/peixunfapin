@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "juzhou-agent-training-service",
   "version": "0.1.0",
   "private": true,
@@ -10,6 +10,9 @@
     "import:clean": "node scripts/import-clean.mjs",
     "embed:chunks": "node scripts/embed-chunks.mjs",
     "embed:local": "node scripts/embed-local-index.mjs",
+    "migrate:sqlite": "node scripts/migrate-sqlite.mjs",
+    "export:json": "node scripts/export-json.mjs",
+    "eval:sqlite": "node scripts/eval-sqlite.mjs",
     "eval:intent": "node scripts/eval-intent.mjs",
     "eval:memory": "node scripts/eval-memory.mjs",
     "eval:rag": "node scripts/eval-rag.mjs",
@@ -20,10 +23,10 @@
   },
   "dependencies": {
     "@napi-rs/canvas": "0.1.100",
+    "better-sqlite3": "^12.10.0",
     "pdfjs-dist": "5.7.284"
   },
   "engines": {
     "node": ">=22.14.0"
   }
 }
-

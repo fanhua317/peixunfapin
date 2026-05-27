@@ -5,6 +5,7 @@ import path from "node:path";
 const tempDir = await mkdtemp(path.join(os.tmpdir(), "juzhou-memory-eval-"));
 process.env.TRAINING_DATA_DIR = tempDir;
 
+const { closeTrainingDatabase } = await import("../src/sqlite-store.mjs");
 const { createTaskDraft } = await import("../src/domain/drafts.mjs");
 const { verifyIntentConfirmationToken } = await import("../src/intent-confirmation.mjs");
 const { extractMemoryCandidates } = await import("../src/memory/extractor.mjs");
@@ -126,5 +127,6 @@ try {
   }, null, 2));
   process.exitCode = 1;
 } finally {
+  closeTrainingDatabase();
   await rm(tempDir, { recursive: true, force: true });
 }

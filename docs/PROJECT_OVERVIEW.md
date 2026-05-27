@@ -205,10 +205,12 @@ D:\juzhou-agent\peixun
 
 ### 5.3 数据存储
 
-- 当前使用 JSON 文件存储运行状态。
-- 默认路径：`D:\OpenClawData\training-index\state.json`。
-- 可通过 `TRAINING_DATA_DIR` 覆盖。
-- 本地 Agent 记忆不写入 `state.json`，单独保存在同目录的 `memory.json` 和 `conversation-history.jsonl`。
+- 当前默认使用 SQLite 保存业务状态和本地长期记忆。
+- 默认路径：`D:\OpenClawData\training-index\training.db`。
+- 可通过 `TRAINING_DATA_DIR` 覆盖数据目录，也可通过 `TRAINING_SQLITE_PATH` 指定数据库文件。
+- `TRAINING_STORAGE=sqlite|json` 控制存储模式，默认 `sqlite`；`json` 用于临时回滚。
+- 首次 SQLite 启动会从旧版 `state.json` 和 `memory.json` 导入，导入前保留 `.backup-时间戳.json`。
+- `conversation-history.jsonl`、`agent-traces.jsonl`、本地向量索引和 Qdrant 不迁入 SQLite，继续作为追加文件或外部索引存在。
 - 本地向量索引默认保存在同目录的 `vector-index-{model}.json`，例如 `vector-index-bge-m3.json`。
 
 主要数据集合：
@@ -224,14 +226,17 @@ D:\juzhou-agent\peixun
 - `contentDrafts`：后续文章/内容草稿预留。
 - `events`：业务事件日志。
 
-本地记忆文件：
+本地运行文件：
 
+- `training.db`：默认主数据库，保存业务集合和长期记忆集合。
+- `training.db-shm` / `training.db-wal`：SQLite WAL 辅助文件，可能存在。
+- `state.json`：旧版业务状态；首次迁移来源和 `npm run export:json` 导出目标。
 - `memory.json`：长期偏好、短期会话摘要、待确认记忆和记忆状态。
 - `conversation-history.jsonl`：老板端聊天消息和工具调用摘要，按 `sessionId` 追加。
 - `agent-traces.jsonl`：意图路由、防误判确认和执行轨迹。
 - `vector-index-bge-m3.json`：可选的本地向量索引，使用 local vector backend 时生成。
 
-JSON 存储适合当前 MVP 和小团队使用。后续如果多人高并发或数据量增长，建议迁移到 SQLite/PostgreSQL。
+SQLite 采用“集合分表 + 完整 JSON 原文保留”的兼容方案，外层 domain/controller 仍通过 `loadState`、`saveState`、`mutateState` 和 memory store API 访问数据。这样既提升本地持久化可靠性，又保留 JSON 导出和回滚能力。正式多用户 SaaS 化时再考虑 PostgreSQL。
 
 ### 5.4 大模型调用
 
@@ -337,7 +342,7 @@ flowchart TD
     B --> D["AI 编排层<br/>src/ai"]
     D --> E["RAG 检索层<br/>rag / quality / chunking"]
     D --> F["LLM 适配层<br/>direct-llm / gateway"]
-    C --> G["JSON 状态存储<br/>state.json"]
+    C --> G["SQLite 本地存储<br/>training.db"]
     E --> G
     E --> H["本地向量索引 / Qdrant / Ollama"]
     I["OpenClaw Plugin"] --> B
@@ -464,7 +469,7 @@ training-service/src/memory
 
 当前拆分：
 
-- `store.mjs`：读写 `memory.json`，追加 `conversation-history.jsonl`。
+- `store.mjs`：默认读写 SQLite 中的记忆集合，JSON 模式下读写 `memory.json`，并始终追加 `conversation-history.jsonl`。
 - `policy.mjs`：判断哪些输入可记、待确认或禁止保存。
 - `extractor.mjs`：从用户输入和执行结果中提取记忆候选。
 - `retrieval.mjs`：按当前问题召回近期会话和长期偏好。
@@ -533,9 +538,9 @@ training-service/src/store.mjs
 职责：
 
 - 确认数据目录存在。
-- 加载 `state.json`。
+- 根据 `TRAINING_STORAGE` 加载 SQLite 或 JSON 状态。
 - 初始化默认 state。
-- 保存 state。
+- 保存 state，SQLite 模式写入 `training.db`，JSON 模式写入 `state.json`。
 - 提供 mutation 辅助。
 - 生成 ID 和 token。
 - 记录事件。
@@ -583,7 +588,7 @@ sequenceDiagram
     participant API as training-service
     participant Domain as domain
     participant AI as ai
-    participant Store as state.json
+    participant Store as training.db
 
     Boss->>API: 输入自然语言培训需求
     API->>AI: classifyTrainingIntent
@@ -606,7 +611,7 @@ sequenceDiagram
     participant API as training-service
     participant RAG as RAG
     participant LLM as 大模型
-    participant Store as state.json
+    participant Store as training.db
 
     Emp->>API: 打开 /t/{token}
     API->>Store: 查询 invite/task/employee
@@ -626,7 +631,7 @@ sequenceDiagram
     participant Emp as 员工页面
     participant API as training-service
     participant AI as ai
-    participant Store as state.json
+    participant Store as training.db
 
     Emp->>API: 请求生成考试
     API->>AI: generateQuizQuestions
@@ -805,7 +810,7 @@ GET /api/health
 
 返回核心状态：
 
-- `stateOk`：状态文件是否可加载。
+- `stateOk`：状态存储是否可加载。
 - `qdrantOk`：Qdrant 是否可访问。
 - `ollamaOk`：Ollama 是否可访问。
 - `localVectorIndexOk`：本地向量索引是否可用。
@@ -814,6 +819,7 @@ GET /api/health
 - `llmConfigured`：LLM 是否配置完成。
 - `retrievalMode`：`hybrid`、`bm25` 或兼容旧实现时的 `keyword-legacy`。
 - `dataDir`：当前数据目录。
+- `storage`：当前存储模式、SQLite/JSON 路径和文件是否存在。
 
 这个接口用于确认：
 
@@ -858,6 +864,8 @@ HOST_PORT=8787
 PUBLIC_BASE_URL=http://服务器IP:8787
 PUBLIC_BASE_URL_MODE=request
 TRAINING_ACCESS_KEY=长随机登录密钥
+TRAINING_STORAGE=sqlite
+TRAINING_SQLITE_BUSY_TIMEOUT_MS=5000
 TRAINING_LLM_PROVIDER=auto
 TRAINING_LLM_BASE_URL=https://api.deepseek.com/v1
 TRAINING_LLM_MODEL=deepseek-chat
@@ -920,14 +928,15 @@ OpenClaw 只负责把工具暴露给 Agent，核心培训逻辑仍在 `training-
 生产或试用环境至少需要备份：
 
 ```text
-state.json
-memory.json
+training.db
+training.db-shm
+training.db-wal
 conversation-history.jsonl
 agent-traces.jsonl
 vector-index-bge-m3.json
 ```
 
-如果使用 Qdrant，还需要备份 Qdrant volume 或 collection snapshot；如果只使用 BM25，则没有向量索引也能运行，但语义召回会下降。清洗后的资料目录 `training-clean` 也建议一起保留，方便重建 `state.json`、Qdrant 或本地向量索引。
+如果使用 JSON 回滚模式或需要导出备份，可运行 `npm run export:json` 得到 `state.json` 和 `memory.json`。如果使用 Qdrant，还需要备份 Qdrant volume 或 collection snapshot；如果只使用 BM25，则没有向量索引也能运行，但语义召回会下降。清洗后的资料目录 `training-clean` 也建议一起保留，方便重建 SQLite 数据、Qdrant 或本地向量索引。
 
 ## 11. 关键环境变量
 
@@ -939,6 +948,9 @@ vector-index-bge-m3.json
 | `TRAINING_ACCESS_KEY` | 网页登录密钥 | 长随机字符串 |
 | `TRAINING_AUTH_DISABLED` | 是否关闭登录校验 | 生产不要开启 |
 | `TRAINING_DATA_DIR` | 业务状态、记忆、路由轨迹和本地向量索引目录 | `D:\OpenClawData\training-index` |
+| `TRAINING_STORAGE` | 主存储模式 | `sqlite`，回滚时设为 `json` |
+| `TRAINING_SQLITE_PATH` | SQLite 数据库路径 | 默认 `${TRAINING_DATA_DIR}/training.db` |
+| `TRAINING_SQLITE_BUSY_TIMEOUT_MS` | SQLite 忙等待超时 | `5000` |
 | `TRAINING_LLM_PROVIDER` | LLM 提供方 | `auto` |
 | `TRAINING_LLM_BASE_URL` | 模型 API 地址 | `https://api.deepseek.com/v1` |
 | `TRAINING_LLM_MODEL` | 模型名 | `deepseek-chat` 或兼容模型 |
@@ -966,7 +978,17 @@ npm run check
 
 `npm run check` 会自动扫描 `src`、`public`、`scripts` 下的 `.mjs` 和 `.js` 文件执行 `node --check`，新增模块不需要手动追加到长命令中。
 
-### 12.2 业务烟测
+### 12.2 SQLite 迁移评测
+
+```powershell
+npm run eval:sqlite
+npm run migrate:sqlite -- --dry
+npm run migrate:sqlite
+```
+
+`eval:sqlite` 使用临时目录验证 JSON 导入、SQLite 读写、记忆迁移和 JSON 导出。`migrate:sqlite` 面向当前 `TRAINING_DATA_DIR`，执行前会保留原 `state.json` / `memory.json` 备份。
+
+### 12.3 业务烟测
 
 ```powershell
 npm run smoke
@@ -985,7 +1007,7 @@ npm run smoke
 - 培训记录删除确认。
 - 记忆保存、默认参数生效和清空记忆确认。
 
-### 12.3 RAG 评测
+### 12.4 RAG 评测
 
 ```powershell
 npm run eval:rag
@@ -1009,7 +1031,7 @@ npm run eval:rag
 - 银嘉五项领先制造工艺。
 - 英文工艺名对应中文工艺。
 
-### 12.4 意图与记忆评测
+### 12.5 意图与记忆评测
 
 ```powershell
 npm run eval:intent
@@ -1028,7 +1050,7 @@ npm run eval:memory
 - 模糊偏好进入 pending，确认 token 后才保存。
 - 记忆列表、删除和清空 API 正常工作。
 
-### 12.5 人工验收
+### 12.6 人工验收
 
 建议每次资料导入后人工确认：
 
@@ -1053,14 +1075,14 @@ npm run eval:memory
 - 导入后查看知识库质量报告。
 - 使用 `npm run eval:rag` 做固定问题回归。
 
-### 13.2 JSON 文件存储不适合长期高并发
+### 13.2 SQLite 仍不是正式 SaaS 数据库
 
-当前 `state.json` 简单可靠，但不适合大量并发写入。
+当前已经默认使用 SQLite 替代 `state.json` 和 `memory.json` 作为主存储，解决了 JSON 文件在并发写入、局部查询和迁移回滚上的短板。但 SQLite 仍是单机本地数据库，不等同于正式多租户 SaaS 数据库。
 
 后续建议：
 
-- 小规模继续使用 JSON。
-- 中期迁移 SQLite。
+- 小规模单机部署继续使用 SQLite。
+- 保留 `TRAINING_STORAGE=json` 和 `npm run export:json` 作为回滚能力。
 - 正式多用户 SaaS 化时迁移 PostgreSQL。
 
 ### 13.3 记忆不是业务事实库
@@ -1127,12 +1149,12 @@ public/src/ui.js
    增加题目难度、知识点覆盖率和重复率控制。
 
 6. 部署备份脚本
-   明确备份 `state.json`、记忆文件、路由轨迹、本地向量索引和 Qdrant snapshot。
+   明确备份 `training.db`、WAL 辅助文件、聊天历史、路由轨迹、本地向量索引和 Qdrant snapshot，并保留 `export:json` 回滚流程。
 
 ### 14.2 中期优化
 
-1. 数据库化  
-   用 SQLite/PostgreSQL 替代 JSON。
+1. 数据库治理
+   在 SQLite 基础上补充更细的索引、迁移脚本、备份恢复脚本和数据校验；正式 SaaS 化时再迁移 PostgreSQL。
 
 2. 账号体系  
    管理员、员工、部门、角色权限。

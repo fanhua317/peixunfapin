@@ -1,19 +1,24 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const serviceRoot = path.resolve(__dirname, "..");
+import {
+  isSqliteStorage,
+  loadSqliteState,
+  saveSqliteState,
+  sqlitePathFor,
+  sqliteStatus,
+} from "./sqlite-store.mjs";
 
 export const dataDir = process.env.TRAINING_DATA_DIR
   ? path.resolve(process.env.TRAINING_DATA_DIR)
   : "D:\\OpenClawData\\training-index";
 
-const statePath = path.join(dataDir, "state.json");
+export const statePath = path.join(dataDir, "state.json");
+export const sqlitePath = sqlitePathFor(dataDir);
 
 const nowIso = () => new Date().toISOString();
 
-const defaultState = () => ({
+export const defaultState = () => ({
   meta: {
     version: 1,
     createdAt: nowIso(),
@@ -116,6 +121,9 @@ export async function ensureDataDir() {
 
 export async function loadState() {
   await ensureDataDir();
+  if (isSqliteStorage()) {
+    return normalizeState(loadSqliteState(dataDir, { statePath, defaultState }));
+  }
   try {
     const raw = await readFile(statePath, "utf8");
     return normalizeState(JSON.parse(raw));
@@ -129,7 +137,7 @@ export async function loadState() {
   }
 }
 
-function normalizeState(state) {
+export function normalizeState(state) {
   const value = state && typeof state === "object" ? state : defaultState();
   value.knowledgeBases = Array.isArray(value.knowledgeBases) ? value.knowledgeBases : [];
   value.documents = Array.isArray(value.documents) ? value.documents : [];
@@ -152,7 +160,20 @@ export async function saveState(state) {
     version: 1,
     updatedAt: nowIso(),
   };
+  if (isSqliteStorage()) {
+    saveSqliteState(dataDir, normalizeState(state));
+    return;
+  }
   await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+}
+
+export function getStorageStatus() {
+  if (isSqliteStorage()) return sqliteStatus(dataDir);
+  return {
+    storage: "json",
+    path: statePath,
+    exists: existsSync(statePath),
+  };
 }
 
 export async function mutateState(mutator) {

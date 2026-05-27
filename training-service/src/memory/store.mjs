@@ -1,13 +1,14 @@
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { dataDir, makeId } from "../store.mjs";
+import { isSqliteStorage, loadSqliteMemoryStore, saveSqliteMemoryStore } from "../sqlite-store.mjs";
 
 const nowIso = () => new Date().toISOString();
 
 export const memoryPath = path.join(dataDir, "memory.json");
 export const conversationHistoryPath = path.join(dataDir, "conversation-history.jsonl");
 
-function defaultMemoryStore() {
+export function defaultMemoryStore() {
   return {
     meta: {
       version: 1,
@@ -63,7 +64,7 @@ function normalizeMemory(memory) {
   return value;
 }
 
-function normalizeStore(store) {
+export function normalizeStore(store) {
   const value = store && typeof store === "object" ? store : defaultMemoryStore();
   value.meta = value.meta && typeof value.meta === "object" ? value.meta : {};
   value.meta.version = 1;
@@ -80,6 +81,9 @@ export async function ensureMemoryDir() {
 
 export async function loadMemoryStore() {
   await ensureMemoryDir();
+  if (isSqliteStorage()) {
+    return normalizeStore(loadSqliteMemoryStore(dataDir, { memoryPath, defaultMemoryStore }));
+  }
   try {
     const raw = await readFile(memoryPath, "utf8");
     return normalizeStore(JSON.parse(raw));
@@ -95,6 +99,9 @@ export async function saveMemoryStore(store) {
   await ensureMemoryDir();
   const value = normalizeStore(store);
   value.meta.updatedAt = nowIso();
+  if (isSqliteStorage()) {
+    return saveSqliteMemoryStore(dataDir, value);
+  }
   await writeFile(memoryPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   return value;
 }

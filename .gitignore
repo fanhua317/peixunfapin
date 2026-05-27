@@ -10,6 +10,12 @@ training-service/.playwright-cli/
 # Local runtime data
 training-service/.tmp-smoke-data/
 training-service/data/state.json
+training-service/data/memory.json
+training-service/data/conversation-history.jsonl
+training-service/data/agent-traces.jsonl
+training-service/data/*.db
+training-service/data/*.db-shm
+training-service/data/*.db-wal
 training-service/data/*.backup*.json
 
 # Environment and secrets
