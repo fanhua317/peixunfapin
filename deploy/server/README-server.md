@@ -61,7 +61,17 @@ The default data directory is:
 data/training-index
 ```
 
-Back up `data/training-index/state.json` regularly.
+Back up these files regularly:
+
+```text
+data/training-index/state.json
+data/training-index/memory.json
+data/training-index/conversation-history.jsonl
+data/training-index/agent-traces.jsonl
+data/training-index/vector-index-bge-m3.json
+```
+
+`state.json` is the business state. `memory.json` and `conversation-history.jsonl` are the local Agent memory files. `agent-traces.jsonl` is useful for intent-routing diagnostics. `vector-index-bge-m3.json` only exists when the local vector backend is used.
 
 ## RAG With bge-m3
 
@@ -81,4 +91,6 @@ TRAINING_HYBRID_RETRIEVAL=auto
 TRAINING_VECTOR_BACKEND=local
 TRAINING_EMBEDDING_MODEL=bge-m3
 ```
+
+If you run Qdrant instead, keep the Qdrant volume or snapshot together with `state.json`; otherwise retrieval will fall back to BM25 until vectors are rebuilt or restored.
 

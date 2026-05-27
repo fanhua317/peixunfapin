@@ -28,7 +28,7 @@ D:\juzhou-agent\peixun\training-service
 ```text
 D:\OpenClawData\training-raw    # 原始 PDF、Excel、CSV、TXT、Markdown
 D:\OpenClawData\training-clean  # 清洗后的 Markdown/TXT
-D:\OpenClawData\training-index  # state.json、memory.json、conversation-history.jsonl、索引文件
+D:\OpenClawData\training-index  # state.json、memory.json、conversation-history.jsonl、本地向量索引
 D:\OpenClawData\qdrant          # 本机 Qdrant Docker 持久化目录
 ```
 
@@ -43,9 +43,11 @@ D:\OpenClawData\training-index\state.json
 ```text
 D:\OpenClawData\training-index\memory.json
 D:\OpenClawData\training-index\conversation-history.jsonl
+D:\OpenClawData\training-index\agent-traces.jsonl
+D:\OpenClawData\training-index\vector-index-bge-m3.json
 ```
 
-`memory.json` 保存长期偏好、会话摘要和待确认记忆；`conversation-history.jsonl` 追加老板端聊天历史。它们不提交 Git，也不改变 `state.json` 的 `meta.version = 1`。
+`memory.json` 保存长期偏好、会话摘要和待确认记忆；`conversation-history.jsonl` 追加老板端聊天历史；`agent-traces.jsonl` 记录意图路由和确认链路；`vector-index-bge-m3.json` 是可选的本地向量索引。它们不提交 Git，也不改变 `state.json` 的 `meta.version = 1`。
 
 也可以用环境变量覆盖：
 
@@ -76,7 +78,13 @@ npm run import:clean -- "D:\OpenClawData\training-clean" "电机培训资料库"
 
 导入后，老板自然语言里提到 `电机`、`电动机`、`三相异步电动机` 等关键词时，系统会尝试匹配到该知识库。
 
-## 向量检索 / Qdrant
+## 语义切片与混合检索
+
+导入清洗资料时，服务会使用 `src/semantic-chunking.mjs` 做业务语义切片：
+
+- `chunkParents` 保存知识点、型号/系列、表格行等父级业务上下文。
+- `chunks` 是检索子块，带 `parentId`、`childType`、`businessKeys`、`searchText`。
+- 训练讲义、员工答疑、考试出题和营销软文都使用父块上下文生成。
 
 当前服务支持 `BM25 + 向量语义检索` 的混合 RAG。BM25 负责型号、参数、条款等精确召回，向量检索负责语义召回；向量索引不可用时会降级为 BM25。
 
@@ -89,10 +97,16 @@ $env:OLLAMA_URL="http://127.0.0.1:11434"
 $env:TRAINING_EMBEDDING_MODEL="bge-m3"
 ```
 
-本机完成资料清洗和导入后，生成 embedding 并写入 Qdrant：
+本机完成资料清洗和导入后，可以生成 embedding 并写入 Qdrant：
 
 ```powershell
 npm run embed:chunks
+```
+
+轻量服务器或不想部署 Qdrant 时，可以生成本地向量索引：
+
+```powershell
+npm run embed:local -- --model=bge-m3
 ```
 
 只重建某个知识库：
@@ -119,7 +133,7 @@ npm run qdrant:snapshot -- create
 npm run qdrant:snapshot -- list
 ```
 
-服务运行时默认启用混合检索；如需临时关闭向量检索并回退 BM25：
+服务运行时默认启用混合检索；如需临时关闭向量检索并只使用 BM25：
 
 ```powershell
 $env:TRAINING_HYBRID_RETRIEVAL="off"
@@ -127,11 +141,16 @@ $env:TRAINING_HYBRID_RETRIEVAL="off"
 
 ## 服务器部署要点
 
-推荐模式是本机生成 embedding 和 Qdrant 数据，服务器只跑在线服务：
+推荐模式是本机生成 embedding，服务器只跑在线服务。向量后端二选一：
+
+- 数据量或并发较高：本机生成 Qdrant snapshot，服务器恢复 Qdrant。
+- 小型 Windows 服务器：本机或服务器生成 `vector-index-bge-m3.json`，使用 local vector backend。
+
+Qdrant 方式：
 
 1. 本机运行 `npm run clean:raw`、`npm run import:clean`、`npm run embed:chunks`。
 2. 在本机 Qdrant 为 collection 创建 snapshot：`npm run qdrant:snapshot -- create`。
-3. 传输 `state.json`、清洗资料和 Qdrant snapshot 到服务器。
+3. 传输 `state.json`、`memory.json`、清洗资料和 Qdrant snapshot 到服务器。
 4. 服务器用 Docker 运行 Qdrant 并恢复 snapshot。
 5. 服务器启动 `node src/server.mjs` 或使用 `pm2/systemd` 管理。
 
@@ -142,6 +161,15 @@ $env:TRAINING_DATA_DIR="D:\OpenClawData\training-index"
 $env:QDRANT_URL="http://127.0.0.1:6333"
 $env:QDRANT_COLLECTION="training_chunks_bge_m3"
 $env:TRAINING_HYBRID_RETRIEVAL="on"
+```
+
+本地向量索引方式：
+
+```powershell
+$env:TRAINING_DATA_DIR="D:\OpenClawData\training-index"
+$env:TRAINING_VECTOR_BACKEND="local"
+$env:TRAINING_EMBEDDING_MODEL="bge-m3"
+$env:TRAINING_HYBRID_RETRIEVAL="auto"
 ```
 
 LLM 调用推荐使用 OpenAI-compatible API 直连 DeepSeek，也可以继续走 OpenClaw Gateway：
@@ -179,21 +207,47 @@ D:\OpenClawData\training-clean
 
 - `GET /api/health`
 - `GET /api/knowledge-bases`
+- `GET /api/knowledge-bases/{knowledgeBaseId}/quality`
+- `GET /api/reports/overview`
 - `GET /api/employees?q=销售部`
 - `POST /api/chat`
 - `POST /api/agent/draft`
 - `POST /api/agent/dispatch`
+- `WS /api/agent/stream`
 - `GET /api/memory`
 - `PATCH /api/memory/{memoryId}`
 - `DELETE /api/memory/{memoryId}`
 - `DELETE /api/memory`
 - `POST /api/tasks/publish`
 - `GET /api/tasks`
+- `DELETE /api/tasks`
 - `GET /api/tasks/{taskId}`
 - `GET /api/invites/{token}`
 - `POST /api/answer`
 - `POST /api/quiz/generate`
 - `POST /api/quiz/submit`
+
+老板端聊天主入口为 `/api/agent/dispatch`，WebSocket 流式入口为 `/api/agent/stream`。两者都支持：
+
+```json
+{
+  "message": "给王小明发布电机基础培训，出 10 道题，80 分及格",
+  "sessionId": "browser-session-id",
+  "memoryMode": "auto"
+}
+```
+
+执行高风险或低置信操作时，服务端会先返回 `action: "intent_confirm"`。确认执行时把原消息、`confirmedSkill` 和 `confirmationToken` 一起提交：
+
+```json
+{
+  "message": "把之前培训记录删掉",
+  "confirmedSkill": "delete_training_records",
+  "confirmationToken": "server-issued-token"
+}
+```
+
+`memoryMode` 可设为 `off`，用于临时不读取和不写入记忆的对话。
 
 ## 常用验证
 
@@ -207,7 +261,8 @@ npm run eval:rag -- --retrieval-only
 
 ## 当前限制
 
-- 服务器模式不建议运行 embedding 模型；embedding 推荐在本机离线构建后迁移 Qdrant snapshot。
+- 服务器模式不建议运行大规模 embedding 构建；embedding 推荐在本机离线构建后迁移 Qdrant snapshot 或本地向量索引。
+- 如果使用本地向量索引，迁移服务器时需要一起备份 `vector-index-bge-m3.json`。
 - Qdrant collection 的向量维度固定；更换 embedding 模型后需要重建 collection。
 - 图片型或扫描型 PDF 需要 OCR 后才能得到完整文本；当前清洗脚本只能直接抽取可复制文本。
 - 当前邀请链接没有手机号/企业身份校验，正式版需要补权限验证。

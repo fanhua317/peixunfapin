@@ -1,6 +1,6 @@
 # 钜洲培训 Agent 项目总览文档
 
-更新时间：2026-05-26
+更新时间：2026-05-27
 项目目录：`D:\juzhou-agent\peixun`  
 业务数据目录：`D:\OpenClawData`
 
@@ -8,19 +8,21 @@
 
 钜洲培训 Agent 是一个面向企业内部培训的轻量级智能培训系统。项目最初依托 OpenClaw 的 Agent 能力做自然语言培训编排，后来逐步独立为一个可单独部署、可连接大模型 API、可选接入 OpenClaw 插件的培训服务。
 
-项目当前优先解决的不是通用聊天，而是企业培训的闭环：
+项目当前优先解决的不是通用聊天套壳，而是企业内部资料驱动的业务闭环：
 
 - 老板或管理员用自然语言创建培训任务。
 - 系统根据已有资料生成培训讲义、学习重点和考试题。
 - 系统生成员工专属学习链接，员工打开链接完成学习、答疑、考试和提交。
 - 老板查看任务完成率、未完成名单、分数分布和薄弱知识点。
 - 资料来源、答案依据、题目解析都尽量可追溯，减少大模型胡编。
+- 老板可基于本地知识库生成营销软文，但不保存文章列表。
+- 老板端普通聊天、培训默认参数和软文偏好可使用本地记忆。
 
 项目的核心背景是：企业里已有大量 PDF、表格、产品资料、销售话术、工艺说明和售后知识，但这些资料分散、质量参差不齐，人工做培训和出题成本较高。系统希望把“资料整理、培训发布、员工学习、考试验收、结果追踪”做成一个可落地的小型 Agent 应用。
 
 ## 2. 当前项目定位
 
-当前项目定位为“企业培训 Agent MVP”，不是完整的 OA、LMS 或大型多 Agent 平台。
+当前项目定位为“企业培训 + 营销内容 Agent MVP”，不是完整的 OA、LMS 或大型多 Agent 平台。
 
 当前重点：
 
@@ -31,16 +33,19 @@
 - 培训任务发布。
 - 员工邀请链接。
 - 考试提交与成绩统计。
+- 营销软文生成。
+- 本地短期会话记忆和长期偏好记忆。
 - 服务端部署包和 Windows 便携包。
 
 暂缓或只预留的能力：
 
 - 小红书、公众号、企业微信等自动发布。
 - 多 Agent 编排框架。
-- MCP/SSE 流式输出。
+- MCP/SSE 对外工具服务。
 - 完整企业身份认证。
 - 大规模权限系统。
 - 完整 OCR 平台。
+- 报价、阿里发布、视频生成等外部业务 skill。
 
 ## 3. 总体设计原则
 
@@ -204,6 +209,7 @@ D:\juzhou-agent\peixun
 - 默认路径：`D:\OpenClawData\training-index\state.json`。
 - 可通过 `TRAINING_DATA_DIR` 覆盖。
 - 本地 Agent 记忆不写入 `state.json`，单独保存在同目录的 `memory.json` 和 `conversation-history.jsonl`。
+- 本地向量索引默认保存在同目录的 `vector-index-{model}.json`，例如 `vector-index-bge-m3.json`。
 
 主要数据集合：
 
@@ -223,6 +229,7 @@ D:\juzhou-agent\peixun
 - `memory.json`：长期偏好、短期会话摘要、待确认记忆和记忆状态。
 - `conversation-history.jsonl`：老板端聊天消息和工具调用摘要，按 `sessionId` 追加。
 - `agent-traces.jsonl`：意图路由、防误判确认和执行轨迹。
+- `vector-index-bge-m3.json`：可选的本地向量索引，使用 local vector backend 时生成。
 
 JSON 存储适合当前 MVP 和小团队使用。后续如果多人高并发或数据量增长，建议迁移到 SQLite/PostgreSQL。
 
@@ -374,6 +381,7 @@ DELETE /api/memory/{memoryId}
 DELETE /api/memory
 POST /api/tasks/publish
 GET  /api/tasks
+DELETE /api/tasks
 GET  /api/tasks/{taskId}
 GET  /api/invites/{token}
 POST /api/answer
@@ -688,17 +696,17 @@ DELETE /api/memory
 
 ## 8. RAG 策略
 
-### 8.1 Chunk 策略
+### 8.1 业务语义切片与 Parent-Child
 
-Markdown 资料优先按标题结构切分，然后按块合并：
+导入清洗资料时，`scripts/import-clean.mjs` 会调用 `src/semantic-chunking.mjs`。当前结构是“小 child 检索，大 parent 生成”：
 
-- 默认最大 chunk：900 字符。
-- 默认最小 chunk：120 字符。
-- 默认重叠：80 字符。
-- 保留标题路径、页码、来源文件、关键词和内容哈希。
-- 表格、代码块、自然段尽量作为完整块处理。
+- `chunkParents` 保存完整业务语义父块，例如知识点、型号/系列、表格行、问答案例。
+- `chunks` 继续作为检索子块，并保存 `parentId`、`childType`、`businessKeys`、`searchText`。
+- 表格行和型号参数优先保持为完整父块，不再把一行业务记录拆散。
+- 普通知识点父块会拆成较小 child；当前默认 child 上限约 720 字符，重叠约 60 字符。
+- 非 Markdown 或无法识别标题结构的资料会走兼容切片兜底，旧数据中没有 `parentId` 的 chunk 仍可被检索和生成使用。
 
-纯文本资料按段落切分，再使用相同的最大长度、最小长度和重叠策略。
+训练讲义、员工答疑、考试出题和营销软文都使用 `searchKnowledgeContexts` 返回的父块上下文，而不是只把零散 child 直接交给模型。
 
 ### 8.2 资料质量控制
 
@@ -724,18 +732,20 @@ GET /api/knowledge-bases/{id}/quality
 - OCR 占位数量。
 - 短文本数量。
 - 向量索引状态。
+- parent-child 父块数量、孤儿子块、最长子块长度。
 
 ### 8.3 检索策略
 
 当前检索链路：
 
-1. 根据知识库 ID 和问题过滤候选 chunk。
-2. BM25 检索召回。
-3. 如果配置可用，执行向量语义召回。
-4. 合并 BM25 分数和语义分数。
-5. 过滤不可用 chunk。
-6. 根据问题类型做上下文去噪。
-7. 只把少量高质量上下文传给模型。
+1. 根据知识库 ID 和问题过滤可用 child chunk。
+2. BM25 检索召回 child。
+3. 如果配置可用，执行本地向量索引或 Qdrant 语义召回 child。
+4. 合并 BM25 分数和语义分数；默认权重来自 `TRAINING_BM25_WEIGHT` 和 `TRAINING_SEMANTIC_WEIGHT`，参数/型号类问题会提高 BM25 权重。
+5. 同一 child 同时命中 BM25 和向量时标记为 hybrid。
+6. 通过 `parentId` 展开父块，多个 child 命中同一 parent 时去重。
+7. 根据问题类型做上下文去噪。
+8. 只把少量高质量父块上下文传给模型。
 
 问题类型倾向：
 
@@ -905,6 +915,20 @@ D:/juzhou-agent/peixun/training-plugin
 
 OpenClaw 只负责把工具暴露给 Agent，核心培训逻辑仍在 `training-service`。
 
+### 10.5 备份与迁移
+
+生产或试用环境至少需要备份：
+
+```text
+state.json
+memory.json
+conversation-history.jsonl
+agent-traces.jsonl
+vector-index-bge-m3.json
+```
+
+如果使用 Qdrant，还需要备份 Qdrant volume 或 collection snapshot；如果只使用 BM25，则没有向量索引也能运行，但语义召回会下降。清洗后的资料目录 `training-clean` 也建议一起保留，方便重建 `state.json`、Qdrant 或本地向量索引。
+
 ## 11. 关键环境变量
 
 | 变量 | 作用 | 推荐值 |
@@ -914,7 +938,7 @@ OpenClaw 只负责把工具暴露给 Agent，核心培训逻辑仍在 `training-
 | `PUBLIC_BASE_URL_MODE` | 链接生成模式 | `request` 或 `env` |
 | `TRAINING_ACCESS_KEY` | 网页登录密钥 | 长随机字符串 |
 | `TRAINING_AUTH_DISABLED` | 是否关闭登录校验 | 生产不要开启 |
-| `TRAINING_DATA_DIR` | state.json 所在目录 | `D:\OpenClawData\training-index` |
+| `TRAINING_DATA_DIR` | 业务状态、记忆、路由轨迹和本地向量索引目录 | `D:\OpenClawData\training-index` |
 | `TRAINING_LLM_PROVIDER` | LLM 提供方 | `auto` |
 | `TRAINING_LLM_BASE_URL` | 模型 API 地址 | `https://api.deepseek.com/v1` |
 | `TRAINING_LLM_MODEL` | 模型名 | `deepseek-chat` 或兼容模型 |
@@ -922,6 +946,8 @@ OpenClaw 只负责把工具暴露给 Agent，核心培训逻辑仍在 `training-
 | `TRAINING_LLM_TEMPERATURE` | 生成温度 | `0.2`，特殊模型会自动重试 `1` |
 | `TRAINING_HYBRID_RETRIEVAL` | 是否启用混合检索 | `auto` / `on` / `off` |
 | `TRAINING_VECTOR_BACKEND` | 向量后端 | `local` |
+| `TRAINING_BM25_WEIGHT` | BM25 融合权重 | `0.45` |
+| `TRAINING_SEMANTIC_WEIGHT` | 向量融合权重 | `0.55` |
 | `TRAINING_EMBEDDING_MODEL` | embedding 模型 | `bge-m3` |
 | `OLLAMA_URL` | Ollama 地址 | `http://127.0.0.1:11434` |
 | `QDRANT_URL` | Qdrant 地址 | `http://127.0.0.1:6333` |
@@ -1091,14 +1117,17 @@ public/src/ui.js
 2. 增强 RAG 评测  
    扩展到 30-50 个企业常见问题，形成稳定回归集。
 
-3. 优化前端资料质量提示  
+3. 增加 reranker 或二阶段重排
+   在 BM25 + 向量召回之后，对 TopN parent 做更精细排序，减少噪声。
+
+4. 优化前端资料质量提示
    发布前更明确地提示“哪些资料不可用、哪些来源未入向量库”。
 
-4. 强化试题质量  
+5. 强化试题质量
    增加题目难度、知识点覆盖率和重复率控制。
 
-5. 部署稳定性  
-   增加 Windows 服务或计划任务脚本，保证服务器重启后自动恢复。
+6. 部署备份脚本
+   明确备份 `state.json`、记忆文件、路由轨迹、本地向量索引和 Qdrant snapshot。
 
 ### 14.2 中期优化
 
@@ -1114,8 +1143,8 @@ public/src/ui.js
 4. 任务通知  
    接入企业微信、短信或邮件。
 
-5. 前端模块化  
-   拆分 `app.js`，保留无构建或引入轻量构建。
+5. 报价 skill
+   把已有报价系统作为独立服务接入，通过 HTTP API 生成报价和报价单。
 
 ### 14.3 长期方向
 
@@ -1139,7 +1168,7 @@ public/src/ui.js
 - 能通过网页完成培训发布、学习、答疑、考试和报表。
 - 能通过 OpenClaw 插件暴露 8 个培训工具。
 - 能使用直连大模型 API 完成讲义和试题生成。
-- 能使用 `bge-m3 + 本地向量索引 + BM25 hybrid` 做资料问答。
+- 能使用 `bge-m3 + 本地向量索引或 Qdrant + BM25 hybrid` 做资料问答。
 - 能在向量服务不可用时回退 BM25 检索。
 - 能用本地记忆改善老板端普通聊天、培训默认参数和软文风格偏好。
 - 能打包为 Windows 便携包和服务器部署包。
