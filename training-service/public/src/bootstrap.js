@@ -1,6 +1,7 @@
 import { setUnauthorizedHandler } from "./api.js";
 import { ensureAuthenticated, renderLoginGate } from "./auth.js";
 import { setupChatApp } from "./chat.js";
+import { setupImportsApp } from "./imports.js";
 import { loadInvite } from "./invite.js";
 
 export async function bootstrapApp() {
@@ -9,6 +10,8 @@ export async function bootstrapApp() {
   const inviteMatch = window.location.pathname.match(/^\/t\/([^/]+)/);
   if (inviteMatch) {
     await loadInvite(inviteMatch[1]);
+  } else if (window.location.pathname === "/imports") {
+    await setupImportsApp();
   } else {
     setupChatApp();
   }

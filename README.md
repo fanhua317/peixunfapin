@@ -1,6 +1,6 @@
 ﻿# 钜洲培训 Agent MVP
 
-这个目录包含独立于 OpenClaw 主仓库的企业培训 Agent MVP。当前主路径是网页端：老板用自然语言创建培训、生成软文、查询进度和管理记忆；员工通过邀请链接学习、答疑和考试。OpenClaw 插件仍保留为可选工具入口。
+这个目录包含独立于 OpenClaw 主仓库的企业培训 Agent MVP。当前主路径是网页端：老板用自然语言创建培训、导入知识库、生成软文、查询进度和管理记忆；员工通过邀请链接学习、答疑和考试。OpenClaw 插件仍保留为可选工具入口。
 
 ```text
 training-service  # Web/API 服务，保存业务数据并提供老板/员工页面
@@ -19,6 +19,7 @@ node D:\juzhou-agent\peixun\training-service\src\server.mjs
 
 ```text
 http://127.0.0.1:8787/
+http://127.0.0.1:8787/imports
 ```
 
 3. 可选：在 OpenClaw 中安装插件，让外部 Agent 调用培训工具：
@@ -73,6 +74,7 @@ src/http            # 请求解析、认证、静态文件、API controller
 src/domain          # 知识库、员工、任务、邀请、考试、报表业务逻辑
 src/ai              # 意图识别、讲义、答疑、出题、软文、LLM JSON 调用
 src/memory          # 本地短期会话记忆、长期偏好记忆、记忆策略和召回
+src/import          # 资料清洗、网页上传、本机目录导入和语义切片写入
 src/semantic-chunking.mjs # 业务语义切片，生成 parent-child RAG 结构
 src/rag.mjs         # BM25 + 向量混合检索，命中 child 后展开 parent
 src/intent-confirmation.mjs # 操作确认 token，防止误确认执行
@@ -94,6 +96,7 @@ public/src          # 无构建浏览器 ES modules
 ```powershell
 cd D:\juzhou-agent\peixun\training-service
 npm run check
+npm run eval:import
 npm run eval:sqlite
 npm run smoke
 npm run eval:rag -- --retrieval-only

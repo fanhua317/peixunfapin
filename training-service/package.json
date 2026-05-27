@@ -17,6 +17,7 @@
     "backup:verify": "node scripts/backup-verify.mjs",
     "eval:sqlite": "node scripts/eval-sqlite.mjs",
     "eval:backup": "node scripts/eval-backup.mjs",
+    "eval:import": "node scripts/eval-import.mjs",
     "eval:intent": "node scripts/eval-intent.mjs",
     "eval:memory": "node scripts/eval-memory.mjs",
     "eval:rag": "node scripts/eval-rag.mjs",

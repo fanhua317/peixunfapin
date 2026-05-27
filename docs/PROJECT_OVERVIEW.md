@@ -301,11 +301,13 @@ SQLite 采用“集合分表 + 完整 JSON 原文保留”的兼容方案，外�
 - `npm run clean:raw`：清洗原始资料。
 - `npm run import:clean`：导入清洗后的 Markdown/TXT。
 - `npm run render:pdf`：把扫描型 PDF 渲染为图片页，供后续 OCR 或视觉识别。
+- `/imports`：老板端导入管理页，支持本机目录导入和浏览器上传。
 
 当前限制：
 
 - 可复制文本 PDF 可以自动抽取。
 - 扫描型 PDF 暂时只能识别为 OCR 占位或渲染为图片，完整 OCR 仍需后续接入。
+- 页面导入后 BM25 立即可用，向量索引需要按提示手动运行 `npm run embed:local` 重建。
 
 ### 5.7 部署与打包
 
@@ -374,6 +376,9 @@ POST /api/auth/logout
 GET  /api/health
 GET  /api/knowledge-bases
 GET  /api/knowledge-bases/{id}/quality
+GET  /api/imports
+POST /api/imports/directory
+POST /api/imports/upload
 GET  /api/reports/overview
 GET  /api/employees
 POST /api/agent/draft
@@ -988,16 +993,17 @@ npm run check
 
 `npm run check` 会自动扫描 `src`、`public`、`scripts` 下的 `.mjs` 和 `.js` 文件执行 `node --check`，新增模块不需要手动追加到长命令中。
 
-### 12.2 SQLite 迁移评测
+### 12.2 SQLite、备份和导入评测
 
 ```powershell
 npm run eval:sqlite
 npm run migrate:sqlite -- --dry
 npm run migrate:sqlite
 npm run eval:backup
+npm run eval:import
 ```
 
-`eval:sqlite` 使用临时目录验证 JSON 导入、SQLite 读写、记忆迁移和 JSON 导出。`eval:backup` 使用临时目录验证备份、校验、无 `--force` 恢复演练、强制恢复和恢复后可读性。`migrate:sqlite` 面向当前 `TRAINING_DATA_DIR`，执行前会保留原 `state.json` / `memory.json` 备份。
+`eval:sqlite` 使用临时目录验证 JSON 导入、SQLite 读写、记忆迁移和 JSON 导出。`eval:backup` 使用临时目录验证备份、校验、无 `--force` 恢复演练、强制恢复和恢复后可读性。`eval:import` 验证本机目录导入、上传导入、同名知识库覆盖以及任务/邀请/考试/记忆不受影响。`migrate:sqlite` 面向当前 `TRAINING_DATA_DIR`，执行前会保留原 `state.json` / `memory.json` 备份。
 
 ### 12.3 业务烟测
 

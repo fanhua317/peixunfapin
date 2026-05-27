@@ -2,6 +2,7 @@ import { isAuthenticated } from "./auth.mjs";
 import { handleAgent, handleEmployees } from "./controllers/agent-controller.mjs";
 import { handleAuth } from "./controllers/auth-controller.mjs";
 import { handleHealth } from "./controllers/health-controller.mjs";
+import { handleImports } from "./controllers/imports-controller.mjs";
 import { handleInvites } from "./controllers/invites-controller.mjs";
 import { handleKnowledge } from "./controllers/knowledge-controller.mjs";
 import { handleMemory } from "./controllers/memory-controller.mjs";
@@ -11,6 +12,7 @@ import { sendJson } from "./response.mjs";
 
 const authenticatedHandlers = [
   handleHealth,
+  handleImports,
   handleKnowledge,
   handleReports,
   handleEmployees,

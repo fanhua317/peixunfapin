@@ -13,6 +13,7 @@ npm start
 ## 页面
 
 - 老板后台：`http://127.0.0.1:8787/`
+- 导入管理：`http://127.0.0.1:8787/imports`
 - 员工邀请链接：发布任务后生成 `/t/{inviteToken}`
 
 ## 数据目录
@@ -102,6 +103,15 @@ D:\OpenClawData\training-index\backups
 恢复脚本默认只校验备份包，不覆盖数据。必须加 `--force` 才会恢复；恢复前会自动调用 `backup:data` 为当前数据生成一份安全备份。正式恢复前建议先停止服务，避免运行中的进程继续写入数据库。
 
 ## 导入 PDF 和表格资料
+
+老板端可以打开 `/imports` 使用导入管理页。第一版支持两种入口：
+
+- 本机目录导入：填写服务器本机目录路径、知识库名称和别名。
+- 浏览器上传：上传 `.pdf`、`.xlsx`、`.csv`、`.md`、`.txt` 文件或文件夹。
+
+导入完成后，BM25 检索立即可用；页面会提示手动运行 `npm run embed:local -- --kb=<kbId>` 或 `npm run embed:local -- --full` 重建本地向量索引，不会在页面自动跑 embedding。
+
+命令行方式仍然保留：
 
 1. 把原始文件放到：
 
@@ -300,6 +310,7 @@ D:\OpenClawData\training-clean
 ```powershell
 npm run check
 npm run eval:backup
+npm run eval:import
 npm run eval:sqlite
 npm run smoke
 npm run eval:intent

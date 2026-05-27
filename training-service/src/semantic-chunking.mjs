@@ -193,7 +193,7 @@ function tableFieldCount(content) {
 
 function detectParentType(section, keys) {
   const path = `${section.title || ""} ${(section.sectionPath || []).join(" ")}`;
-  if (/sheet|row/i.test(path) && tableFieldCount(section.content) >= 3) return "table_row";
+  if (/(sheet|row|工作表|第\s*\d+\s*条)/i.test(path) && tableFieldCount(section.content) >= 3) return "table_row";
   if ((keys.model || keys.efficiency || keys.poles) && tableFieldCount(section.content) >= 3) return "model_spec";
   if (/faq|问答|问题|故障|售后/i.test(path)) return "qa_case";
   return "knowledge_point";

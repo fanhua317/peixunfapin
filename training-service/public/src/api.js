@@ -5,9 +5,12 @@ export function setUnauthorizedHandler(handler) {
 }
 
 export async function api(path, options = {}) {
+  const headers = options.body instanceof FormData
+    ? { ...(options.headers || {}) }
+    : { "content-type": "application/json", ...(options.headers || {}) };
   const response = await fetch(path, {
-    headers: { "content-type": "application/json" },
     ...options,
+    headers,
   });
   const payload = await response.json();
   if (response.status === 401) {
