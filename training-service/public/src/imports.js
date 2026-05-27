@@ -20,8 +20,93 @@ function formatBytes(value) {
   return `${bytes} B`;
 }
 
+function formatDate(value) {
+  if (!value) return "-";
+  try {
+    return new Date(value).toLocaleString();
+  } catch {
+    return value;
+  }
+}
+
+function diffCountText(diff) {
+  const counts = diff?.counts || {};
+  return `新增 ${counts.added || 0} / 删除 ${counts.removed || 0} / 变更 ${counts.changed || 0} / 未变 ${counts.unchanged || 0}`;
+}
+
+function renderDocDiffList(label, items = []) {
+  const list = items.slice(0, 20).map((item) => `<li>${escapeHtml(item.path || item.title || "-")}</li>`).join("");
+  const more = items.length > 20 ? `<li>还有 ${escapeHtml(items.length - 20)} 项未显示</li>` : "";
+  return `<div class="task-section-title">${escapeHtml(label)}（${escapeHtml(items.length)}）</div>
+    <ul class="compact-list">${list || "<li>无</li>"}${more}</ul>`;
+}
+
+function renderVersionSummary(version, title) {
+  if (!version) {
+    return `<section class="import-panel"><h3>${escapeHtml(title)}</h3><p class="muted">暂无版本。</p></section>`;
+  }
+  const summary = version.summary || {};
+  const quality = summary.quality || {};
+  return `<section class="import-panel">
+    <div class="import-card-head">
+      <div>
+        <h3>${escapeHtml(title)} #${escapeHtml(version.versionNo || "-")}</h3>
+        <p class="muted">${escapeHtml(version.id)} / ${escapeHtml(version.source || "-")} / ${escapeHtml(formatDate(version.createdAt))}</p>
+      </div>
+      <span class="badge ${version.slot === "current" ? "success" : ""}">${escapeHtml(version.slot || "-")}</span>
+    </div>
+    <div class="info-grid">
+      <div><span>文档</span><strong>${escapeHtml(summary.documents || 0)}</strong></div>
+      <div><span>父块</span><strong>${escapeHtml(summary.chunkParents || 0)}</strong></div>
+      <div><span>子块</span><strong>${escapeHtml(summary.chunks || 0)}</strong></div>
+      <div><span>表格行</span><strong>${escapeHtml(summary.tableRowParentCount || 0)}</strong></div>
+      <div><span>最长子块</span><strong>${escapeHtml(summary.maxChildChars || 0)}</strong></div>
+      <div><span>质量分</span><strong>${escapeHtml(quality.qualityScore ?? "-")}</strong></div>
+    </div>
+  </section>`;
+}
+
+function renderVersionPanel(kbId, versions) {
+  const current = versions.current || null;
+  const previous = versions.previous || null;
+  const diff = current?.diffFromPrevious || versions.diffSummary || null;
+  return `<div class="result-card">
+    <div class="import-card-head">
+      <div>
+        <h2>版本与导入差异</h2>
+        <p class="muted">${escapeHtml(kbId)} / ${escapeHtml(diffCountText(diff))}</p>
+      </div>
+      <button type="button" class="secondary" id="closeVersionPanelBtn">关闭</button>
+    </div>
+    <div class="import-layout">
+      ${renderVersionSummary(current, "当前版")}
+      ${renderVersionSummary(previous, "上一版")}
+    </div>
+    ${diff ? `
+      <div class="task-section-title">文档级差异</div>
+      <div class="info-grid">
+        <div><span>上版文档</span><strong>${escapeHtml(diff.totals?.previousDocuments || 0)}</strong></div>
+        <div><span>当前文档</span><strong>${escapeHtml(diff.totals?.currentDocuments || 0)}</strong></div>
+        <div><span>上版父块</span><strong>${escapeHtml(diff.totals?.previousParents || 0)}</strong></div>
+        <div><span>当前父块</span><strong>${escapeHtml(diff.totals?.currentParents || 0)}</strong></div>
+        <div><span>上版子块</span><strong>${escapeHtml(diff.totals?.previousChunks || 0)}</strong></div>
+        <div><span>当前子块</span><strong>${escapeHtml(diff.totals?.currentChunks || 0)}</strong></div>
+      </div>
+      ${renderDocDiffList("新增文档", diff.added || [])}
+      ${renderDocDiffList("删除文档", diff.removed || [])}
+      ${renderDocDiffList("变更文档", diff.changed || [])}
+    ` : `<p class="muted">暂无可比较的上一版。</p>`}
+    <div class="button-row">
+      ${previous ? `<button type="button" class="secondary danger kb-rollback-btn" data-kb-id="${escapeHtml(kbId)}" data-version-id="${escapeHtml(previous.id)}">回滚到上一版</button>` : ""}
+      <a class="nav-button secondary" href="/jobs">打开任务中心</a>
+    </div>
+  </div>`;
+}
+
 function renderKbCard(kb) {
   const quality = kb.quality || {};
+  const versions = kb.versions || {};
+  const diff = versions.diffSummary || versions.current?.diffFromPrevious || null;
   return `<article class="import-kb-card">
     <div class="import-card-head">
       <div>
@@ -37,7 +122,11 @@ function renderKbCard(kb) {
       <span>表格行 ${escapeHtml(quality.tableRowParents ?? 0)}</span>
       <span>最长 ${escapeHtml(quality.longestChildChars ?? 0)} 字</span>
     </div>
+    <p class="muted">版本：当前 #${escapeHtml(versions.current?.versionNo || "-")}，上一版 ${escapeHtml(versions.previous ? `#${versions.previous.versionNo}` : "无")}；${escapeHtml(diffCountText(diff))}</p>
     ${renderQualitySummary(quality)}
+    <div class="button-row">
+      <button type="button" class="secondary kb-version-btn" data-kb-id="${escapeHtml(kb.id)}">查看版本/差异</button>
+    </div>
   </article>`;
 }
 
@@ -132,11 +221,24 @@ function renderImportResult(result) {
       <div><span>最长子块</span><strong>${escapeHtml(imported.maxChildChars || 0)} 字</strong></div>
       <div><span>导入模式</span><strong>${escapeHtml(result.mode || "-")}</strong></div>
       <div><span>向量任务</span><strong>${escapeHtml(result.embeddingJobId || "未创建")}</strong></div>
+      <div><span>版本</span><strong>#${escapeHtml(imported.versionNo || imported.version?.current?.versionNo || "-")}</strong></div>
     </div>
+    ${imported.diffSummary ? `<p class="muted">导入差异：${escapeHtml(diffCountText(imported.diffSummary))}</p>` : ""}
     ${warnings ? `<div class="warning-box"><ul class="compact-list">${warnings}</ul></div>` : `<p class="muted">资料已导入，BM25 检索可立即使用。</p>`}
     <div class="task-section-title">向量索引</div>
     <pre class="command-box">${escapeHtml(result.embedCommands?.knowledgeBase || "npm run embed:local -- --full")}</pre>
     <p class="muted">页面导入会自动创建当前知识库的向量索引任务；如需手动重建，仍可运行上面的命令。</p>
+  </div>`;
+}
+
+function renderRollbackResult(job) {
+  return `<div class="result-card">
+    <h2>回滚任务已完成</h2>
+    <p class="muted">知识库内容已恢复，系统已按配置创建向量索引子任务。</p>
+    <pre class="command-box">${escapeHtml(JSON.stringify(job.resultSummary || {}, null, 2))}</pre>
+    <div class="button-row">
+      <a class="nav-button" href="/jobs">打开任务中心</a>
+    </div>
   </div>`;
 }
 
@@ -189,6 +291,33 @@ async function refreshOverview() {
   wireImportPage();
 }
 
+async function showVersions(kbId) {
+  const versions = await api(`/api/knowledge-bases/${encodeURIComponent(kbId)}/versions`);
+  setResult(renderVersionPanel(kbId, versions));
+  document.querySelector("#closeVersionPanelBtn")?.addEventListener("click", () => setResult(""));
+  document.querySelectorAll(".kb-rollback-btn").forEach((button) => {
+    button.addEventListener("click", () => rollbackKnowledgeBase(button.dataset.kbId || "", button.dataset.versionId || "").catch((error) => {
+      setResult(`<p class="error-text">${escapeHtml(error.message)}</p>`);
+    }));
+  });
+}
+
+async function rollbackKnowledgeBase(kbId, versionId) {
+  const confirmText = window.prompt("输入 ROLLBACK 确认回滚到上一版。回滚不会删除培训任务、邀请、考试或记忆。");
+  if (confirmText !== "ROLLBACK") return;
+  setResult(renderStageProgress({ label: "创建回滚任务", detail: kbId, progress: 24 }));
+  const { job } = await api(`/api/jobs/knowledge-bases/${encodeURIComponent(kbId)}/rollback`, {
+    method: "POST",
+    body: JSON.stringify({ versionId, confirm: "ROLLBACK", autoEmbed: true }),
+  });
+  setResult(renderJobCreated(job));
+  const completed = await waitForJob(job.id);
+  setResult(renderRollbackResult(completed));
+  overview = await api("/api/imports");
+  document.querySelector(".import-kb-grid").innerHTML = (overview.knowledgeBases || []).map(renderKbCard).join("");
+  wireVersionButtons();
+}
+
 async function handleDirectoryImport(event) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -212,6 +341,7 @@ async function handleDirectoryImport(event) {
     setResult(renderImportResult(completed.result || {}));
     overview = await api("/api/imports");
     document.querySelector(".import-kb-grid").innerHTML = (overview.knowledgeBases || []).map(renderKbCard).join("");
+    wireVersionButtons();
   } catch (error) {
     setResult(`<p class="error-text">${escapeHtml(error.message)}</p>`);
   } finally {
@@ -255,11 +385,20 @@ async function handleUploadImport(event) {
     setResult(renderImportResult(completed.result || {}));
     overview = await api("/api/imports");
     document.querySelector(".import-kb-grid").innerHTML = (overview.knowledgeBases || []).map(renderKbCard).join("");
+    wireVersionButtons();
   } catch (error) {
     setResult(`<p class="error-text">${escapeHtml(error.message)}</p>`);
   } finally {
     button.disabled = false;
   }
+}
+
+function wireVersionButtons() {
+  document.querySelectorAll(".kb-version-btn").forEach((button) => {
+    button.addEventListener("click", () => showVersions(button.dataset.kbId || "").catch((error) => {
+      setResult(`<p class="error-text">${escapeHtml(error.message)}</p>`);
+    }));
+  });
 }
 
 function wireImportPage() {
@@ -268,6 +407,7 @@ function wireImportPage() {
   document.querySelector("#refreshImportsBtn")?.addEventListener("click", () => {
     refreshOverview().catch((error) => setResult(`<p class="error-text">${escapeHtml(error.message)}</p>`));
   });
+  wireVersionButtons();
 }
 
 export async function setupImportsApp() {

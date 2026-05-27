@@ -1,6 +1,7 @@
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getRuntimeHealth, getVectorIndexStatus } from "../health.mjs";
+import { listKnowledgeBaseVersions } from "../knowledge-base-versions.mjs";
 import { getKnowledgeBaseQuality } from "../quality.mjs";
 import { dataDir, loadState } from "../store.mjs";
 import { cleanRawDirectory, walkFiles } from "./cleaner.mjs";
@@ -74,6 +75,7 @@ async function summarizeKnowledgeBases() {
   const knowledgeBases = [];
   for (const kb of state.knowledgeBases || []) {
     const vectorIndex = await getVectorIndexStatus(state, kb.id, runtime);
+    const versions = await listKnowledgeBaseVersions(kb.id);
     knowledgeBases.push({
       id: kb.id,
       name: kb.name,
@@ -82,6 +84,11 @@ async function summarizeKnowledgeBases() {
       status: kb.status,
       version: kb.version || "",
       quality: getKnowledgeBaseQuality(state, kb.id, vectorIndex),
+      versions: {
+        current: versions.current,
+        previous: versions.previous,
+        diffSummary: versions.current?.diffFromPrevious || null,
+      },
     });
   }
   return { runtime, knowledgeBases };

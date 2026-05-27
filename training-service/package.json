@@ -18,6 +18,7 @@
     "eval:sqlite": "node scripts/eval-sqlite.mjs",
     "eval:backup": "node scripts/eval-backup.mjs",
     "eval:import": "node scripts/eval-import.mjs",
+    "eval:kb-versions": "node scripts/eval-kb-versions.mjs",
     "eval:jobs": "node scripts/eval-jobs.mjs",
     "eval:traces": "node scripts/eval-traces.mjs",
     "eval:intent": "node scripts/eval-intent.mjs",

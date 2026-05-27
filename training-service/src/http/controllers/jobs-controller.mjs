@@ -3,6 +3,7 @@ import { dataDir } from "../../store.mjs";
 import { importMaxUploadBytes, stageUploadedFiles } from "../../import/service.mjs";
 import { cancelJob, enqueueJob } from "../../jobs/scheduler.mjs";
 import { getJob, listJobs, summarizeJob } from "../../jobs/store.mjs";
+import { getKnowledgeBaseVersion } from "../../knowledge-base-versions.mjs";
 import { readMultipart } from "../multipart.mjs";
 import { readBody } from "../request.mjs";
 import { sendJson } from "../response.mjs";
@@ -158,6 +159,46 @@ export async function handleJobs(req, res, url) {
           kbId,
           full,
           model: body.model || "默认模型",
+        },
+      });
+      sendJson(res, 202, jobResponse(job));
+    } catch (error) {
+      sendError(res, error);
+    }
+    return true;
+  }
+
+  const rollbackMatch = url.pathname.match(/^\/api\/jobs\/knowledge-bases\/([^/]+)\/rollback$/);
+  if (req.method === "POST" && rollbackMatch) {
+    try {
+      const kbId = decodeURIComponent(rollbackMatch[1]);
+      const body = await readBody(req);
+      if (String(body.confirm || "").trim() !== "ROLLBACK") {
+        const error = new Error("Rollback requires confirm: \"ROLLBACK\".");
+        error.statusCode = 400;
+        throw error;
+      }
+      const versionId = String(body.versionId || "").trim();
+      if (!versionId) throw new Error("Missing versionId.");
+      const version = await getKnowledgeBaseVersion(kbId, versionId);
+      if (!version) {
+        sendJson(res, 404, { error: "knowledge base version not found" });
+        return true;
+      }
+      const job = await enqueueJob({
+        type: "rollback_knowledge_base",
+        title: `回滚知识库：${version.summary?.kbName || kbId}`,
+        input: {
+          kbId,
+          versionId,
+          autoEmbed: boolValue(body.autoEmbed, true),
+          embeddingModel: body.embeddingModel || "",
+        },
+        inputSummary: {
+          kbId,
+          targetVersionId: versionId,
+          targetVersionNo: version.versionNo || 0,
+          autoEmbed: boolValue(body.autoEmbed, true),
         },
       });
       sendJson(res, 202, jobResponse(job));

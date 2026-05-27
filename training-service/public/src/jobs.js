@@ -28,6 +28,7 @@ function jobTypeName(type) {
   return {
     import_directory: "目录导入",
     import_upload: "上传导入",
+    rollback_knowledge_base: "知识库回滚",
     embed_local: "向量索引",
   }[type] || type || "-";
 }

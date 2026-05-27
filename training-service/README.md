@@ -51,10 +51,11 @@ D:\OpenClawData\training-index\memory.json
 D:\OpenClawData\training-index\conversation-history.jsonl
 D:\OpenClawData\training-index\agent-traces.jsonl
 D:\OpenClawData\training-index\jobs.json
+D:\OpenClawData\training-index\knowledge-base-versions.json
 D:\OpenClawData\training-index\vector-index-bge-m3.json
 ```
 
-`training.db` 保存业务状态、长期记忆和 SQLite 模式下的异步任务；`conversation-history.jsonl` 追加老板端聊天历史；`agent-traces.jsonl` 记录意图路由和确认链路；`jobs.json` 是 JSON 回滚模式下的任务队列；`vector-index-bge-m3.json` 是可选的本地向量索引。它们不提交 Git。导出的 `state.json` 仍保持 `meta.version = 1`，用于回滚和兼容。
+`training.db` 保存业务状态、长期记忆、SQLite 模式下的异步任务和知识库版本快照；`conversation-history.jsonl` 追加老板端聊天历史；`agent-traces.jsonl` 记录意图路由和确认链路；`jobs.json` 是 JSON 回滚模式下的任务队列；`knowledge-base-versions.json` 是 JSON 回滚模式下的知识库版本快照；`vector-index-bge-m3.json` 是可选的本地向量索引。它们不提交 Git。导出的 `state.json` 仍保持 `meta.version = 1`，用于回滚和兼容。
 
 也可以用环境变量覆盖：
 
@@ -100,6 +101,7 @@ D:\OpenClawData\training-index\backups
 - `training.db`：通过 SQLite backup API 生成的一致快照。
 - `state.json` / `memory.json`：从当前 SQLite 状态导出的兼容回滚副本。
 - `conversation-history.jsonl`、`agent-traces.jsonl`、`jobs.json`：如果存在则一起备份。
+- `knowledge-base-versions.json`：JSON 回滚模式下的知识库版本快照，如果存在则一起备份。
 - `vector-index-*.json`：本地向量索引文件。
 - `manifest.json`：文件清单、大小、sha256、项目版本和 schemaVersion。
 
@@ -113,6 +115,8 @@ D:\OpenClawData\training-index\backups
 - 浏览器上传：上传 `.pdf`、`.xlsx`、`.csv`、`.md`、`.txt` 文件或文件夹。
 
 导入管理页现在会创建后台任务。导入任务完成后，BM25 检索立即可用，并默认自动创建当前知识库的本地向量索引任务。可以打开 `/jobs` 查看导入和 embedding 子任务的进度、结果和错误；如果 embedding 失败，已导入知识库不会回滚，仍可使用 BM25。
+
+每次成功导入会保留知识库“当前版 + 上一版”两个快照，并记录文档级导入差异。`/imports` 中每个知识库卡片可以查看版本、差异和质量变化；回滚上一版时必须输入 `ROLLBACK`，系统会创建 `rollback_knowledge_base` 异步任务，回滚成功后默认再创建当前知识库的本地向量索引任务。回滚只恢复知识库内容，不删除培训任务、邀请、考试、记忆、Trace 或 Jobs。
 
 命令行方式仍然保留：
 
@@ -267,6 +271,7 @@ D:\OpenClawData\training-clean
 - `GET /api/health`
 - `GET /api/knowledge-bases`
 - `GET /api/knowledge-bases/{knowledgeBaseId}/quality`
+- `GET /api/knowledge-bases/{knowledgeBaseId}/versions`
 - `GET /api/reports/overview`
 - `GET /api/employees?q=销售部`
 - `POST /api/chat`
@@ -278,6 +283,7 @@ D:\OpenClawData\training-clean
 - `POST /api/jobs/{jobId}/cancel`
 - `POST /api/jobs/import/directory`
 - `POST /api/jobs/import/upload`
+- `POST /api/jobs/knowledge-bases/{knowledgeBaseId}/rollback`
 - `POST /api/jobs/embed`
 - `GET /api/traces`
 - `GET /api/traces/{traceId}`
@@ -323,6 +329,7 @@ npm run check
 npm run eval:backup
 npm run eval:import
 npm run eval:jobs
+npm run eval:kb-versions
 npm run eval:traces
 npm run eval:sqlite
 npm run smoke
@@ -333,7 +340,7 @@ npm run eval:rag -- --retrieval-only
 
 RAG 检索评测用例维护在 `scripts/fixtures/rag-eval-cases.mjs`，当前共 30 条。默认建议先跑 `--retrieval-only`，以 Top1/Top3 命中、hybrid 是否不低于 BM25 和分类统计作为检索质量回归门槛；完整 `npm run eval:rag` 会额外调用大模型检查答案来源、长度和 OCR 占位。
 
-`eval:jobs` 使用临时数据目录验证异步导入、自动 embedding 子任务、取消、重启恢复和 JSON 任务存储。`eval:traces` 验证脱敏 Trace 读取、过滤和关闭开关。
+`eval:jobs` 使用临时数据目录验证异步导入、自动 embedding 子任务、取消、重启恢复和 JSON 任务存储。`eval:kb-versions` 验证知识库 current/previous 快照、文档级 diff、异步回滚、业务数据保护和 JSON 版本文件。`eval:traces` 验证脱敏 Trace 读取、过滤和关闭开关。
 
 ## 当前限制
 

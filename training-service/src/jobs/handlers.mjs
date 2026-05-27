@@ -1,5 +1,6 @@
 import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { restoreKnowledgeBaseVersion } from "../knowledge-base-versions.mjs";
 import { importPreparedDirectory, runExclusiveImport } from "../import/service.mjs";
 import { buildLocalVectorIndex, localVectorBuildDefaults } from "../local-vector-build.mjs";
 import { dataDir } from "../store.mjs";
@@ -40,6 +41,9 @@ function importSummary(imported = {}) {
     chunkCount: imported.chunkCount || 0,
     tableRowParentCount: imported.tableRowParentCount || 0,
     maxChildChars: imported.maxChildChars || 0,
+    versionId: imported.versionId || imported.version?.current?.id || "",
+    versionNo: imported.versionNo || imported.version?.current?.versionNo || 0,
+    diffSummary: imported.diffSummary || imported.version?.diffSummary || null,
   };
 }
 
@@ -80,6 +84,55 @@ async function runImportJob(job, context) {
   return { result, resultSummary: summary };
 }
 
+async function runRollbackKnowledgeBaseJob(job, context) {
+  const input = job.input || {};
+  const kbId = String(input.kbId || input.knowledgeBaseId || "").trim();
+  const versionId = String(input.versionId || "").trim();
+  if (!kbId || !versionId) throw new Error("Missing kbId or versionId for rollback.");
+  throwIfCancelled(context.signal);
+  await context.progress({
+    percent: 18,
+    stage: "prepare",
+    label: "准备回滚知识库",
+    detail: kbId,
+  });
+  const result = await restoreKnowledgeBaseVersion({ knowledgeBaseId: kbId, versionId, jobId: job.id });
+  throwIfCancelled(context.signal);
+  await context.progress({
+    percent: 72,
+    stage: "restored",
+    label: "知识库已回滚",
+    detail: result.current?.summary?.kbName || kbId,
+  });
+  const summary = {
+    kbId,
+    kbName: result.current?.summary?.kbName || "",
+    restoredFromVersionId: result.restoredFrom?.id || versionId,
+    versionId: result.current?.id || "",
+    versionNo: result.current?.versionNo || 0,
+    diffSummary: result.diffSummary || null,
+  };
+  if (input.autoEmbed !== false) {
+    const child = await context.enqueueChild({
+      type: "embed_local",
+      title: `重建向量索引：${summary.kbName || kbId}`,
+      input: {
+        kbId,
+        model: input.embeddingModel || "",
+        full: false,
+      },
+      inputSummary: {
+        kbId,
+        kbName: summary.kbName,
+        model: input.embeddingModel || "默认模型",
+      },
+    });
+    result.embeddingJobId = child.id;
+    summary.embeddingJobId = child.id;
+  }
+  return { result, resultSummary: summary };
+}
+
 async function runEmbedLocalJob(job, context) {
   const input = job.input || {};
   const defaults = localVectorBuildDefaults({
@@ -110,6 +163,7 @@ async function runEmbedLocalJob(job, context) {
 const handlers = {
   import_directory: runImportJob,
   import_upload: runImportJob,
+  rollback_knowledge_base: runRollbackKnowledgeBaseJob,
   embed_local: runEmbedLocalJob,
 };
 

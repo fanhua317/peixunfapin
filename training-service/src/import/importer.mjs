@@ -1,7 +1,8 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { chunkSemanticDocument } from "../semantic-chunking.mjs";
-import { isoNow, makeId, mutateState } from "../store.mjs";
+import { createKnowledgeBaseSnapshot, recordKnowledgeBaseImportVersion } from "../knowledge-base-versions.mjs";
+import { isoNow, loadState, makeId, mutateState } from "../store.mjs";
 
 export function slugKnowledgeBase(value) {
   return String(value || "kb")
@@ -42,7 +43,8 @@ export async function importCleanDirectory({ inputDir, kbName, aliases = [] }) {
   }
 
   const kbId = `kb-${slugKnowledgeBase(name)}`;
-  return await mutateState(async (state) => {
+  const previousSnapshot = createKnowledgeBaseSnapshot(await loadState(), kbId);
+  const imported = await mutateState(async (state) => {
     state.chunkParents = Array.isArray(state.chunkParents) ? state.chunkParents : [];
     const existing = state.knowledgeBases.find((kb) => kb.id === kbId);
     const now = isoNow();
@@ -179,4 +181,16 @@ export async function importCleanDirectory({ inputDir, kbName, aliases = [] }) {
       maxChildChars,
     };
   });
+  const version = await recordKnowledgeBaseImportVersion({
+    knowledgeBaseId: kbId,
+    previousSnapshot,
+    importSummary: imported,
+  });
+  return {
+    ...imported,
+    versionId: version.current?.id || "",
+    versionNo: version.current?.versionNo || 0,
+    version,
+    diffSummary: version.diffSummary,
+  };
 }

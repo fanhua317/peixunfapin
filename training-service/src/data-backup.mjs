@@ -15,6 +15,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import packageInfo from "../package.json" with { type: "json" };
+import { knowledgeBaseVersionsPath } from "./knowledge-base-versions.mjs";
 import { conversationHistoryPath, loadMemoryStore, memoryPath } from "./memory/store.mjs";
 import { dataDir, loadState, statePath } from "./store.mjs";
 import { closeTrainingDatabase, openTrainingDatabase, sqlitePathFor, SQLITE_SCHEMA_VERSION } from "./sqlite-store.mjs";
@@ -138,6 +139,7 @@ export async function createDataBackup(options = {}) {
     await copyOptionalRuntimeFile(conversationHistoryPath, stagingDir, "conversation-history.jsonl");
     await copyOptionalRuntimeFile(path.join(dataDir, "agent-traces.jsonl"), stagingDir, "agent-traces.jsonl");
     await copyOptionalRuntimeFile(path.join(dataDir, "jobs.json"), stagingDir, "jobs.json");
+    await copyOptionalRuntimeFile(knowledgeBaseVersionsPath, stagingDir, "knowledge-base-versions.json");
     await copyVectorIndexes(stagingDir);
 
     const stagedFiles = (await collectFiles(stagingDir)).filter((file) => file.path !== "manifest.json");
@@ -296,6 +298,7 @@ export async function restoreDataBackup(options = {}) {
       file.path === "conversation-history.jsonl" ||
       file.path === "agent-traces.jsonl" ||
       file.path === "jobs.json" ||
+      file.path === "knowledge-base-versions.json" ||
       /^vector-index-.+\.json$/i.test(file.path)
     ) {
       restored.push(await writeRestoredFile(file.path, data));
