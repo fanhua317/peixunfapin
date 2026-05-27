@@ -75,6 +75,32 @@ $env:TRAINING_STORAGE="json"
 npm start
 ```
 
+## 备份与恢复
+
+第一版备份只覆盖运行数据，不打包原始资料目录、Qdrant volume 或 Ollama：
+
+```powershell
+npm run backup:data
+npm run backup:verify -- --from "D:\OpenClawData\training-index\backups\training-backup-YYYYMMDD-HHmmss.zip"
+npm run restore:data -- --from "D:\OpenClawData\training-index\backups\training-backup-YYYYMMDD-HHmmss.zip" --force
+```
+
+默认备份目录是：
+
+```text
+D:\OpenClawData\training-index\backups
+```
+
+备份包包含：
+
+- `training.db`：通过 SQLite backup API 生成的一致快照。
+- `state.json` / `memory.json`：从当前 SQLite 状态导出的兼容回滚副本。
+- `conversation-history.jsonl`、`agent-traces.jsonl`：如果存在则一起备份。
+- `vector-index-*.json`：本地向量索引文件。
+- `manifest.json`：文件清单、大小、sha256、项目版本和 schemaVersion。
+
+恢复脚本默认只校验备份包，不覆盖数据。必须加 `--force` 才会恢复；恢复前会自动调用 `backup:data` 为当前数据生成一份安全备份。正式恢复前建议先停止服务，避免运行中的进程继续写入数据库。
+
 ## 导入 PDF 和表格资料
 
 1. 把原始文件放到：
@@ -273,6 +299,7 @@ D:\OpenClawData\training-clean
 
 ```powershell
 npm run check
+npm run eval:backup
 npm run eval:sqlite
 npm run smoke
 npm run eval:intent

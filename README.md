@@ -109,6 +109,16 @@ npm run migrate:sqlite
 npm run export:json
 ```
 
+运行数据备份和恢复：
+
+```powershell
+npm run backup:data
+npm run backup:verify -- --from D:\OpenClawData\training-index\backups\training-backup-YYYYMMDD-HHmmss.zip
+npm run restore:data -- --from D:\OpenClawData\training-index\backups\training-backup-YYYYMMDD-HHmmss.zip --force
+```
+
+`backup:data` 默认输出到 `TRAINING_DATA_DIR\backups`，包含 `training.db` 快照、JSON 回滚副本、聊天/路由日志和本地向量索引。恢复属于高风险操作，执行 `--force` 前建议先停止服务；脚本会在覆盖前自动为当前数据再做一份安全备份。
+
 ## 打包给 Windows 用户
 
 生成绿色版 ZIP 和自解压安装 EXE：

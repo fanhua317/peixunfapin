@@ -936,7 +936,17 @@ agent-traces.jsonl
 vector-index-bge-m3.json
 ```
 
-如果使用 JSON 回滚模式或需要导出备份，可运行 `npm run export:json` 得到 `state.json` 和 `memory.json`。如果使用 Qdrant，还需要备份 Qdrant volume 或 collection snapshot；如果只使用 BM25，则没有向量索引也能运行，但语义召回会下降。清洗后的资料目录 `training-clean` 也建议一起保留，方便重建 SQLite 数据、Qdrant 或本地向量索引。
+当前提供运行数据备份命令：
+
+```powershell
+npm run backup:data
+npm run backup:verify -- --from <backup.zip>
+npm run restore:data -- --from <backup.zip> --force
+```
+
+`backup:data` 默认输出到 `TRAINING_DATA_DIR\backups`。备份包包含通过 SQLite backup API 生成的 `training.db` 快照、`state.json` / `memory.json` 回滚副本、聊天/路由 JSONL、本地向量索引和 `manifest.json` 校验清单。恢复默认只校验，必须加 `--force` 才会覆盖；覆盖前脚本会自动为当前数据生成一份安全备份。恢复前建议先停止服务。
+
+如果使用 Qdrant，还需要额外备份 Qdrant volume 或 collection snapshot；如果只使用 BM25，则没有向量索引也能运行，但语义召回会下降。清洗后的资料目录 `training-clean` 也建议一起保留，方便重建 SQLite 数据、Qdrant 或本地向量索引。
 
 ## 11. 关键环境变量
 
@@ -984,9 +994,10 @@ npm run check
 npm run eval:sqlite
 npm run migrate:sqlite -- --dry
 npm run migrate:sqlite
+npm run eval:backup
 ```
 
-`eval:sqlite` 使用临时目录验证 JSON 导入、SQLite 读写、记忆迁移和 JSON 导出。`migrate:sqlite` 面向当前 `TRAINING_DATA_DIR`，执行前会保留原 `state.json` / `memory.json` 备份。
+`eval:sqlite` 使用临时目录验证 JSON 导入、SQLite 读写、记忆迁移和 JSON 导出。`eval:backup` 使用临时目录验证备份、校验、无 `--force` 恢复演练、强制恢复和恢复后可读性。`migrate:sqlite` 面向当前 `TRAINING_DATA_DIR`，执行前会保留原 `state.json` / `memory.json` 备份。
 
 ### 12.3 业务烟测
 
@@ -1149,7 +1160,7 @@ public/src/ui.js
    增加题目难度、知识点覆盖率和重复率控制。
 
 6. 部署备份脚本
-   明确备份 `training.db`、WAL 辅助文件、聊天历史、路由轨迹、本地向量索引和 Qdrant snapshot，并保留 `export:json` 回滚流程。
+   已提供第一版运行数据备份/恢复脚本；后续可继续增加定时备份、保留周期和 Qdrant snapshot 自动化。
 
 ### 14.2 中期优化
 

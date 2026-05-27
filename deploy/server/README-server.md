@@ -76,6 +76,17 @@ data/training-index/vector-index-bge-m3.json
 
 `training.db` is the default business state and local memory database. `conversation-history.jsonl` remains an append-only chat history file, and `agent-traces.jsonl` is useful for intent-routing diagnostics. `vector-index-bge-m3.json` only exists when the local vector backend is used.
 
+The package includes built-in runtime backup commands:
+
+```bash
+cd training-service
+npm run backup:data
+npm run backup:verify -- --from /path/to/training-backup.zip
+npm run restore:data -- --from /path/to/training-backup.zip --force
+```
+
+Backups are written to `data/training-index/backups` by default. Stop the service before a real restore; the restore command verifies the ZIP first and creates a safety backup before overwriting `training.db`.
+
 On first SQLite startup, old `state.json` and `memory.json` files are imported automatically and kept as backups. To temporarily roll back to JSON storage, set:
 
 ```text

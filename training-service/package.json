@@ -12,7 +12,11 @@
     "embed:local": "node scripts/embed-local-index.mjs",
     "migrate:sqlite": "node scripts/migrate-sqlite.mjs",
     "export:json": "node scripts/export-json.mjs",
+    "backup:data": "node scripts/backup-data.mjs",
+    "restore:data": "node scripts/restore-data.mjs",
+    "backup:verify": "node scripts/backup-verify.mjs",
     "eval:sqlite": "node scripts/eval-sqlite.mjs",
+    "eval:backup": "node scripts/eval-backup.mjs",
     "eval:intent": "node scripts/eval-intent.mjs",
     "eval:memory": "node scripts/eval-memory.mjs",
     "eval:rag": "node scripts/eval-rag.mjs",
@@ -24,6 +28,7 @@
   "dependencies": {
     "@napi-rs/canvas": "0.1.100",
     "better-sqlite3": "^12.10.0",
+    "fflate": "^0.8.3",
     "pdfjs-dist": "5.7.284"
   },
   "engines": {

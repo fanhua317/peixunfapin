@@ -474,6 +474,7 @@ A：目前主要有：
 
 ```powershell
 npm run check
+npm run eval:backup
 npm run eval:sqlite
 npm run smoke
 npm run eval:rag -- --retrieval-only
@@ -481,7 +482,19 @@ npm run eval:intent
 npm run eval:memory
 ```
 
-`check` 检查语法，`eval:sqlite` 验证 JSON 导入、SQLite 读写、记忆迁移和 JSON 导出，`smoke` 跑核心业务闭环，`eval:rag` 验证检索效果，`eval:intent` 验证意图路由，`eval:memory` 验证记忆保存、召回、覆盖和敏感信息拦截。
+`check` 检查语法，`eval:backup` 验证备份、校验和恢复链路，`eval:sqlite` 验证 JSON 导入、SQLite 读写、记忆迁移和 JSON 导出，`smoke` 跑核心业务闭环，`eval:rag` 验证检索效果，`eval:intent` 验证意图路由，`eval:memory` 验证记忆保存、召回、覆盖和敏感信息拦截。
+
+### Q41-1：SQLite 接入后怎么做备份和恢复？
+
+A：项目提供了三条命令：
+
+```powershell
+npm run backup:data
+npm run backup:verify -- --from <backup.zip>
+npm run restore:data -- --from <backup.zip> --force
+```
+
+备份默认放在 `TRAINING_DATA_DIR/backups`，包含 SQLite 一致快照、`state.json` / `memory.json` 回滚副本、聊天历史、路由轨迹和本地向量索引。恢复时默认只校验，必须加 `--force` 才覆盖；覆盖前会自动为当前数据再生成一份安全备份。
 
 ### Q42：为什么要单独做意图评测？
 
