@@ -154,6 +154,10 @@ D:\juzhou-agent\peixun
         ├── health.mjs
         ├── intent-confirmation.mjs
         ├── agent-trace.mjs
+        ├── agent-runs
+        │   └── store.mjs
+        ├── tools
+        │   └── registry.mjs
         ├── direct-llm.mjs
         ├── llm.mjs
         ├── local-vector-index.mjs
@@ -210,8 +214,8 @@ D:\juzhou-agent\peixun
 - 可通过 `TRAINING_DATA_DIR` 覆盖数据目录，也可通过 `TRAINING_SQLITE_PATH` 指定数据库文件。
 - `TRAINING_STORAGE=sqlite|json` 控制存储模式，默认 `sqlite`；`json` 用于临时回滚。
 - 首次 SQLite 启动会从旧版 `state.json` 和 `memory.json` 导入，导入前保留 `.backup-时间戳.json`。
-- `conversation-history.jsonl`、`agent-traces.jsonl`、本地向量索引和 Qdrant 不迁入 SQLite，继续作为追加文件或外部索引存在。
-- SQLite 内部 schemaVersion 当前为 3，新增 `jobs` 表保存异步导入和本地向量索引任务，新增 `knowledge_base_versions` 表保存知识库 current/previous 快照和文档级导入差异；`state.json meta.version` 仍保持 1。
+- `conversation-history.jsonl`、`agent-traces.jsonl`、JSON 模式 `agent-runs.jsonl`、本地向量索引和 Qdrant 不迁入业务 state，继续作为追加文件或治理索引存在。
+- SQLite 内部 schemaVersion 当前为 4，新增 `jobs` 表保存异步导入和本地向量索引任务，新增 `knowledge_base_versions` 表保存知识库 current/previous 快照和文档级导入差异，新增 `agent_runs` / `agent_steps` 保存结构化运行治理记录；`state.json meta.version` 仍保持 1。
 - 本地向量索引默认保存在同目录的 `vector-index-{model}.json`，例如 `vector-index-bge-m3.json`。
 
 主要数据集合：
@@ -228,6 +232,7 @@ D:\juzhou-agent\peixun
 - `events`：业务事件日志。
 - `jobs`：异步任务队列，第一版覆盖知识库导入和本地向量索引重建。
 - `knowledge_base_versions`：知识库版本快照，只保留当前版和上一版，用于导入差异查看和回滚。
+- `agent_runs` / `agent_steps`：老板端 Agent 请求和步骤时间线，用于排查误判、确认门禁和工具调用路径。
 
 本地运行文件：
 
@@ -308,7 +313,7 @@ SQLite 采用“集合分表 + 完整 JSON 原文保留”的兼容方案，外�
 - `npm run render:pdf`：把扫描型 PDF 渲染为图片页，供后续 OCR 或视觉识别。
 - `/imports`：老板端导入管理页，支持本机目录导入、浏览器上传、版本差异查看和上一版回滚。
 - `/jobs`：老板端任务中心，查看导入、知识库回滚和本地向量索引任务状态、进度、错误和结果摘要。
-- `/traces`：Agent Trace 可视化页，查看脱敏意图路由轨迹。
+- `/traces`：Agent Run / Trace 可视化页，查看结构化运行步骤、Tool Registry 和兼容 Trace 摘要。
 
 当前限制：
 
@@ -401,6 +406,9 @@ POST /api/jobs/import/directory
 POST /api/jobs/import/upload
 POST /api/jobs/knowledge-bases/{id}/rollback
 POST /api/jobs/embed
+GET  /api/agent-runs
+GET  /api/agent-runs/{runId}
+GET  /api/tools/registry
 GET  /api/traces
 GET  /api/traces/{traceId}
 GET  /api/memory
@@ -507,11 +515,13 @@ training-service/src/memory
 - 模糊偏好先进入 `pending`，前端展示确认卡片；确认后才转为 `active`。
 - 记忆不是事实库，产品参数、工艺、资料来源仍必须来自 RAG。
 
-### 6.5 异步任务与 Trace 层
+### 6.5 异步任务、Agent Run 与 Trace 层
 
 核心目录：
 ```text
 training-service/src/jobs
+training-service/src/agent-runs
+training-service/src/tools
 training-service/src/traces.mjs
 ```
 
@@ -519,7 +529,9 @@ training-service/src/traces.mjs
 - `jobs` 负责本地异步任务队列，第一版覆盖知识库导入、知识库回滚和本地向量索引重建。
 - SQLite 模式下任务保存在 `training.db` 的 `jobs` 表，JSON 回滚模式下保存在 `jobs.json`。
 - `/jobs` 页面展示任务状态、阶段进度、错误、结果摘要和取消操作。
-- `/traces` 页面读取 `agent-traces.jsonl`，只展示脱敏消息预览、意图、skill、确认状态、action、耗时和错误。
+- `agent-runs` 为每次 `/api/agent/dispatch`、`/api/agent/stream` 和 `/api/chat` 生成结构化 run，并按 step 记录 `memory_recall`、`intent_route`、`confirmation_verify`、`tool_execute`、`memory_write` 和 `result_output`。
+- `tools/registry.mjs` 统一登记网页端 5 个 skill 和 OpenClaw 8 个 training tool 的风险等级、确认要求、幂等性和服务端入口。
+- `/traces` 页面同时展示 Agent Run、step 时间线、Tool Registry 和兼容 Trace 摘要；所有视图只展示脱敏消息预览、hash、摘要、耗时和错误。
 
 ### 6.6 RAG 检索层
 
@@ -571,6 +583,7 @@ training-service/src/gateway
 ```text
 training-service/src/store.mjs
 training-service/src/knowledge-base-versions.mjs
+training-service/src/agent-runs/store.mjs
 ```
 
 职责：
@@ -582,6 +595,7 @@ training-service/src/knowledge-base-versions.mjs
 - 保存异步任务，SQLite 模式写入 `training.db`，JSON 模式写入 `jobs.json`。
 - 保存知识库版本，SQLite 模式写入 `knowledge_base_versions` 表，JSON 模式写入 `knowledge-base-versions.json`。
 - 知识库版本只保留 current/previous 两份快照，覆盖 knowledgeBase、documents、chunkParents 和 chunks。
+- 保存 Agent Run，SQLite 模式写入 `agent_runs` / `agent_steps`，JSON 模式追加 `agent-runs.jsonl`。
 - 提供 mutation 辅助。
 - 生成 ID 和 token。
 - 记录事件。
@@ -695,7 +709,7 @@ sequenceDiagram
   -> 可选 LLM JSON router
   -> 置信度 / 风险门控
   -> 确认卡片或执行 skill
-  -> 写入 agent-traces.jsonl
+  -> 写入 Agent Run step 和兼容 agent-traces.jsonl
 ```
 
 关键约束：
@@ -705,8 +719,9 @@ sequenceDiagram
 - LLM 单独识别出的操作意图，如果本地规则没有支持，会先要求确认，避免模型过度调用工具。
 - 确认卡片携带服务端签发的 `confirmationToken`，token 绑定原始消息和 skill，默认 15 分钟过期。
 - 后端执行 `confirmedSkill` 前会校验 token；缺 token、过期、换消息或换 skill 都拒绝执行。
-- `/api/agent/dispatch` 和 `/api/agent/stream` 会把消息摘要、决策、动作、确认状态和耗时写入数据目录的 `agent-traces.jsonl`，方便把误判样本补回 `npm run eval:intent`。
-- `/traces` 页面和 `/api/traces` 只读取脱敏摘要，不展示完整聊天内容或 API Key。
+- `/api/agent/dispatch`、`/api/agent/stream` 和 `/api/chat` 会生成 Agent Run，记录记忆召回、意图路由、确认校验、tool 执行、记忆写入和结果输出。
+- 兼容 Trace 继续写入数据目录的 `agent-traces.jsonl`，并携带 `runId`，方便从旧摘要跳转到结构化 run。
+- `/traces` 页面、`/api/agent-runs` 和 `/api/traces` 只读取脱敏摘要，不展示完整聊天内容或 API Key。
 
 ### 7.5 记忆写入与使用链路
 
@@ -975,6 +990,7 @@ training.db-shm
 training.db-wal
 conversation-history.jsonl
 agent-traces.jsonl
+agent-runs.jsonl
 vector-index-bge-m3.json
 ```
 
@@ -1042,9 +1058,10 @@ npm run eval:import
 npm run eval:jobs
 npm run eval:kb-versions
 npm run eval:traces
+npm run eval:agent-trajectory
 ```
 
-`eval:sqlite` 使用临时目录验证 JSON 导入、SQLite 读写、记忆迁移和 JSON 导出。`eval:backup` 使用临时目录验证备份、校验、无 `--force` 恢复演练、强制恢复和恢复后可读性。`eval:import` 验证同步导入服务。`eval:jobs` 验证异步导入、自动 embedding 子任务、取消、重启恢复和 JSON 任务存储。`eval:kb-versions` 验证知识库 current/previous 快照、文档级 diff、异步回滚和 JSON 版本文件。`eval:traces` 验证脱敏 Trace 读取和过滤。`migrate:sqlite` 面向当前 `TRAINING_DATA_DIR`，执行前会保留原 `state.json` / `memory.json` 备份。
+`eval:sqlite` 使用临时目录验证 JSON 导入、SQLite 读写、记忆迁移和 JSON 导出。`eval:backup` 使用临时目录验证备份、校验、无 `--force` 恢复演练、强制恢复和恢复后可读性。`eval:import` 验证同步导入服务。`eval:jobs` 验证异步导入、自动 embedding 子任务、取消、重启恢复和 JSON 任务存储。`eval:kb-versions` 验证知识库 current/previous 快照、文档级 diff、异步回滚和 JSON 版本文件。`eval:traces` 验证脱敏 Trace 读取和过滤。`eval:agent-trajectory` 验证 Agent Run step、Tool Registry、确认门禁和禁止误执行的负例。`migrate:sqlite` 面向当前 `TRAINING_DATA_DIR`，执行前会保留原 `state.json` / `memory.json` 备份。
 
 ### 12.3 业务烟测
 

@@ -12,6 +12,7 @@ function normalizeLimit(value) {
 function compactTrace(record = {}) {
   return {
     id: record.id || "",
+    runId: record.runId || "",
     createdAt: record.createdAt || "",
     transport: record.transport || "",
     route: record.route || "",

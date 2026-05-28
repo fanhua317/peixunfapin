@@ -1,5 +1,6 @@
 import { isAuthenticated } from "./auth.mjs";
 import { handleAgent, handleEmployees } from "./controllers/agent-controller.mjs";
+import { handleAgentRuns } from "./controllers/agent-runs-controller.mjs";
 import { handleAuth } from "./controllers/auth-controller.mjs";
 import { handleHealth } from "./controllers/health-controller.mjs";
 import { handleImports } from "./controllers/imports-controller.mjs";
@@ -9,11 +10,14 @@ import { handleKnowledge } from "./controllers/knowledge-controller.mjs";
 import { handleMemory } from "./controllers/memory-controller.mjs";
 import { handleAnswer, handleQuiz } from "./controllers/quiz-controller.mjs";
 import { handleReports, handleTasks } from "./controllers/tasks-controller.mjs";
+import { handleTools } from "./controllers/tools-controller.mjs";
 import { handleTraces } from "./controllers/traces-controller.mjs";
 import { sendJson } from "./response.mjs";
 
 const authenticatedHandlers = [
   handleHealth,
+  handleAgentRuns,
+  handleTools,
   handleJobs,
   handleTraces,
   handleImports,

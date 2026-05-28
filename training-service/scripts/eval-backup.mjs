@@ -42,6 +42,7 @@ try {
     { sessionId: "backup-eval", role: "user", content: "备份测试消息", action: "eval" },
   ]);
   await writeFile(path.join(tempDir, "agent-traces.jsonl"), `${JSON.stringify({ id: "trace-backup-eval" })}\n`, "utf8");
+  await writeFile(path.join(tempDir, "agent-runs.jsonl"), `${JSON.stringify({ id: "run-backup-eval" })}\n`, "utf8");
   await writeFile(path.join(tempDir, "vector-index-bge-m3.json"), JSON.stringify({ model: "bge-m3", items: [1] }), "utf8");
   results.push({ name: "seed data", ok: true });
 
@@ -49,6 +50,7 @@ try {
   assert(backup.ok && backup.backupPath.endsWith(".zip"), "expected backup zip");
   assert(backup.manifest.files.some((file) => file.path === "training.db"), "expected sqlite snapshot in backup");
   assert(backup.manifest.files.some((file) => file.path === "conversation-history.jsonl"), "expected conversation history in backup");
+  assert(backup.manifest.files.some((file) => file.path === "agent-runs.jsonl"), "expected agent runs in backup");
   results.push({ name: "backup created", ok: true });
 
   const verified = await verifyDataBackup({ from: backup.backupPath });
@@ -63,6 +65,7 @@ try {
     state.tasks = [];
   });
   await writeFile(path.join(tempDir, "conversation-history.jsonl"), "", "utf8");
+  await writeFile(path.join(tempDir, "agent-runs.jsonl"), "", "utf8");
   await writeFile(path.join(tempDir, "vector-index-bge-m3.json"), JSON.stringify({ items: [] }), "utf8");
   const restored = await restoreDataBackup({ from: backup.backupPath, force: true });
   assert(restored.restored && restored.safetyBackupPath, "expected forced restore with safety backup");
@@ -71,10 +74,12 @@ try {
   const state = await loadState();
   const memory = await loadMemoryStore();
   const history = await readFile(path.join(tempDir, "conversation-history.jsonl"), "utf8");
+  const runs = await readFile(path.join(tempDir, "agent-runs.jsonl"), "utf8");
   const vectorIndex = JSON.parse(await readFile(path.join(tempDir, "vector-index-bge-m3.json"), "utf8"));
   assert(state.tasks.some((task) => task.id === "task-backup-eval"), "restored task missing");
   assert(memory.memories.some((item) => item.id === "mem-backup-eval"), "restored memory missing");
   assert(/备份测试消息/.test(history), "restored conversation history missing");
+  assert(/run-backup-eval/.test(runs), "restored agent runs missing");
   assert(vectorIndex.items?.[0] === 1, "restored vector index missing");
   results.push({ name: "restored data readable", ok: true });
 

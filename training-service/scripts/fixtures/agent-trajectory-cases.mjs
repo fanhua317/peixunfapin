@@ -1,0 +1,48 @@
+export const agentTrajectoryCases = [
+  {
+    id: "training-draft",
+    message: "给王小明发布电机培训",
+    expectedAction: "draft",
+    expectedSkill: "create_training_draft",
+    mustSteps: ["memory_recall", "intent_route", "tool_execute:create_training_draft", "result_output"],
+    mustNotSteps: ["tool_execute:delete_training_records"],
+  },
+  {
+    id: "reinput-new-draft",
+    message: "重新输入：给李小红发布电机基础培训，明天下午 6 点前完成",
+    expectedAction: "draft",
+    expectedSkill: "create_training_draft",
+    mustSteps: ["intent_route", "tool_execute:create_training_draft"],
+    mustNotAction: "publish",
+  },
+  {
+    id: "delete-needs-confirmation",
+    message: "把之前培训记录删掉",
+    expectedAction: "intent_confirm",
+    expectedSkill: "delete_training_records",
+    mustSteps: ["memory_recall", "intent_route", "result_output"],
+    mustNotSteps: ["tool_execute:delete_training_records"],
+  },
+  {
+    id: "status-query",
+    message: "查一下培训完成情况",
+    expectedAction: "status",
+    expectedSkill: "show_training_status",
+    mustSteps: ["intent_route", "tool_execute:show_training_status"],
+  },
+  {
+    id: "marketing-article",
+    message: "写一篇关于火锅的软文",
+    expectedAction: "marketing_article",
+    expectedSkill: "generate_marketing_article",
+    mustSteps: ["intent_route", "tool_execute:generate_marketing_article"],
+  },
+  {
+    id: "memory-instruction",
+    message: "以后软文默认短一点，偏公众号",
+    expectedAction: "memory_saved",
+    mustSteps: ["memory_recall", "memory_instruction", "result_output"],
+    mustNotSteps: ["tool_execute:create_training_draft", "tool_execute:delete_training_records"],
+  },
+];
+

@@ -21,6 +21,7 @@
     "eval:kb-versions": "node scripts/eval-kb-versions.mjs",
     "eval:jobs": "node scripts/eval-jobs.mjs",
     "eval:traces": "node scripts/eval-traces.mjs",
+    "eval:agent-trajectory": "node scripts/eval-agent-trajectory.mjs",
     "eval:intent": "node scripts/eval-intent.mjs",
     "eval:memory": "node scripts/eval-memory.mjs",
     "eval:rag": "node scripts/eval-rag.mjs",

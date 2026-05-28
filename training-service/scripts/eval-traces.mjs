@@ -17,6 +17,7 @@ const results = [];
 
 try {
   await appendAgentTrace({
+    runId: "run-trace-eval",
     transport: "http",
     route: "/api/agent/dispatch",
     message: "给王小明发布电机培训",
@@ -60,6 +61,8 @@ try {
   assert(all.traces.length === 3, "expected three traces");
   assert(!Object.hasOwn(all.traces[0], "message"), "trace list must not expose full message field");
   assert(all.traces.every((trace) => trace.messageHash && trace.messagePreview), "trace should expose preview and hash");
+  assert(all.traces.some((trace) => trace.runId === "run-trace-eval"), "trace should expose runId when present");
+  assert(!all.traces.some((trace) => /sk-should-not-appear/.test(trace.messagePreview)), "trace preview should redact API-like keys");
   results.push({ name: "trace list", ok: true, count: all.traces.length });
 
   const skillFiltered = await listAgentTraces({ skill: "delete_training_records" });

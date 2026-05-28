@@ -10,7 +10,11 @@ function nowIso() {
 }
 
 function compact(value, limit = 240) {
-  const text = String(value || "").replace(/\s+/g, " ").trim();
+  const text = String(value || "")
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "sk-[redacted]")
+    .replace(/\b(?:api[_-]?key|token|password|secret)\s*[:=]\s*\S+/gi, "$1=[redacted]")
+    .replace(/\s+/g, " ")
+    .trim();
   return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
 }
 
@@ -90,6 +94,7 @@ export async function appendAgentTrace(entry = {}) {
   const message = String(entry.message || "");
   const record = {
     id: `trace-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    runId: entry.runId || "",
     createdAt: nowIso(),
     transport: entry.transport || "http",
     route: entry.route || "",

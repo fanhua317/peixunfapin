@@ -665,6 +665,56 @@ A：RAG 项目的资料不是一次性导入后就不变，真实业务里产品
 
 > 我没有一开始做无限版本审计，而是先保留上一版，解决最高频的“导入错了能看差异、能撤回”问题。这样既控制 SQLite 体积，又把资料治理能力接进了导入页面和任务中心。
 
+### Q60：为什么又加 Agent Run，而不是只看 Trace 日志？
+
+A：旧的 Trace 是“一次请求一条摘要”，适合快速看意图、skill、action 和错误，但它回答不了更细的问题：这次请求有没有读记忆、LLM 路由前本地规则是什么、确认 token 有没有校验、到底有没有执行删除工具、失败发生在哪一步。
+
+Agent Run 把一次老板端请求拆成结构化 step，例如：
+
+```text
+memory_recall
+memory_instruction
+state_load
+intent_route
+confirmation_verify
+tool_execute
+memory_write
+result_output
+```
+
+这样排查误判时可以直接看工具调用轨迹，而不是猜。SQLite 模式下 run 和 step 写入 `agent_runs` / `agent_steps`，JSON 回滚模式下追加到 `agent-runs.jsonl`。旧 `agent-traces.jsonl` 仍保留，并增加 `runId`，用于兼容已有 Trace 页面和测试。
+
+### Q61：Tool Registry 在这个项目里解决什么问题？
+
+A：之前网页端 skill 的执行逻辑分散在 HTTP controller 和 WebSocket 入口里，容易出现两个入口行为不一致。Tool Registry 把当前网页端 5 个 skill 和 OpenClaw 8 个 training tool 的元信息集中起来：工具名、类型、风险等级、是否需要确认、是否幂等、超时、服务端入口和结果摘要。
+
+实际价值有三个：
+
+1. 路由结果不直接落到散乱 `if/else`，而是通过 registry 找到可执行 skill。
+2. 删除培训记录这种高风险动作可以在元数据层明确要求确认。
+3. `/api/tools/registry` 能把系统已有工具暴露给治理页面和后续评测，方便检查“Agent 能调哪些工具、这些工具有多危险”。
+
+这不是为了炫技加抽象，而是为了让 tool 使用可枚举、可审计、可测试。
+
+### Q62：轨迹评测和意图评测有什么区别？
+
+A：`eval:intent` 只验证“模型或规则把这句话判成哪个 skill”，例如“把之前培训记录删掉”必须识别成 `delete_training_records` 并要求确认。
+
+`eval:agent-trajectory` 更进一步，验证“识别后有没有走正确执行轨迹”。比如：
+
+- 删除记录第一次只能返回 `intent_confirm`，不能出现 `tool_execute:delete_training_records`。
+- 确认删除必须先出现 `confirmation_verify:delete_training_records`，再出现 `tool_execute:delete_training_records`。
+- “重新输入：给李小红发布培训”必须创建新草稿，不能发布旧草稿。
+- 普通记忆指令只走记忆处理，不应误触发培训或删除工具。
+
+这更接近成熟 Agent 项目的 trajectory eval：不是只看最终回答，而是检查中间工具选择、确认门禁和禁止误执行的约束。
+
+### Q63：Agent Run 会不会泄露用户聊天内容或 API Key？
+
+A：不会保存完整消息。Run 和 Trace 都只保存 `messagePreview`、`messageHash`、长度、step 摘要和耗时。`messagePreview` 会压缩长度，并对 `sk-...` 这类 API Key 形态和 `token/api_key/password/secret` 字段做脱敏。模型完整输出、完整用户消息、确认 token 和 API Key 不进入治理页面。
+
+这个取舍是有意的：排障需要“足够判断发生了什么”的摘要，但不需要把所有对话内容变成新的敏感数据源。
+
 ## 13. 后续对话补充区
 
 后续如果继续讨论以下内容，应追加到本文档：

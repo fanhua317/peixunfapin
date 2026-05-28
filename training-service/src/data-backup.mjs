@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import packageInfo from "../package.json" with { type: "json" };
 import { knowledgeBaseVersionsPath } from "./knowledge-base-versions.mjs";
+import { agentRunsPath } from "./agent-runs/store.mjs";
 import { conversationHistoryPath, loadMemoryStore, memoryPath } from "./memory/store.mjs";
 import { dataDir, loadState, statePath } from "./store.mjs";
 import { closeTrainingDatabase, openTrainingDatabase, sqlitePathFor, SQLITE_SCHEMA_VERSION } from "./sqlite-store.mjs";
@@ -138,6 +139,7 @@ export async function createDataBackup(options = {}) {
     await writeJson(path.join(stagingDir, "memory.json"), memory);
     await copyOptionalRuntimeFile(conversationHistoryPath, stagingDir, "conversation-history.jsonl");
     await copyOptionalRuntimeFile(path.join(dataDir, "agent-traces.jsonl"), stagingDir, "agent-traces.jsonl");
+    await copyOptionalRuntimeFile(agentRunsPath, stagingDir, "agent-runs.jsonl");
     await copyOptionalRuntimeFile(path.join(dataDir, "jobs.json"), stagingDir, "jobs.json");
     await copyOptionalRuntimeFile(knowledgeBaseVersionsPath, stagingDir, "knowledge-base-versions.json");
     await copyVectorIndexes(stagingDir);
@@ -297,6 +299,7 @@ export async function restoreDataBackup(options = {}) {
       file.path === "memory.json" ||
       file.path === "conversation-history.jsonl" ||
       file.path === "agent-traces.jsonl" ||
+      file.path === "agent-runs.jsonl" ||
       file.path === "jobs.json" ||
       file.path === "knowledge-base-versions.json" ||
       /^vector-index-.+\.json$/i.test(file.path)

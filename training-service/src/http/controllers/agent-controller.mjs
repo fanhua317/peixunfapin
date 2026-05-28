@@ -1,19 +1,27 @@
-import { createTaskDraft, deleteTrainingRecords, getTaskStatus, searchEmployees } from "../../domain/index.mjs";
-import { classifyTrainingIntent, generateMarketingArticle, isConfirmedSkillAllowed } from "../../ai/index.mjs";
+import { searchEmployees } from "../../domain/index.mjs";
+import { classifyTrainingIntent, isConfirmedSkillAllowed } from "../../ai/index.mjs";
 import { appendAgentTrace } from "../../agent-trace.mjs";
-import { answerGeneralChat } from "../../chat/general-chat.mjs";
-import { getRuntimeHealth, getVectorIndexStatus } from "../../health.mjs";
+import {
+  failRun,
+  finishRun,
+  recordRunStep,
+  startRun,
+} from "../../agent-runs/store.mjs";
 import { createIntentConfirmationToken, verifyIntentConfirmationToken } from "../../intent-confirmation.mjs";
 import {
   buildMemoryContext,
   normalizeMemoryMode,
   normalizeSessionId,
   renderIntentMemoryHint,
-  trainingDefaultsFromMemory,
 } from "../../memory/index.mjs";
 import { applyMemoryAfterTurn, processMemoryInstruction } from "../../memory/flow.mjs";
-import { getKnowledgeBaseQuality } from "../../quality.mjs";
-import { loadState, mutateState } from "../../store.mjs";
+import { loadState } from "../../store.mjs";
+import {
+  executeWebSkill,
+  getWebSkill,
+  summarizeToolInput,
+  summarizeToolResult,
+} from "../../tools/registry.mjs";
 import { readBody } from "../request.mjs";
 import { sendJson } from "../response.mjs";
 
@@ -24,47 +32,11 @@ export async function handleEmployees(req, res, url) {
   return true;
 }
 
-async function sendGeneralChat(res, message, decision = null, options = {}) {
-  try {
-    sendJson(res, 200, {
-      action: "chat",
-      ...(decision ? { decision } : {}),
-      ...(await answerGeneralChat(message, { memoryContext: options.memoryContext })),
-    });
-  } catch (error) {
-    sendJson(res, 503, {
-      action: "chat",
-      ...(decision ? { decision } : {}),
-      error: error instanceof Error ? error.message : String(error),
-      source: "llm-api",
-      route: "general_chat",
-      llmConfigured: false,
-    });
-  }
-}
-
-async function createEnrichedTaskDraft(state, instruction, memoryContext = null) {
-  const draft = createTaskDraft(state, instruction, {
-    memoryDefaults: trainingDefaultsFromMemory(memoryContext),
-  });
-  const knowledgeBaseId = draft.knowledgeBase?.id;
-  if (!knowledgeBaseId) return draft;
-  const runtime = await getRuntimeHealth(state);
-  const vectorIndex = await getVectorIndexStatus(state, knowledgeBaseId, runtime);
-  draft.knowledgeBase.quality = getKnowledgeBaseQuality(state, knowledgeBaseId, vectorIndex);
-  return draft;
-}
-
 function intentLabel(skill) {
-  return {
-    create_training_draft: "创建培训草稿",
-    show_training_status: "查询培训进度",
-    delete_training_records: "删除培训记录",
-    generate_marketing_article: "生成营销软文",
-  }[skill] || "执行操作";
+  return getWebSkill(skill)?.label || "执行操作";
 }
 
-function intentConfirmPayload(message, decision) {
+export function intentConfirmPayload(message, decision) {
   const confirmation = createIntentConfirmationToken(message, decision.skill);
   return {
     action: "intent_confirm",
@@ -78,20 +50,20 @@ function intentConfirmPayload(message, decision) {
       description: decision.skill === "delete_training_records"
         ? "删除会移除匹配的培训任务、学习链接、试卷和答题记录；知识库和员工名单不会删除。"
         : `我理解你想${intentLabel(decision.skill)}。为避免误操作，请确认后再执行。`,
-      risk: decision.skill === "delete_training_records" ? "high" : "normal",
+      risk: getWebSkill(decision.skill)?.risk || (decision.skill === "delete_training_records" ? "high" : "normal"),
     },
   };
 }
 
-function validateConfirmedSkill({ confirmedSkill, confirmationToken, message }) {
+export function validateConfirmedSkill({ confirmedSkill, confirmationToken, message }, status = 400) {
   if (!confirmedSkill) return null;
   if (!isConfirmedSkillAllowed(confirmedSkill)) {
-    return { status: 400, error: "unsupported confirmedSkill" };
+    return { status, error: "unsupported confirmedSkill" };
   }
   const verification = verifyIntentConfirmationToken(confirmationToken, { message, skill: confirmedSkill });
   if (!verification.ok) {
     return {
-      status: 409,
+      status: status === 400 ? 409 : status,
       error: "invalid intent confirmation",
       reason: verification.reason,
     };
@@ -101,52 +73,98 @@ function validateConfirmedSkill({ confirmedSkill, confirmationToken, message }) 
 
 async function buildDecisionResult(state, message, decision, options = {}) {
   if (decision.needsConfirmation) {
-    return { status: 200, payload: intentConfirmPayload(message, decision) };
+    return { status: 200, payload: intentConfirmPayload(message, decision), toolSummary: { action: "intent_confirm" } };
   }
-  if (decision.skill === "create_training_draft" || decision.intent === "create_training_draft") {
-    return { status: 200, payload: {
-      action: "draft",
+  const skill = decision.skill || decision.intent || "answer_general_chat";
+  const payload = await recordRunStep(options.runId, "tool_execute", skill, async () => (
+    await executeWebSkill(skill, {
+      state,
+      message,
       decision,
-      draft: await createEnrichedTaskDraft(state, message, options.memoryContext),
-    } };
+      memoryContext: options.memoryContext,
+    })
+  ), (result) => ({
+    skill,
+    input: summarizeToolInput(skill, { state, message, decision, memoryContext: options.memoryContext }),
+    result: summarizeToolResult(skill, result),
+  }));
+  const status = payload.action === "chat" && payload.error ? 503 : 200;
+  return { status, payload, toolSummary: summarizeToolResult(skill, payload) };
+}
+
+function memorySummary(memoryContext = {}) {
+  return {
+    enabled: memoryContext.enabled === true,
+    sessionId: memoryContext.sessionId || "",
+    recentMessages: memoryContext.recentMessages?.length || 0,
+    longTerm: memoryContext.longTerm?.length || 0,
+    used: memoryContext.used?.map((memory) => ({ id: memory.id, key: memory.key, type: memory.type })) || [],
+  };
+}
+
+function decisionSummary(decision = {}) {
+  return {
+    intent: decision.intent || "",
+    skill: decision.skill || "",
+    confidence: Number(decision.confidence) || 0,
+    source: decision.source || "",
+    reason: decision.reason || "",
+    needsConfirmation: decision.needsConfirmation === true,
+    alternatives: (decision.alternatives || []).map((item) => ({
+      skill: item.skill || item.intent || "",
+      confidence: Number(item.confidence) || 0,
+    })),
+  };
+}
+
+async function appendTraceAndFinishRun({
+  run,
+  startedAt,
+  transport,
+  route,
+  message,
+  confirmedSkill,
+  confirmationToken,
+  confirmation,
+  decision,
+  payload,
+  error,
+}) {
+  const latencyMs = Date.now() - startedAt;
+  const payloadError = payload?.error ? String(payload.error) : "";
+  if (payload) {
+    await recordRunStep(run.id, "result_output", payload?.action || "response", async () => payload, (result) => ({
+      action: result?.action || "",
+      statusCode: result?.error ? 503 : 200,
+    }));
   }
-  if (decision.skill === "show_training_status" || decision.intent === "show_training_status") {
-    return { status: 200, payload: {
-      action: "status",
+  if (error || payloadError) {
+    await failRun(run.id, error || payloadError, { decision, latencyMs });
+  } else {
+    await finishRun(run.id, {
       decision,
-      tasks: state.tasks.map((task) => getTaskStatus(state, task.id)),
-    } };
+      result: payload,
+      action: payload?.action || "",
+      confirmationVerified: confirmation?.ok === true,
+      latencyMs,
+      summary: {
+        reason: decision?.reason || "",
+      },
+    });
   }
-  if (decision.skill === "delete_training_records" || decision.intent === "delete_training_records") {
-    const result = await mutateState((currentState) => deleteTrainingRecords(currentState, { instruction: message }));
-    return { status: 200, payload: {
-      ...result,
-      decision,
-    } };
-  }
-  if (decision.skill === "generate_marketing_article" || decision.intent === "generate_marketing_article") {
-    return { status: 200, payload: {
-      action: "marketing_article",
-      decision,
-      article: await generateMarketingArticle(state, { instruction: message, memoryContext: options.memoryContext }),
-    } };
-  }
-  try {
-    return { status: 200, payload: {
-      action: "chat",
-      decision,
-      ...(await answerGeneralChat(message, { memoryContext: options.memoryContext })),
-    } };
-  } catch (error) {
-    return { status: 503, payload: {
-      action: "chat",
-      decision,
-      error: error instanceof Error ? error.message : String(error),
-      source: "llm-api",
-      route: "general_chat",
-      llmConfigured: false,
-    } };
-  }
+  await appendAgentTrace({
+    runId: run.id,
+    transport,
+    route,
+    message,
+    confirmedSkill,
+    confirmationTokenPresent: Boolean(confirmationToken),
+    confirmationVerified: confirmation?.ok === true,
+    decision,
+    result: payload,
+    error: error ? (error instanceof Error ? error.message : String(error)) : payloadError || undefined,
+    latencyMs,
+  });
 }
 
 export async function handleAgent(req, res, url) {
@@ -159,7 +177,13 @@ export async function handleAgent(req, res, url) {
       message: body.instruction || "",
       memoryMode,
     });
-    sendJson(res, 200, { draft: await createEnrichedTaskDraft(state, body.instruction || "", memoryContext) });
+    const draftPayload = await executeWebSkill("create_training_draft", {
+      state,
+      message: body.instruction || "",
+      decision: null,
+      memoryContext,
+    });
+    sendJson(res, 200, { draft: draftPayload.draft });
     return true;
   }
 
@@ -171,70 +195,113 @@ export async function handleAgent(req, res, url) {
     const memoryMode = normalizeMemoryMode(body.memoryMode);
     const confirmedSkill = String(body.confirmedSkill || "").trim();
     const confirmationToken = String(body.confirmationToken || "").trim();
-    const confirmation = validateConfirmedSkill({ confirmedSkill, confirmationToken, message });
+    const run = await startRun({
+      sessionId,
+      transport: "http",
+      route: "/api/agent/dispatch",
+      message,
+      confirmedSkill,
+      confirmationTokenPresent: Boolean(confirmationToken),
+    });
+
+    const confirmation = await recordRunStep(run.id, "confirmation_verify", confirmedSkill ? confirmedSkill : "none", async () => (
+      validateConfirmedSkill({ confirmedSkill, confirmationToken, message })
+    ), (result) => ({
+      confirmedSkill,
+      tokenPresent: Boolean(confirmationToken),
+      verified: result?.ok === true,
+      reason: result?.reason || "",
+    }));
+
     if (confirmation && !confirmation.ok) {
       const payload = { error: confirmation.error, reason: confirmation.reason };
       sendJson(res, confirmation.status, payload);
-      await appendAgentTrace({
+      await appendTraceAndFinishRun({
+        run,
+        startedAt,
         transport: "http",
         route: "/api/agent/dispatch",
         message,
         confirmedSkill,
-        confirmationTokenPresent: Boolean(confirmationToken),
+        confirmationToken,
+        confirmation,
+        payload,
         error: `${confirmation.error}:${confirmation.reason || ""}`,
-        result: payload,
-        latencyMs: Date.now() - startedAt,
       });
       return true;
     }
-    const memoryContext = await buildMemoryContext({ sessionId, message, memoryMode });
-    const memoryOnlyPayload = await processMemoryInstruction(message, { sessionId, memoryMode });
+
+    const memoryContext = await recordRunStep(run.id, "memory_recall", "build_memory_context", async () => (
+      await buildMemoryContext({ sessionId, message, memoryMode })
+    ), memorySummary);
+
+    const memoryOnlyPayload = await recordRunStep(run.id, "memory_instruction", "process_memory_instruction", async () => (
+      await processMemoryInstruction(message, { sessionId, memoryMode })
+    ), (result) => ({ matched: Boolean(result), action: result?.action || "" }));
+
     if (memoryOnlyPayload) {
       const payload = await applyMemoryAfterTurn({ message, payload: memoryOnlyPayload, memoryContext, sessionId, memoryMode });
       sendJson(res, 200, payload);
-      await appendAgentTrace({
+      await appendTraceAndFinishRun({
+        run,
+        startedAt,
         transport: "http",
         route: "/api/agent/dispatch",
         message,
         confirmedSkill,
-        confirmationTokenPresent: Boolean(confirmationToken),
-        confirmationVerified: confirmation?.ok === true,
-        result: payload,
-        latencyMs: Date.now() - startedAt,
+        confirmationToken,
+        confirmation,
+        payload,
       });
       return true;
     }
-    const state = await loadState();
-    const decision = await classifyTrainingIntent(state, message, {
-      confirmedSkill,
-      memoryHint: renderIntentMemoryHint(memoryContext),
-    });
+
+    const state = await recordRunStep(run.id, "state_load", "load_state", loadState, (value) => ({
+      knowledgeBases: value.knowledgeBases?.length || 0,
+      tasks: value.tasks?.length || 0,
+      employees: value.employees?.length || 0,
+    }));
+    const decision = await recordRunStep(run.id, "intent_route", "classify_training_intent", async () => (
+      await classifyTrainingIntent(state, message, {
+        confirmedSkill,
+        memoryHint: renderIntentMemoryHint(memoryContext),
+      })
+    ), decisionSummary);
+
     try {
-      const { status, payload: rawPayload } = await buildDecisionResult(state, message, decision, { memoryContext });
-      const payload = await applyMemoryAfterTurn({ message, payload: rawPayload, memoryContext, sessionId, memoryMode });
+      const { status, payload: rawPayload } = await buildDecisionResult(state, message, decision, { memoryContext, runId: run.id });
+      const payload = await recordRunStep(run.id, "memory_write", "apply_memory_after_turn", async () => (
+        await applyMemoryAfterTurn({ message, payload: rawPayload, memoryContext, sessionId, memoryMode })
+      ), (result) => ({
+        action: result?.action || "",
+        saved: result?.memory?.saved?.length || 0,
+        candidates: result?.memory?.candidates?.length || 0,
+      }));
       sendJson(res, status, payload);
-      await appendAgentTrace({
+      await appendTraceAndFinishRun({
+        run,
+        startedAt,
         transport: "http",
         route: "/api/agent/dispatch",
         message,
         confirmedSkill,
-        confirmationTokenPresent: Boolean(confirmationToken),
-        confirmationVerified: confirmation?.ok === true,
+        confirmationToken,
+        confirmation,
         decision,
-        result: payload,
-        latencyMs: Date.now() - startedAt,
+        payload,
       });
     } catch (error) {
-      await appendAgentTrace({
+      await appendTraceAndFinishRun({
+        run,
+        startedAt,
         transport: "http",
         route: "/api/agent/dispatch",
         message,
         confirmedSkill,
-        confirmationTokenPresent: Boolean(confirmationToken),
-        confirmationVerified: confirmation?.ok === true,
+        confirmationToken,
+        confirmation,
         decision,
-        error: error instanceof Error ? error.message : String(error),
-        latencyMs: Date.now() - startedAt,
+        error,
       });
       throw error;
     }
@@ -242,25 +309,41 @@ export async function handleAgent(req, res, url) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/chat") {
+    const startedAt = Date.now();
     const body = await readBody(req);
     const sessionId = normalizeSessionId(body.sessionId);
     const memoryMode = normalizeMemoryMode(body.memoryMode);
     const message = body.message || "";
-    const memoryContext = await buildMemoryContext({ sessionId, message, memoryMode });
-    const startedAt = Date.now();
+    const run = await startRun({
+      sessionId,
+      transport: "http",
+      route: "/api/chat",
+      message,
+    });
+    const memoryContext = await recordRunStep(run.id, "memory_recall", "build_memory_context", async () => (
+      await buildMemoryContext({ sessionId, message, memoryMode })
+    ), memorySummary);
+    const decision = { intent: "answer_general_chat", skill: "answer_general_chat", confidence: 1, source: "direct_chat", reason: "用户选择普通聊天入口。", needsConfirmation: false };
     try {
-      const payload = {
-        action: "chat",
-        ...(await answerGeneralChat(message, { memoryContext })),
-      };
-      const withMemory = await applyMemoryAfterTurn({ message, payload, memoryContext, sessionId, memoryMode });
-      sendJson(res, 200, withMemory);
-      await appendAgentTrace({
+      const payload = await recordRunStep(run.id, "tool_execute", "answer_general_chat", async () => (
+        await executeWebSkill("answer_general_chat", { message, decision, memoryContext, state: null })
+      ), (result) => ({
+        skill: "answer_general_chat",
+        result: summarizeToolResult("answer_general_chat", result),
+      }));
+      const withMemory = await recordRunStep(run.id, "memory_write", "apply_memory_after_turn", async () => (
+        await applyMemoryAfterTurn({ message, payload, memoryContext, sessionId, memoryMode })
+      ), (result) => ({ action: result?.action || "" }));
+      const status = withMemory.error ? 503 : 200;
+      sendJson(res, status, withMemory);
+      await appendTraceAndFinishRun({
+        run,
+        startedAt,
         transport: "http",
         route: "/api/chat",
         message,
-        result: withMemory,
-        latencyMs: Date.now() - startedAt,
+        decision,
+        payload: withMemory,
       });
     } catch (error) {
       const payload = {
@@ -272,6 +355,16 @@ export async function handleAgent(req, res, url) {
       };
       const withMemory = await applyMemoryAfterTurn({ message, payload, memoryContext, sessionId, memoryMode });
       sendJson(res, 503, withMemory);
+      await appendTraceAndFinishRun({
+        run,
+        startedAt,
+        transport: "http",
+        route: "/api/chat",
+        message,
+        decision,
+        payload: withMemory,
+        error,
+      });
     }
     return true;
   }

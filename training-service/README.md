@@ -15,7 +15,7 @@ npm start
 - 老板后台：`http://127.0.0.1:8787/`
 - 导入管理：`http://127.0.0.1:8787/imports`
 - 任务中心：`http://127.0.0.1:8787/jobs`
-- Agent Trace：`http://127.0.0.1:8787/traces`
+- Agent Run / Trace：`http://127.0.0.1:8787/traces`
 - 员工邀请链接：发布任务后生成 `/t/{inviteToken}`
 
 ## 数据目录
@@ -50,12 +50,13 @@ D:\OpenClawData\training-index\state.json
 D:\OpenClawData\training-index\memory.json
 D:\OpenClawData\training-index\conversation-history.jsonl
 D:\OpenClawData\training-index\agent-traces.jsonl
+D:\OpenClawData\training-index\agent-runs.jsonl
 D:\OpenClawData\training-index\jobs.json
 D:\OpenClawData\training-index\knowledge-base-versions.json
 D:\OpenClawData\training-index\vector-index-bge-m3.json
 ```
 
-`training.db` 保存业务状态、长期记忆、SQLite 模式下的异步任务和知识库版本快照；`conversation-history.jsonl` 追加老板端聊天历史；`agent-traces.jsonl` 记录意图路由和确认链路；`jobs.json` 是 JSON 回滚模式下的任务队列；`knowledge-base-versions.json` 是 JSON 回滚模式下的知识库版本快照；`vector-index-bge-m3.json` 是可选的本地向量索引。它们不提交 Git。导出的 `state.json` 仍保持 `meta.version = 1`，用于回滚和兼容。
+`training.db` 保存业务状态、长期记忆、SQLite 模式下的异步任务、知识库版本快照和 Agent Run；`conversation-history.jsonl` 追加老板端聊天历史；`agent-traces.jsonl` 记录兼容 Trace 摘要；`agent-runs.jsonl` 是 JSON 回滚模式下的结构化运行记录；`jobs.json` 是 JSON 回滚模式下的任务队列；`knowledge-base-versions.json` 是 JSON 回滚模式下的知识库版本快照；`vector-index-bge-m3.json` 是可选的本地向量索引。它们不提交 Git。导出的 `state.json` 仍保持 `meta.version = 1`，用于回滚和兼容。
 
 也可以用环境变量覆盖：
 
@@ -100,7 +101,7 @@ D:\OpenClawData\training-index\backups
 
 - `training.db`：通过 SQLite backup API 生成的一致快照。
 - `state.json` / `memory.json`：从当前 SQLite 状态导出的兼容回滚副本。
-- `conversation-history.jsonl`、`agent-traces.jsonl`、`jobs.json`：如果存在则一起备份。
+- `conversation-history.jsonl`、`agent-traces.jsonl`、`agent-runs.jsonl`、`jobs.json`：如果存在则一起备份。
 - `knowledge-base-versions.json`：JSON 回滚模式下的知识库版本快照，如果存在则一起备份。
 - `vector-index-*.json`：本地向量索引文件。
 - `manifest.json`：文件清单、大小、sha256、项目版本和 schemaVersion。
@@ -285,6 +286,9 @@ D:\OpenClawData\training-clean
 - `POST /api/jobs/import/upload`
 - `POST /api/jobs/knowledge-bases/{knowledgeBaseId}/rollback`
 - `POST /api/jobs/embed`
+- `GET /api/agent-runs`
+- `GET /api/agent-runs/{runId}`
+- `GET /api/tools/registry`
 - `GET /api/traces`
 - `GET /api/traces/{traceId}`
 - `GET /api/memory`
@@ -322,6 +326,8 @@ D:\OpenClawData\training-clean
 
 `memoryMode` 可设为 `off`，用于临时不读取和不写入记忆的对话。
 
+每次 `/api/agent/dispatch`、`/api/agent/stream` 和 `/api/chat` 都会生成一条 Agent Run。Run 会按 step 记录 `memory_recall`、`intent_route`、`confirmation_verify`、`tool_execute`、`memory_write` 和 `result_output` 等阶段；`/api/tools/registry` 返回当前网页端 5 个 skill 和 OpenClaw 8 个 training tool 的风险等级、确认要求和入口说明。治理记录只保存脱敏消息预览、hash、摘要和耗时，不保存完整聊天内容或 API Key。
+
 ## 常用验证
 
 ```powershell
@@ -331,6 +337,7 @@ npm run eval:import
 npm run eval:jobs
 npm run eval:kb-versions
 npm run eval:traces
+npm run eval:agent-trajectory
 npm run eval:sqlite
 npm run smoke
 npm run eval:intent
@@ -340,7 +347,7 @@ npm run eval:rag -- --retrieval-only
 
 RAG 检索评测用例维护在 `scripts/fixtures/rag-eval-cases.mjs`，当前共 30 条。默认建议先跑 `--retrieval-only`，以 Top1/Top3 命中、hybrid 是否不低于 BM25 和分类统计作为检索质量回归门槛；完整 `npm run eval:rag` 会额外调用大模型检查答案来源、长度和 OCR 占位。
 
-`eval:jobs` 使用临时数据目录验证异步导入、自动 embedding 子任务、取消、重启恢复和 JSON 任务存储。`eval:kb-versions` 验证知识库 current/previous 快照、文档级 diff、异步回滚、业务数据保护和 JSON 版本文件。`eval:traces` 验证脱敏 Trace 读取、过滤和关闭开关。
+`eval:jobs` 使用临时数据目录验证异步导入、自动 embedding 子任务、取消、重启恢复和 JSON 任务存储。`eval:kb-versions` 验证知识库 current/previous 快照、文档级 diff、异步回滚、业务数据保护和 JSON 版本文件。`eval:traces` 验证脱敏 Trace 读取、过滤和关闭开关。`eval:agent-trajectory` 验证 Agent Run step 时间线、Tool Registry、确认门禁和禁止误执行的负例。
 
 ## 当前限制
 

@@ -28,6 +28,32 @@ function formatDate(value) {
   }
 }
 
+function statusBadge(status, error) {
+  const klass = error || status === "failed" ? "warn" : status === "succeeded" ? "success" : "";
+  return `<span class="badge ${klass}">${escapeHtml(error ? "error" : status || "-")}</span>`;
+}
+
+function renderRunRow(run) {
+  return `<article class="trace-row ${run.error ? "has-error" : ""}" data-run-id="${escapeHtml(run.id)}">
+    <div class="trace-main">
+      <div>
+        <div class="job-title">${escapeHtml(run.messagePreview || "(空消息)")}</div>
+        <div class="muted">${escapeHtml(formatDate(run.createdAt))} · ${escapeHtml(run.transport)} · ${escapeHtml(run.route)}</div>
+      </div>
+      ${statusBadge(run.status, run.error)}
+    </div>
+    <div class="trace-grid">
+      <span>intent: <strong>${escapeHtml(run.intent || "-")}</strong></span>
+      <span>skill: <strong>${escapeHtml(run.skill || run.confirmedSkill || "-")}</strong></span>
+      <span>action: <strong>${escapeHtml(run.action || "-")}</strong></span>
+      <span>latency: <strong>${escapeHtml(run.latencyMs || 0)} ms</strong></span>
+      <span>confirmed: <strong>${run.confirmationVerified ? "yes" : run.confirmationTokenPresent ? "token" : "no"}</strong></span>
+    </div>
+    ${run.error ? `<p class="error-text">${escapeHtml(run.error)}</p>` : ""}
+    <button type="button" class="secondary run-detail-btn" data-run-id="${escapeHtml(run.id)}">查看运行步骤</button>
+  </article>`;
+}
+
 function renderTraceRow(trace) {
   const decision = trace.decision || {};
   const result = trace.result || {};
@@ -35,7 +61,7 @@ function renderTraceRow(trace) {
     <div class="trace-main">
       <div>
         <div class="job-title">${escapeHtml(trace.messagePreview || "(空消息)")}</div>
-        <div class="muted">${escapeHtml(formatDate(trace.createdAt))} · ${escapeHtml(trace.transport)} · ${escapeHtml(trace.route)}</div>
+        <div class="muted">${escapeHtml(formatDate(trace.createdAt))} · ${escapeHtml(trace.transport)} · ${escapeHtml(trace.route)}${trace.runId ? ` · run ${escapeHtml(trace.runId)}` : ""}</div>
       </div>
       <span class="badge ${trace.error ? "warn" : "success"}">${escapeHtml(result.action || (trace.error ? "error" : "-"))}</span>
     </div>
@@ -44,23 +70,54 @@ function renderTraceRow(trace) {
       <span>skill: <strong>${escapeHtml(decision.skill || trace.confirmedSkill || "-")}</strong></span>
       <span>confidence: <strong>${escapeHtml(decision.confidence ?? "-")}</strong></span>
       <span>latency: <strong>${escapeHtml(trace.latencyMs || 0)} ms</strong></span>
-      <span>confirmed: <strong>${trace.confirmationVerified ? "yes" : trace.confirmationTokenPresent ? "token" : "no"}</strong></span>
     </div>
     ${trace.error ? `<p class="error-text">${escapeHtml(trace.error)}</p>` : ""}
-    <button type="button" class="secondary trace-detail-btn" data-trace-id="${escapeHtml(trace.id)}">查看详情</button>
+    <button type="button" class="secondary trace-detail-btn" data-trace-id="${escapeHtml(trace.id)}">查看旧 Trace</button>
   </article>`;
 }
 
+function renderToolRegistry(tools) {
+  const grouped = (tools || []).reduce((acc, tool) => {
+    const key = tool.kind || "tool";
+    acc[key] = acc[key] || [];
+    acc[key].push(tool);
+    return acc;
+  }, {});
+  return Object.entries(grouped).map(([kind, items]) => `
+    <div class="task-section-title">${escapeHtml(kind)}</div>
+    <div class="trace-list">
+      ${items.map((tool) => `<article class="trace-row">
+        <div class="trace-main">
+          <div>
+            <div class="job-title">${escapeHtml(tool.id)}</div>
+            <div class="muted">${escapeHtml(tool.label || "")}</div>
+          </div>
+          <span class="badge ${tool.risk === "high" ? "warn" : "success"}">${escapeHtml(tool.risk || "low")}</span>
+        </div>
+        <p>${escapeHtml(tool.description || "")}</p>
+        <div class="trace-grid">
+          <span>confirm: <strong>${tool.requiresConfirmation ? "yes" : "no"}</strong></span>
+          <span>idempotent: <strong>${tool.idempotent ? "yes" : "no"}</strong></span>
+          <span>timeout: <strong>${escapeHtml(tool.timeoutMs || 0)} ms</strong></span>
+          <span>endpoint: <strong>${escapeHtml(tool.endpoint || "-")}</strong></span>
+        </div>
+      </article>`).join("")}
+    </div>
+  `).join("");
+}
+
 function renderShell(data) {
+  const runs = data.runs || [];
   const traces = data.traces || [];
+  const tools = data.tools || [];
   return `<article class="message assistant-message import-page">
     <div class="avatar">AI</div>
     <div class="bubble import-shell">
       <div class="import-hero">
         <div>
-          <p class="section-kicker">Agent Trace</p>
-          <h1>意图路由可视化</h1>
-          <p>这里展示脱敏后的路由轨迹，只包含消息预览、意图、skill、确认状态、结果摘要、耗时和错误。</p>
+          <p class="section-kicker">Agent Run</p>
+          <h1>运行轨迹可视化</h1>
+          <p>这里展示脱敏后的 Agent 运行记录、步骤时间线、tool 元信息和旧 Trace 摘要。</p>
         </div>
         <a class="nav-button secondary" href="/">返回聊天</a>
       </div>
@@ -85,8 +142,29 @@ function renderShell(data) {
           <button type="submit">筛选</button>
           <button id="refreshTracesBtn" type="button" class="secondary">刷新</button>
         </form>
-        ${data.enabled ? "" : `<div class="warning-box"><div>Trace 当前未开启。设置 TRAINING_AGENT_TRACE=1 后会继续记录。</div></div>`}
-        <p class="muted">文件：${escapeHtml(data.path || "")}</p>
+        <div class="info-grid">
+          <div><span>Agent Run</span><strong>${escapeHtml(runs.length)} 条</strong></div>
+          <div><span>Tool Registry</span><strong>${escapeHtml(tools.length)} 个</strong></div>
+          <div><span>旧 Trace</span><strong>${escapeHtml(traces.length)} 条</strong></div>
+        </div>
+      </section>
+
+      <section class="import-panel full">
+        <h2>Agent Run</h2>
+        <div class="trace-list">${runs.length ? runs.map(renderRunRow).join("") : `<p class="muted">暂无运行记录。</p>`}</div>
+      </section>
+
+      <section id="runDetail" class="import-result"></section>
+
+      <section class="import-panel full">
+        <h2>Tool Registry</h2>
+        ${renderToolRegistry(tools)}
+      </section>
+
+      <section class="import-panel full">
+        <h2>兼容 Trace 摘要</h2>
+        ${data.traceEnabled ? "" : `<div class="warning-box"><div>Trace 当前未开启。设置 TRAINING_AGENT_TRACE=1 后会继续记录。</div></div>`}
+        <p class="muted">文件：${escapeHtml(data.tracePath || "")}</p>
         <div class="trace-list">${traces.length ? traces.map(renderTraceRow).join("") : `<p class="muted">暂无 trace 记录。</p>`}</div>
       </section>
       <section id="traceDetail" class="import-result"></section>
@@ -104,17 +182,62 @@ function queryString() {
 }
 
 async function refreshTraces() {
-  const data = await api(`/api/traces?${queryString()}`);
-  setMessages(renderShell(data));
+  const qs = queryString();
+  const [runsData, tracesData, toolsData] = await Promise.all([
+    api(`/api/agent-runs?${qs}`),
+    api(`/api/traces?${qs}`),
+    api("/api/tools/registry"),
+  ]);
+  setMessages(renderShell({
+    runs: runsData.runs || [],
+    traces: tracesData.traces || [],
+    traceEnabled: tracesData.enabled,
+    tracePath: tracesData.path,
+    tools: toolsData.tools || [],
+  }));
   wireTracePage();
 }
 
-function renderDetail(trace) {
+function renderRunDetail(run) {
+  const steps = run.steps || [];
   return `<div class="result-card">
-    <h2>Trace 详情</h2>
+    <h2>Run 详情</h2>
+    <div class="info-grid">
+      <div><span>ID</span><strong>${escapeHtml(run.id)}</strong></div>
+      <div><span>状态</span><strong>${escapeHtml(run.status)}</strong></div>
+      <div><span>通道</span><strong>${escapeHtml(run.transport)}</strong></div>
+      <div><span>耗时</span><strong>${escapeHtml(run.latencyMs || 0)} ms</strong></div>
+    </div>
+    <div class="task-section-title">消息摘要</div>
+    <pre class="command-box">${escapeHtml(JSON.stringify({
+      messagePreview: run.messagePreview,
+      messageHash: run.messageHash,
+      messageLength: run.messageLength,
+    }, null, 2))}</pre>
+    <div class="task-section-title">步骤时间线</div>
+    <div class="trace-list">
+      ${steps.map((step, index) => `<article class="trace-row ${step.status === "failed" ? "has-error" : ""}">
+        <div class="trace-main">
+          <div>
+            <div class="job-title">${escapeHtml(index + 1)}. ${escapeHtml(step.type)} / ${escapeHtml(step.name)}</div>
+            <div class="muted">${escapeHtml(formatDate(step.startedAt))} · ${escapeHtml(step.latencyMs || 0)} ms</div>
+          </div>
+          ${statusBadge(step.status, step.error)}
+        </div>
+        <pre class="command-box">${escapeHtml(JSON.stringify(step.summary || {}, null, 2))}</pre>
+        ${step.error ? `<p class="error-text">${escapeHtml(step.error)}</p>` : ""}
+      </article>`).join("") || `<p class="muted">暂无步骤。</p>`}
+    </div>
+    ${run.error ? `<p class="error-text">${escapeHtml(run.error)}</p>` : ""}
+  </div>`;
+}
+
+function renderTraceDetail(trace) {
+  return `<div class="result-card">
+    <h2>旧 Trace 详情</h2>
     <div class="info-grid">
       <div><span>ID</span><strong>${escapeHtml(trace.id)}</strong></div>
-      <div><span>时间</span><strong>${escapeHtml(formatDate(trace.createdAt))}</strong></div>
+      <div><span>Run</span><strong>${escapeHtml(trace.runId || "-")}</strong></div>
       <div><span>通道</span><strong>${escapeHtml(trace.transport)}</strong></div>
       <div><span>耗时</span><strong>${escapeHtml(trace.latencyMs || 0)} ms</strong></div>
     </div>
@@ -132,10 +255,16 @@ function renderDetail(trace) {
   </div>`;
 }
 
+async function showRunDetail(runId) {
+  const result = await api(`/api/agent-runs/${encodeURIComponent(runId)}`);
+  const target = document.querySelector("#runDetail");
+  if (target) target.innerHTML = renderRunDetail(result.run);
+}
+
 async function showTraceDetail(traceId) {
   const result = await api(`/api/traces/${encodeURIComponent(traceId)}`);
   const target = document.querySelector("#traceDetail");
-  if (target) target.innerHTML = renderDetail(result.trace);
+  if (target) target.innerHTML = renderTraceDetail(result.trace);
 }
 
 function wireTracePage() {
@@ -152,18 +281,21 @@ function wireTracePage() {
     refreshTraces().catch(showError);
   });
   document.querySelector("#refreshTracesBtn")?.addEventListener("click", () => refreshTraces().catch(showError));
+  document.querySelectorAll(".run-detail-btn").forEach((button) => {
+    button.addEventListener("click", () => showRunDetail(button.dataset.runId || "").catch(showError));
+  });
   document.querySelectorAll(".trace-detail-btn").forEach((button) => {
     button.addEventListener("click", () => showTraceDetail(button.dataset.traceId || "").catch(showError));
   });
 }
 
 function showError(error) {
-  const target = document.querySelector("#traceDetail") || document.querySelector("#messages");
+  const target = document.querySelector("#runDetail") || document.querySelector("#messages");
   if (target) target.innerHTML = `<p class="error-text">${escapeHtml(error.message || String(error))}</p>`;
 }
 
 export async function setupTracesApp() {
   setComposerHidden(true);
-  setMessages(`<article class="message assistant-message"><div class="avatar">AI</div><div class="bubble">${renderStageProgress({ label: "加载 Trace", detail: "正在读取脱敏轨迹", progress: 35 })}</div></article>`);
+  setMessages(`<article class="message assistant-message"><div class="avatar">AI</div><div class="bubble">${renderStageProgress({ label: "加载运行轨迹", detail: "正在读取 Agent Run 和 Trace", progress: 35 })}</div></article>`);
   await refreshTraces();
 }
