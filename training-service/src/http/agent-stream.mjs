@@ -1,12 +1,20 @@
 import { classifyTrainingIntent } from "../ai/index.mjs";
-import { appendAgentTrace } from "../agent-trace.mjs";
 import {
   appendRunStep,
-  failRun,
-  finishRun,
   recordRunStep,
   startRun,
 } from "../agent-runs/store.mjs";
+import { intentConfirmPayload, validateConfirmedSkill } from "../agent/confirmation.mjs";
+import { finalizeAgentRun } from "../agent/run-lifecycle.mjs";
+import {
+  confirmationSummary,
+  decisionSummary,
+  memoryInstructionSummary,
+  memorySummary,
+  memoryWriteSummary,
+  stateSummary,
+  toolExecutionSummary,
+} from "../agent/summaries.mjs";
 import { streamGeneralChat } from "../chat/general-chat.mjs";
 import {
   buildMemoryContext,
@@ -21,7 +29,6 @@ import {
   summarizeToolInput,
   summarizeToolResult,
 } from "../tools/registry.mjs";
-import { intentConfirmPayload, validateConfirmedSkill } from "./controllers/agent-controller.mjs";
 import { isAuthenticated } from "./auth.mjs";
 import { acceptWebSocket, closeWebSocket, createWebSocketParser, sendWsJson } from "./websocket.mjs";
 
@@ -41,61 +48,19 @@ function parseClientPayload(raw) {
   };
 }
 
-function memorySummary(memoryContext = {}) {
-  return {
-    enabled: memoryContext.enabled === true,
-    sessionId: memoryContext.sessionId || "",
-    recentMessages: memoryContext.recentMessages?.length || 0,
-    longTerm: memoryContext.longTerm?.length || 0,
-    used: memoryContext.used?.map((memory) => ({ id: memory.id, key: memory.key, type: memory.type })) || [],
-  };
-}
-
-function decisionSummary(decision = {}) {
-  return {
-    intent: decision.intent || "",
-    skill: decision.skill || "",
-    confidence: Number(decision.confidence) || 0,
-    source: decision.source || "",
-    reason: decision.reason || "",
-    needsConfirmation: decision.needsConfirmation === true,
-  };
-}
-
 async function traceAndFinish({ run, startedAt, body, decision, payload, confirmation, error }) {
-  const latencyMs = Date.now() - startedAt;
-  const payloadError = payload?.error ? String(payload.error) : "";
-  if (payload) {
-    await recordRunStep(run.id, "result_output", payload?.action || "response", async () => payload, (result) => ({
-      action: result?.action || "",
-    }));
-  }
-  if (error || payloadError) {
-    await failRun(run.id, error || payloadError, { decision, latencyMs });
-  } else {
-    await finishRun(run.id, {
-      decision,
-      result: payload,
-      action: payload?.action || "",
-      confirmationVerified: confirmation?.ok === true,
-      latencyMs,
-      summary: {
-        reason: decision?.reason || "",
-      },
-    });
-  }
-  await appendAgentTrace({
-    runId: run.id,
+  await finalizeAgentRun({
+    run,
+    startedAt,
     transport: "ws",
     route: "/api/agent/stream",
     message: body.message,
     confirmedSkill: body.confirmedSkill,
-    confirmationTokenPresent: Boolean(body.confirmationToken),
-    confirmationVerified: confirmation?.ok === true,
+    confirmationToken: body.confirmationToken,
+    confirmation,
     decision,
-    result: payload,
-    error: error ? (error instanceof Error ? error.message : String(error)) : payloadError || undefined,
-    latencyMs,
+    payload,
+    error,
   });
 }
 
@@ -112,11 +77,7 @@ async function executeSkillForStream(socket, run, state, body, decision, memoryC
   }
   const payload = await recordRunStep(run.id, "tool_execute", skill, async () => (
     await executeWebSkill(skill, { state, message: body.message, decision, memoryContext })
-  ), (result) => ({
-    skill,
-    input: summarizeToolInput(skill, { state, message: body.message, decision, memoryContext }),
-    result: summarizeToolResult(skill, result),
-  }));
+  ), toolExecutionSummary(skill, summarizeToolInput(skill, { state, message: body.message, decision, memoryContext })));
   return payload;
 }
 
@@ -184,12 +145,7 @@ async function handleStreamMessage(socket, raw, abortController) {
   try {
     confirmation = await recordRunStep(run.id, "confirmation_verify", body.confirmedSkill ? body.confirmedSkill : "none", async () => (
       validateConfirmedSkill(body, 1008)
-    ), (result) => ({
-      confirmedSkill: body.confirmedSkill,
-      tokenPresent: Boolean(body.confirmationToken),
-      verified: result?.ok === true,
-      reason: result?.reason || "",
-    }));
+    ), confirmationSummary(body));
     if (confirmation && !confirmation.ok) {
       const payload = { action: "error", error: confirmation.error, reason: confirmation.reason };
       sendWsJson(socket, { type: "error", error: confirmation.error, reason: confirmation.reason });
@@ -198,11 +154,6 @@ async function handleStreamMessage(socket, raw, abortController) {
       return;
     }
 
-    const state = await recordRunStep(run.id, "state_load", "load_state", loadState, (value) => ({
-      knowledgeBases: value.knowledgeBases?.length || 0,
-      tasks: value.tasks?.length || 0,
-      employees: value.employees?.length || 0,
-    }));
     const memoryContext = await recordRunStep(run.id, "memory_recall", "build_memory_context", async () => (
       await buildMemoryContext({
         sessionId: body.sessionId,
@@ -215,7 +166,7 @@ async function handleStreamMessage(socket, raw, abortController) {
         sessionId: body.sessionId,
         memoryMode: body.memoryMode,
       })
-    ), (result) => ({ matched: Boolean(result), action: result?.action || "" }));
+    ), memoryInstructionSummary);
     if (memoryOnlyPayload) {
       const payload = await recordRunStep(run.id, "memory_write", "apply_memory_after_turn", async () => (
         await applyMemoryAfterTurn({
@@ -225,7 +176,7 @@ async function handleStreamMessage(socket, raw, abortController) {
           sessionId: body.sessionId,
           memoryMode: body.memoryMode,
         })
-      ), (result) => ({ action: result?.action || "" }));
+      ), memoryWriteSummary);
       sendWsJson(socket, { type: "result", payload });
       sendWsJson(socket, { type: "done", action: payload.action });
       await traceAndFinish({ run, startedAt, body, payload, confirmation });
@@ -233,6 +184,7 @@ async function handleStreamMessage(socket, raw, abortController) {
       return;
     }
 
+    const state = await recordRunStep(run.id, "state_load", "load_state", loadState, stateSummary);
     decision = await recordRunStep(run.id, "intent_route", "classify_training_intent", async () => (
       await classifyTrainingIntent(state, body.message, {
         confirmedSkill: body.confirmedSkill,
@@ -249,7 +201,7 @@ async function handleStreamMessage(socket, raw, abortController) {
           sessionId: body.sessionId,
           memoryMode: body.memoryMode,
         })
-      ), (result) => ({ action: result?.action || "" }));
+      ), memoryWriteSummary);
       sendWsJson(socket, { type: "result", payload });
       sendWsJson(socket, { type: "done", action: "intent_confirm" });
       await traceAndFinish({ run, startedAt, body, decision, payload, confirmation });
@@ -268,11 +220,7 @@ async function handleStreamMessage(socket, raw, abortController) {
         sessionId: body.sessionId,
         memoryMode: body.memoryMode,
       })
-    ), (result) => ({
-      action: result?.action || "",
-      saved: result?.memory?.saved?.length || 0,
-      candidates: result?.memory?.candidates?.length || 0,
-    }));
+    ), memoryWriteSummary);
 
     if (payload.action === "chat") {
       sendWsJson(socket, { type: "done", action: "chat", payload });

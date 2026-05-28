@@ -1,13 +1,17 @@
 import { searchEmployees } from "../../domain/index.mjs";
-import { classifyTrainingIntent, isConfirmedSkillAllowed } from "../../ai/index.mjs";
-import { appendAgentTrace } from "../../agent-trace.mjs";
+import { classifyTrainingIntent } from "../../ai/index.mjs";
+import { recordRunStep, startRun } from "../../agent-runs/store.mjs";
+import { intentConfirmPayload, validateConfirmedSkill } from "../../agent/confirmation.mjs";
+import { finalizeAgentRun } from "../../agent/run-lifecycle.mjs";
 import {
-  failRun,
-  finishRun,
-  recordRunStep,
-  startRun,
-} from "../../agent-runs/store.mjs";
-import { createIntentConfirmationToken, verifyIntentConfirmationToken } from "../../intent-confirmation.mjs";
+  confirmationSummary,
+  decisionSummary,
+  memoryInstructionSummary,
+  memorySummary,
+  memoryWriteSummary,
+  stateSummary,
+  toolExecutionSummary,
+} from "../../agent/summaries.mjs";
 import {
   buildMemoryContext,
   normalizeMemoryMode,
@@ -18,7 +22,6 @@ import { applyMemoryAfterTurn, processMemoryInstruction } from "../../memory/flo
 import { loadState } from "../../store.mjs";
 import {
   executeWebSkill,
-  getWebSkill,
   summarizeToolInput,
   summarizeToolResult,
 } from "../../tools/registry.mjs";
@@ -30,45 +33,6 @@ export async function handleEmployees(req, res, url) {
   const state = await loadState();
   sendJson(res, 200, { employees: searchEmployees(state, url.searchParams.get("q") || "") });
   return true;
-}
-
-function intentLabel(skill) {
-  return getWebSkill(skill)?.label || "执行操作";
-}
-
-export function intentConfirmPayload(message, decision) {
-  const confirmation = createIntentConfirmationToken(message, decision.skill);
-  return {
-    action: "intent_confirm",
-    message,
-    decision,
-    confirmation: {
-      skill: decision.skill,
-      token: confirmation.token,
-      expiresAt: confirmation.expiresAt,
-      title: decision.skill === "delete_training_records" ? "确认删除培训记录？" : `确认${intentLabel(decision.skill)}？`,
-      description: decision.skill === "delete_training_records"
-        ? "删除会移除匹配的培训任务、学习链接、试卷和答题记录；知识库和员工名单不会删除。"
-        : `我理解你想${intentLabel(decision.skill)}。为避免误操作，请确认后再执行。`,
-      risk: getWebSkill(decision.skill)?.risk || (decision.skill === "delete_training_records" ? "high" : "normal"),
-    },
-  };
-}
-
-export function validateConfirmedSkill({ confirmedSkill, confirmationToken, message }, status = 400) {
-  if (!confirmedSkill) return null;
-  if (!isConfirmedSkillAllowed(confirmedSkill)) {
-    return { status, error: "unsupported confirmedSkill" };
-  }
-  const verification = verifyIntentConfirmationToken(confirmationToken, { message, skill: confirmedSkill });
-  if (!verification.ok) {
-    return {
-      status: status === 400 ? 409 : status,
-      error: "invalid intent confirmation",
-      reason: verification.reason,
-    };
-  }
-  return { ok: true, verification };
 }
 
 async function buildDecisionResult(state, message, decision, options = {}) {
@@ -83,88 +47,12 @@ async function buildDecisionResult(state, message, decision, options = {}) {
       decision,
       memoryContext: options.memoryContext,
     })
-  ), (result) => ({
+  ), toolExecutionSummary(
     skill,
-    input: summarizeToolInput(skill, { state, message, decision, memoryContext: options.memoryContext }),
-    result: summarizeToolResult(skill, result),
-  }));
+    summarizeToolInput(skill, { state, message, decision, memoryContext: options.memoryContext }),
+  ));
   const status = payload.action === "chat" && payload.error ? 503 : 200;
   return { status, payload, toolSummary: summarizeToolResult(skill, payload) };
-}
-
-function memorySummary(memoryContext = {}) {
-  return {
-    enabled: memoryContext.enabled === true,
-    sessionId: memoryContext.sessionId || "",
-    recentMessages: memoryContext.recentMessages?.length || 0,
-    longTerm: memoryContext.longTerm?.length || 0,
-    used: memoryContext.used?.map((memory) => ({ id: memory.id, key: memory.key, type: memory.type })) || [],
-  };
-}
-
-function decisionSummary(decision = {}) {
-  return {
-    intent: decision.intent || "",
-    skill: decision.skill || "",
-    confidence: Number(decision.confidence) || 0,
-    source: decision.source || "",
-    reason: decision.reason || "",
-    needsConfirmation: decision.needsConfirmation === true,
-    alternatives: (decision.alternatives || []).map((item) => ({
-      skill: item.skill || item.intent || "",
-      confidence: Number(item.confidence) || 0,
-    })),
-  };
-}
-
-async function appendTraceAndFinishRun({
-  run,
-  startedAt,
-  transport,
-  route,
-  message,
-  confirmedSkill,
-  confirmationToken,
-  confirmation,
-  decision,
-  payload,
-  error,
-}) {
-  const latencyMs = Date.now() - startedAt;
-  const payloadError = payload?.error ? String(payload.error) : "";
-  if (payload) {
-    await recordRunStep(run.id, "result_output", payload?.action || "response", async () => payload, (result) => ({
-      action: result?.action || "",
-      statusCode: result?.error ? 503 : 200,
-    }));
-  }
-  if (error || payloadError) {
-    await failRun(run.id, error || payloadError, { decision, latencyMs });
-  } else {
-    await finishRun(run.id, {
-      decision,
-      result: payload,
-      action: payload?.action || "",
-      confirmationVerified: confirmation?.ok === true,
-      latencyMs,
-      summary: {
-        reason: decision?.reason || "",
-      },
-    });
-  }
-  await appendAgentTrace({
-    runId: run.id,
-    transport,
-    route,
-    message,
-    confirmedSkill,
-    confirmationTokenPresent: Boolean(confirmationToken),
-    confirmationVerified: confirmation?.ok === true,
-    decision,
-    result: payload,
-    error: error ? (error instanceof Error ? error.message : String(error)) : payloadError || undefined,
-    latencyMs,
-  });
 }
 
 export async function handleAgent(req, res, url) {
@@ -206,17 +94,12 @@ export async function handleAgent(req, res, url) {
 
     const confirmation = await recordRunStep(run.id, "confirmation_verify", confirmedSkill ? confirmedSkill : "none", async () => (
       validateConfirmedSkill({ confirmedSkill, confirmationToken, message })
-    ), (result) => ({
-      confirmedSkill,
-      tokenPresent: Boolean(confirmationToken),
-      verified: result?.ok === true,
-      reason: result?.reason || "",
-    }));
+    ), confirmationSummary({ confirmedSkill, confirmationToken }));
 
     if (confirmation && !confirmation.ok) {
       const payload = { error: confirmation.error, reason: confirmation.reason };
       sendJson(res, confirmation.status, payload);
-      await appendTraceAndFinishRun({
+      await finalizeAgentRun({
         run,
         startedAt,
         transport: "http",
@@ -237,12 +120,14 @@ export async function handleAgent(req, res, url) {
 
     const memoryOnlyPayload = await recordRunStep(run.id, "memory_instruction", "process_memory_instruction", async () => (
       await processMemoryInstruction(message, { sessionId, memoryMode })
-    ), (result) => ({ matched: Boolean(result), action: result?.action || "" }));
+    ), memoryInstructionSummary);
 
     if (memoryOnlyPayload) {
-      const payload = await applyMemoryAfterTurn({ message, payload: memoryOnlyPayload, memoryContext, sessionId, memoryMode });
+      const payload = await recordRunStep(run.id, "memory_write", "apply_memory_after_turn", async () => (
+        await applyMemoryAfterTurn({ message, payload: memoryOnlyPayload, memoryContext, sessionId, memoryMode })
+      ), memoryWriteSummary);
       sendJson(res, 200, payload);
-      await appendTraceAndFinishRun({
+      await finalizeAgentRun({
         run,
         startedAt,
         transport: "http",
@@ -256,11 +141,7 @@ export async function handleAgent(req, res, url) {
       return true;
     }
 
-    const state = await recordRunStep(run.id, "state_load", "load_state", loadState, (value) => ({
-      knowledgeBases: value.knowledgeBases?.length || 0,
-      tasks: value.tasks?.length || 0,
-      employees: value.employees?.length || 0,
-    }));
+    const state = await recordRunStep(run.id, "state_load", "load_state", loadState, stateSummary);
     const decision = await recordRunStep(run.id, "intent_route", "classify_training_intent", async () => (
       await classifyTrainingIntent(state, message, {
         confirmedSkill,
@@ -272,13 +153,9 @@ export async function handleAgent(req, res, url) {
       const { status, payload: rawPayload } = await buildDecisionResult(state, message, decision, { memoryContext, runId: run.id });
       const payload = await recordRunStep(run.id, "memory_write", "apply_memory_after_turn", async () => (
         await applyMemoryAfterTurn({ message, payload: rawPayload, memoryContext, sessionId, memoryMode })
-      ), (result) => ({
-        action: result?.action || "",
-        saved: result?.memory?.saved?.length || 0,
-        candidates: result?.memory?.candidates?.length || 0,
-      }));
+      ), memoryWriteSummary);
       sendJson(res, status, payload);
-      await appendTraceAndFinishRun({
+      await finalizeAgentRun({
         run,
         startedAt,
         transport: "http",
@@ -291,7 +168,7 @@ export async function handleAgent(req, res, url) {
         payload,
       });
     } catch (error) {
-      await appendTraceAndFinishRun({
+      await finalizeAgentRun({
         run,
         startedAt,
         transport: "http",
@@ -333,10 +210,10 @@ export async function handleAgent(req, res, url) {
       }));
       const withMemory = await recordRunStep(run.id, "memory_write", "apply_memory_after_turn", async () => (
         await applyMemoryAfterTurn({ message, payload, memoryContext, sessionId, memoryMode })
-      ), (result) => ({ action: result?.action || "" }));
+      ), memoryWriteSummary);
       const status = withMemory.error ? 503 : 200;
       sendJson(res, status, withMemory);
-      await appendTraceAndFinishRun({
+      await finalizeAgentRun({
         run,
         startedAt,
         transport: "http",
@@ -355,7 +232,7 @@ export async function handleAgent(req, res, url) {
       };
       const withMemory = await applyMemoryAfterTurn({ message, payload, memoryContext, sessionId, memoryMode });
       sendJson(res, 503, withMemory);
-      await appendTraceAndFinishRun({
+      await finalizeAgentRun({
         run,
         startedAt,
         transport: "http",

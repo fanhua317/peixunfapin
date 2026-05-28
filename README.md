@@ -77,7 +77,8 @@ vector-index-bge-m3.json   # 可选，本地向量索引
 src/server.mjs      # 只负责启动原生 HTTP server
 src/http            # 请求解析、认证、静态文件、API controller
 src/domain          # 知识库、员工、任务、邀请、考试、报表业务逻辑
-src/ai              # 意图识别、讲义、答疑、出题、软文、LLM JSON 调用
+src/agent           # HTTP/WS 共用的确认、摘要和 Agent Run 收尾逻辑
+src/ai              # 意图识别、RAG 上下文、讲义、答疑、出题、软文、LLM JSON 调用
 src/memory          # 本地短期会话记忆、长期偏好记忆、记忆策略和召回
 src/import          # 资料清洗、网页上传、本机目录导入和语义切片写入
 src/jobs            # 本地异步任务队列，执行导入和本地向量索引重建
@@ -91,6 +92,8 @@ src/agent-trace.mjs # Agent 路由轨迹 JSONL 日志
 src/traces.mjs      # 脱敏 Agent Trace 查询
 public/src          # 无构建浏览器 ES modules
 ```
+
+维护拆分约定：`src/ai/core.mjs` 只保留兼容 re-export，真实实现分散在 `intent`、`context`、`answer`、`material`、`marketing`、`quiz` 和 `text-utils`；老板端聊天页继续按 `public/src/chat/*` 拆分 session、渲染和记忆交互，Trace 页按 `public/src/traces/*` 拆分入口和渲染。
 
 `training-plugin` 保留 8 个 OpenClaw training tool 名不变，内部拆成配置、HTTP client、schema 和 tool 定义。软文和记忆目前只在网页端内部 skill 中提供，插件没有新增 tool。
 

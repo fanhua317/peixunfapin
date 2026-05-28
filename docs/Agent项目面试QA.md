@@ -715,6 +715,20 @@ A：不会保存完整消息。Run 和 Trace 都只保存 `messagePreview`、`me
 
 这个取舍是有意的：排障需要“足够判断发生了什么”的摘要，但不需要把所有对话内容变成新的敏感数据源。
 
+### Q64：这次维护性重构主要解决了什么问题？
+
+A：这次重构不是加新功能，而是清理前几轮快速迭代后出现的维护风险。主要做了三类事：
+
+1. 后端运行层去重：HTTP controller 和 WebSocket stream 都改为复用 `src/agent` 下的确认校验、摘要和 run 收尾逻辑，避免两个入口各写一套 trace/finish/error 处理。
+2. AI 层真拆分：`src/ai/core.mjs` 只保留兼容导出，实际代码按意图识别、RAG 上下文、答疑、讲义、软文、出题和文本工具拆开，避免所有 LLM/RAG 逻辑堆在一个大文件里。
+3. 前端入口瘦身：老板端聊天把 session、纯渲染和记忆交互拆到 `public/src/chat/*`，Trace 页面把 Run/Trace/Tool 渲染拆到 `public/src/traces/*`。
+
+同时把 `agent_runs` / `agent_steps` 的 SQLite 建表逻辑收敛到 `src/agent-runs/schema.mjs`，避免 `sqlite-store` 和 `agent-runs/store` 两边重复维护。
+
+面试里可以这样说：
+
+> 项目迭代到 Agent Run、任务中心、知识库版本这些能力后，我做了一轮维护性重构，把重复的运行治理逻辑、AI 大文件和前端大入口拆开。这个改动没有改变外部 API，但降低了以后继续加 skill、做 Trace 排障和维护 SQLite schema 的成本。
+
 ## 13. 后续对话补充区
 
 后续如果继续讨论以下内容，应追加到本文档：

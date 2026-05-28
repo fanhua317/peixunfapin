@@ -328,6 +328,8 @@ D:\OpenClawData\training-clean
 
 每次 `/api/agent/dispatch`、`/api/agent/stream` 和 `/api/chat` 都会生成一条 Agent Run。Run 会按 step 记录 `memory_recall`、`intent_route`、`confirmation_verify`、`tool_execute`、`memory_write` 和 `result_output` 等阶段；`/api/tools/registry` 返回当前网页端 5 个 skill 和 OpenClaw 8 个 training tool 的风险等级、确认要求和入口说明。治理记录只保存脱敏消息预览、hash、摘要和耗时，不保存完整聊天内容或 API Key。
 
+维护边界：HTTP controller 和 WebSocket stream 只负责协议适配，共用 `src/agent` 下的确认校验、run 收尾和摘要逻辑；Agent Run 的 SQLite 表结构只维护在 `src/agent-runs/schema.mjs`。AI 层中 `core.mjs` 只做兼容导出，真实实现按意图、上下文、答疑、讲义、软文、出题和文本工具拆分。
+
 ## 常用验证
 
 ```powershell

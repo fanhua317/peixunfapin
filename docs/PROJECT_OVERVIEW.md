@@ -1,6 +1,6 @@
 # 钜洲培训 Agent 项目总览文档
 
-更新时间：2026-05-27
+更新时间：2026-05-28
 项目目录：`D:\juzhou-agent\peixun`  
 业务数据目录：`D:\OpenClawData`
 
@@ -109,12 +109,17 @@ D:\juzhou-agent\peixun
     │   ├── app.js
     │   └── src
     │       ├── api.js
-│       ├── auth.js
-│       ├── bootstrap.js
-│       ├── chat.js
-│       ├── invite.js
-│       ├── messages.js
-│       └── ui.js
+    │       ├── auth.js
+    │       ├── bootstrap.js
+    │       ├── chat.js
+    │       ├── invite.js
+    │       ├── imports.js
+    │       ├── jobs.js
+    │       ├── traces.js
+    │       ├── chat
+    │       ├── traces
+    │       ├── messages.js
+    │       └── ui.js
     ├── scripts
     │   ├── check-syntax.mjs
     │   ├── clean-raw.mjs
@@ -154,7 +159,12 @@ D:\juzhou-agent\peixun
         ├── health.mjs
         ├── intent-confirmation.mjs
         ├── agent-trace.mjs
+        ├── agent
+        │   ├── confirmation.mjs
+        │   ├── run-lifecycle.mjs
+        │   └── summaries.mjs
         ├── agent-runs
+        │   ├── schema.mjs
         │   └── store.mjs
         ├── tools
         │   └── registry.mjs
@@ -165,12 +175,15 @@ D:\juzhou-agent\peixun
         ├── embedding.mjs
         ├── ai
         │   ├── config.mjs
+        │   ├── context.mjs
         │   ├── core.mjs
         │   ├── llm-json.mjs
         │   ├── index.mjs
         │   ├── intent.mjs
+        │   ├── marketing.mjs
         │   ├── material.mjs
         │   ├── answer.mjs
+        │   ├── text-utils.mjs
         │   └── quiz.mjs
         ├── chat
         │   └── general-chat.mjs
@@ -472,14 +485,17 @@ training-service/src/ai
 
 当前拆分：
 
-- `core.mjs`：核心实现。
+- `core.mjs`：兼容旧导入路径的轻量 re-export，不再承载核心实现。
 - `config.mjs`：模型、思考强度、上下文长度和检索常量。
+- `context.mjs`：RAG 上下文选择、父块渲染、来源规范化和检索模式摘要。
 - `llm-json.mjs`：结构化 JSON 调用和修复。
 - `index.mjs`：统一导出。
-- `intent.mjs`：意图识别导出入口。
-- `material.mjs`：培训讲义导出入口。
-- `answer.mjs`：答疑导出入口。
-- `quiz.mjs`：出题导出入口。
+- `intent.mjs`：本地规则、LLM router、确认门禁前的意图归一化。
+- `answer.mjs`：知识库答疑。
+- `material.mjs`：培训讲义生成。
+- `marketing.mjs`：营销软文生成。
+- `quiz.mjs`：考试出题。
+- `text-utils.mjs`：文本清洗、JSON 松散字段解析、模型缺失错误规范化。
 
 职责：
 
@@ -520,6 +536,7 @@ training-service/src/memory
 核心目录：
 ```text
 training-service/src/jobs
+training-service/src/agent
 training-service/src/agent-runs
 training-service/src/tools
 training-service/src/traces.mjs
@@ -529,7 +546,8 @@ training-service/src/traces.mjs
 - `jobs` 负责本地异步任务队列，第一版覆盖知识库导入、知识库回滚和本地向量索引重建。
 - SQLite 模式下任务保存在 `training.db` 的 `jobs` 表，JSON 回滚模式下保存在 `jobs.json`。
 - `/jobs` 页面展示任务状态、阶段进度、错误、结果摘要和取消操作。
-- `agent-runs` 为每次 `/api/agent/dispatch`、`/api/agent/stream` 和 `/api/chat` 生成结构化 run，并按 step 记录 `memory_recall`、`intent_route`、`confirmation_verify`、`tool_execute`、`memory_write` 和 `result_output`。
+- `agent` 保存 HTTP/WS 共用的确认校验、run 收尾和摘要逻辑，避免 stream 层反向依赖 controller。
+- `agent-runs` 为每次 `/api/agent/dispatch`、`/api/agent/stream` 和 `/api/chat` 生成结构化 run，并按 step 记录 `memory_recall`、`intent_route`、`confirmation_verify`、`tool_execute`、`memory_write` 和 `result_output`；`schema.mjs` 是 `agent_runs` / `agent_steps` 建表逻辑的单一来源。
 - `tools/registry.mjs` 统一登记网页端 5 个 skill 和 OpenClaw 8 个 training tool 的风险等级、确认要求、幂等性和服务端入口。
 - `/traces` 页面同时展示 Agent Run、step 时间线、Tool Registry 和兼容 Trace 摘要；所有视图只展示脱敏消息预览、hash、摘要、耗时和错误。
 
@@ -1182,12 +1200,19 @@ public/src/api.js
 public/src/auth.js
 public/src/bootstrap.js
 public/src/chat.js
+public/src/chat/session.js
+public/src/chat/renderers.js
+public/src/chat/memory-actions.js
 public/src/invite.js
+public/src/imports.js
+public/src/jobs.js
+public/src/traces.js
+public/src/traces/renderers.js
 public/src/messages.js
 public/src/ui.js
 ```
 
-后续如果页面继续增加，应继续按老板端、员工端、共享渲染组件和 API client 的边界拆分，而不是重新把逻辑堆回入口文件。
+聊天页当前按 session/body、纯渲染、记忆交互和入口编排拆分；Trace 页按入口编排和 Run/Trace/Tool 渲染拆分。后续如果页面继续增加，应继续按老板端、员工端、共享渲染组件和 API client 的边界拆分，而不是重新把逻辑堆回入口文件。
 
 ### 13.5 登录密钥不是完整账号体系
 
