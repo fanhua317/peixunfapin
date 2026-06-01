@@ -1,5 +1,6 @@
 import { api } from "./api.js";
 import { appendAssistantHtml, appendTyping, appendUserText, removeMessage, scrollToBottom } from "./messages.js";
+import { mountChatHistory, persistCurrentChatHistory } from "./chat/history.js";
 import { createMemoryHandlers } from "./chat/memory-actions.js";
 import { agentBody, agentStreamUrl, chatSessionId } from "./chat/session.js";
 import {
@@ -27,6 +28,7 @@ const memoryHandlers = createMemoryHandlers({
   cancelIntentConfirmation,
   disableActionButtons,
 });
+let saveHistoryTimer = null;
 
 function focusComposer() {
   const input = document.querySelector("#chatInput");
@@ -37,6 +39,42 @@ function disableActionButtons(button) {
   const actions = button?.closest(".message-actions");
   actions?.querySelectorAll("button").forEach((item) => {
     item.disabled = true;
+  });
+}
+
+function deriveConversationMeta() {
+  const messages = document.querySelector("#messages");
+  const userTexts = [...(messages?.querySelectorAll(".user-message .bubble") || [])]
+    .map((item) => item.textContent || "")
+    .filter(Boolean);
+  const allTexts = [...(messages?.querySelectorAll(".message .bubble") || [])]
+    .map((item) => item.textContent || "")
+    .filter(Boolean);
+  return {
+    html: messages?.innerHTML || "",
+    title: userTexts[0] || "新聊天",
+    preview: allTexts.at(-1) || userTexts[0] || "还没有消息",
+  };
+}
+
+function persistConversation() {
+  persistCurrentChatHistory(deriveConversationMeta());
+}
+
+function scheduleHistorySave() {
+  clearTimeout(saveHistoryTimer);
+  saveHistoryTimer = setTimeout(() => persistConversation(), 250);
+}
+
+function wireSuggestionButtons() {
+  const input = document.querySelector("#chatInput");
+  document.querySelectorAll("[data-command]").forEach((button) => {
+    if (button.dataset.wired === "1") return;
+    button.dataset.wired = "1";
+    button.addEventListener("click", () => {
+      input.value = button.dataset.command || "";
+      input.focus();
+    });
   });
 }
 
@@ -412,16 +450,32 @@ async function handleUserText(text) {
 }
 
 export function setupChatApp() {
+  document.querySelector(".chat-shell")?.classList.add("chat-history-mode");
   const form = document.querySelector("#chatForm");
   const input = document.querySelector("#chatInput");
   const sendBtn = document.querySelector("#sendBtn");
+  const messages = document.querySelector("#messages");
+  const initialMessagesHtml = messages?.innerHTML || "";
 
-  document.querySelectorAll("[data-command]").forEach((button) => {
-    button.addEventListener("click", () => {
-      input.value = button.dataset.command || "";
-      input.focus();
-    });
+  const activeSession = mountChatHistory({
+    initialHtml: initialMessagesHtml,
+    beforeSelect: persistConversation,
+    onSelect: (session) => {
+      currentDraft = null;
+      if (messages) messages.innerHTML = session.html || initialMessagesHtml;
+      wireSuggestionButtons();
+      scrollToBottom();
+      focusComposer();
+    },
   });
+  if (activeSession?.html && messages) messages.innerHTML = activeSession.html;
+  wireSuggestionButtons();
+
+  if (messages) {
+    const observer = new MutationObserver(scheduleHistorySave);
+    observer.observe(messages, { childList: true, subtree: true, characterData: true });
+    persistConversation();
+  }
 
   input.addEventListener("input", () => {
     input.style.height = "auto";

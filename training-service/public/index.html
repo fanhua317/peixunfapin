@@ -27,7 +27,18 @@
         </div>
       </header>
 
-      <section class="conversation" id="messages" aria-live="polite">
+      <div class="chat-workspace">
+        <aside class="chat-history" id="chatHistoryPanel" hidden>
+          <div class="chat-history-head">
+            <strong>聊天记录</strong>
+            <button id="newChatBtn" type="button" title="新建聊天" aria-label="新建聊天">+</button>
+          </div>
+          <div class="chat-history-list" id="chatHistoryList"></div>
+          <p class="chat-history-note">自动保留最近 30 天</p>
+        </aside>
+
+        <div class="chat-main">
+          <section class="conversation" id="messages" aria-live="polite">
         <article class="message assistant-message">
           <div class="avatar">AI</div>
           <div class="bubble">
@@ -40,15 +51,17 @@
             </div>
           </div>
         </article>
-      </section>
+          </section>
 
-      <form class="composer" id="chatForm">
+          <form class="composer" id="chatForm">
         <textarea id="chatInput" rows="1" placeholder="输入培训安排或查询要求..." autocomplete="off"></textarea>
         <div class="composer-actions">
           <span id="composerHint">按 Enter 发送，Shift + Enter 换行</span>
           <button id="sendBtn" type="submit">发送</button>
         </div>
-      </form>
+          </form>
+        </div>
+      </div>
     </main>
 
     <script type="module" src="/app.js"></script>

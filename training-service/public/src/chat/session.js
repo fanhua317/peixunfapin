@@ -1,12 +1,22 @@
 const CHAT_SESSION_KEY = "juzhouTrainingChatSessionId";
 
-export const chatSessionId = (() => {
+export function createChatSessionId() {
+  return `boss-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export let chatSessionId = (() => {
   const existing = localStorage.getItem(CHAT_SESSION_KEY);
   if (existing) return existing;
-  const value = `boss-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  const value = createChatSessionId();
   localStorage.setItem(CHAT_SESSION_KEY, value);
   return value;
 })();
+
+export function setChatSessionId(value) {
+  chatSessionId = value || createChatSessionId();
+  localStorage.setItem(CHAT_SESSION_KEY, chatSessionId);
+  return chatSessionId;
+}
 
 export function agentBody(payload = {}) {
   return JSON.stringify({
