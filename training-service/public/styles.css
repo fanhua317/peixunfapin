@@ -926,6 +926,56 @@ button:disabled {
   margin-bottom: 0;
 }
 
+.markdown-body {
+  display: grid;
+  gap: 10px;
+}
+
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body pre {
+  margin: 0;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 24px;
+}
+
+.markdown-body li + li {
+  margin-top: 6px;
+}
+
+.markdown-body strong {
+  color: #101828;
+  font-weight: 900;
+}
+
+.markdown-body code {
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: #eef4ff;
+  color: var(--brand-dark);
+  font-size: .92em;
+}
+
+.markdown-body pre {
+  padding: 12px;
+  border: 1px solid #dbe5f5;
+  border-radius: 12px;
+  background: #0f172a;
+  color: #e5efff;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+.markdown-body pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
+
 .suggestions {
   display: flex;
   flex-wrap: wrap;

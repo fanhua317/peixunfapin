@@ -1,4 +1,5 @@
 import { escapeHtml, formatDate, renderQualitySummary, renderStageProgress } from "../ui.js";
+import { renderMarkdown } from "../markdown.js";
 
 export function renderDraftCard(draft) {
   const matchedEmployees = (draft.employees || []).map((employee) => employee.temporary
@@ -174,12 +175,7 @@ export function renderMarketingArticleResult(result) {
   const sourceRefs = (article.sourceRefs || [])
     .map((source) => `<li>${escapeHtml(source)}</li>`)
     .join("");
-  const body = String(article.article || "")
-    .split(/\n{2,}/)
-    .map((paragraph) => paragraph.trim())
-    .filter(Boolean)
-    .map((paragraph) => `<p>${escapeHtml(paragraph).replaceAll("\n", "<br />")}</p>`)
-    .join("");
+  const body = renderMarkdown(article.article || "");
   const meta = [
     article.knowledgeBase?.name ? `资料：${article.knowledgeBase.name}` : "",
     article.retrievalMode ? `检索：${article.retrievalMode}` : "",
@@ -250,7 +246,7 @@ export function renderMemoryConfirmResult(result) {
 }
 
 export function renderChatAnswer(answer) {
-  return `<p>${escapeHtml(answer || "").replaceAll("\n", "<br />")}</p>`;
+  return `<div class="markdown-body">${renderMarkdown(answer || "")}</div>`;
 }
 
 export function renderStreamingAnswer(answer, stage) {
