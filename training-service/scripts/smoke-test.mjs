@@ -1,12 +1,28 @@
-import { rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
 const root = path.resolve(import.meta.dirname, "..");
 const tempDataDir = path.join(root, ".tmp-smoke-data");
+const smokeSeedDir = path.join(tempDataDir, "seed-clean");
 const port = 18787;
 const baseUrl = `http://127.0.0.1:${port}`;
 const directLlmConfigured = Boolean(process.env.TRAINING_LLM_API_KEY || process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY);
+
+const smokeKnowledge = `# 电机基础培训资料
+
+## 核心优势
+三相异步电动机适合水泵、风机、机床、输送设备等工业场景，优势包括结构简单、运行稳定、维护成本低、采购性价比高。销售介绍时应重点说明可靠性、节能价值、适配场景和售后服务承诺。
+
+## 选型要点
+电机选型需要确认负载类型、功率、转速、安装方式、防护等级、绝缘等级、电压频率和使用环境。常见转速包括 2 极约 3000rpm、4 极约 1500rpm、6 极约 1000rpm；防护等级可按室内、户外、潮湿和粉尘环境选择。
+
+## 售后政策
+售后培训应覆盖铭牌识别、接线检查、轴承与散热维护、异常噪声排查、过载保护和客户沟通流程。员工完成培训后应能回答客户关于交付周期、保修范围和维护注意事项的问题。
+
+## 考试建议
+考试建议以选择题和判断题为主，重点覆盖产品优势、适用客户、选型参数、销售注意事项和售后流程。通过分数建议为 80 分。
+`;
 
 async function request(pathname, options = {}) {
   const response = await fetch(`${baseUrl}${pathname}`, {
@@ -46,6 +62,8 @@ async function waitForHealth() {
 }
 
 await rm(tempDataDir, { recursive: true, force: true });
+await mkdir(smokeSeedDir, { recursive: true });
+await writeFile(path.join(smokeSeedDir, "motor-training.md"), smokeKnowledge, "utf8");
 
 const child = spawn(process.execPath, ["src/server.mjs"], {
   cwd: root,
@@ -74,6 +92,19 @@ try {
     throw new Error(`unexpected health payload: ${JSON.stringify(health)}`);
   }
 
+  const seedImport = await request("/api/imports/directory", {
+    method: "POST",
+    body: JSON.stringify({
+      inputDir: smokeSeedDir,
+      kbName: "电机培训资料库",
+      aliases: ["电机", "电机基础培训", "三相异步电动机", "售后政策", "销售培训"],
+      cleanMode: "direct",
+    }),
+  });
+  if (!seedImport.imported?.kbId || seedImport.imported.chunkCount < 1) {
+    throw new Error(`expected smoke knowledge base import, got ${JSON.stringify(seedImport)}`);
+  }
+
   let chatResponse;
   try {
     chatResponse = await request("/api/chat", {
@@ -93,7 +124,7 @@ try {
   const draftResponse = await request("/api/agent/draft", {
     method: "POST",
     body: JSON.stringify({
-      instruction: "给王小明和李小红发布 A 产品基础培训，明天下午 6 点前完成，出 3 道选择题，80 分及格。",
+      instruction: "给王小明和李小红发布电机基础培训，明天下午 6 点前完成，出 3 道选择题，80 分及格。",
     }),
   });
 
@@ -137,7 +168,7 @@ try {
   }
   const memoryDraft = await request("/api/agent/draft", {
     method: "POST",
-    body: JSON.stringify({ sessionId: memorySessionId, instruction: "给王小明发布 A 产品基础培训" }),
+    body: JSON.stringify({ sessionId: memorySessionId, instruction: "给王小明发布电机基础培训" }),
   });
   if (memoryDraft.draft.quizCount !== 10 || memoryDraft.draft.passScore !== 80) {
     throw new Error(`expected memory defaults in draft, got ${JSON.stringify(memoryDraft.draft)}`);
@@ -212,7 +243,7 @@ try {
   } else {
     const marketingArticleResponse = await request("/api/agent/dispatch", {
       method: "POST",
-      body: JSON.stringify({ message: "联网查一下再写一篇关于 A 产品的软文，短一点" }),
+      body: JSON.stringify({ message: "联网查一下再写一篇关于电机的软文，短一点" }),
     });
     if (
       marketingArticleResponse.action !== "marketing_article" ||
@@ -241,7 +272,7 @@ try {
   const inviteResponse = await request(`/api/invites/${token}`);
   const answerResponse = await request("/api/answer", {
     method: "POST",
-    body: JSON.stringify({ token, question: "A 产品最大的优势是什么？" }),
+    body: JSON.stringify({ token, question: "电机最大的优势是什么？" }),
   });
   const quizResponse = await request("/api/quiz/generate", {
     method: "POST",
@@ -271,7 +302,7 @@ try {
   const expiredDraftResponse = await request("/api/agent/draft", {
     method: "POST",
     body: JSON.stringify({
-      instruction: "给王小明发布 A 产品基础培训，出 1 道选择题，80 分及格。",
+      instruction: "给王小明发布电机基础培训，出 1 道选择题，80 分及格。",
     }),
   });
   const expiredPublishResponse = await request("/api/tasks/publish", {

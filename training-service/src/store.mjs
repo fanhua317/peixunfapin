@@ -24,54 +24,9 @@ export const defaultState = () => ({
     createdAt: nowIso(),
     updatedAt: nowIso(),
   },
-  knowledgeBases: [
-    {
-      id: "kb-a-product",
-      name: "A 产品基础资料库",
-      aliases: ["A产品", "A 产品", "A 产品培训", "A 产品基础培训"],
-      description: "用于演示的 A 产品基础培训资料库。",
-      version: "demo-1",
-      status: "ready",
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-    },
-  ],
-  documents: [
-    {
-      id: "doc-a-product-guide",
-      knowledgeBaseId: "kb-a-product",
-      title: "A 产品基础说明",
-      sourcePath: "demo/a-product-guide.md",
-      sourceType: "markdown",
-      status: "ready",
-    },
-  ],
-  chunks: [
-    {
-      id: "chunk-a-product-1",
-      knowledgeBaseId: "kb-a-product",
-      documentId: "doc-a-product-guide",
-      content: "A 产品面向销售场景，核心优势包括部署快、学习成本低、售后响应稳定。销售介绍时应优先强调客户痛点、产品差异点和售后服务承诺。",
-      sourceRef: "A 产品基础说明 / 核心优势",
-      metadata: { section: "核心优势" },
-    },
-    {
-      id: "chunk-a-product-2",
-      knowledgeBaseId: "kb-a-product",
-      documentId: "doc-a-product-guide",
-      content: "A 产品标准培训建议包含产品定位、主要功能、常见问题、销售话术和售后政策。员工完成学习后应能回答客户关于价格、交付周期和售后范围的问题。",
-      sourceRef: "A 产品基础说明 / 培训范围",
-      metadata: { section: "培训范围" },
-    },
-    {
-      id: "chunk-a-product-3",
-      knowledgeBaseId: "kb-a-product",
-      documentId: "doc-a-product-guide",
-      content: "考试建议以选择题和判断题为主，重点覆盖产品优势、适用客户、销售注意事项和售后流程。通过分数建议为 80 分。",
-      sourceRef: "A 产品基础说明 / 考试建议",
-      metadata: { section: "考试建议" },
-    },
-  ],
+  knowledgeBases: [],
+  documents: [],
+  chunks: [],
   chunkParents: [],
   employees: [
     {
