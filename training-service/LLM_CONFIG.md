@@ -1,71 +1,50 @@
-# 通用助手 OpenClaw 转接配置
+# LLM Provider 兼容说明
 
-网页端现在分为两类问题：
+`training-service` 的默认模型调用路径是 OpenAI-compatible HTTP API。当前推荐配置 DeepSeek；OpenClaw Gateway 只作为可选兼容 provider，不是网页端普通聊天或培训生成的默认依赖。
 
-- 培训任务类：创建培训、发布员工链接、查询进度、考试等，由本地 `training-service` 处理。
-- 通用问题类：例如“今天天气怎么样”“帮我写一段通知”，会转到 `POST /api/chat`，再由服务端转发给 OpenClaw Gateway。
+## 默认：OpenAI-compatible API
 
-## 当前行为
-
-`training-service` 只是网页套壳和业务服务，不直接暴露 OpenClaw 密钥给浏览器。
-
-前端调用：
-
-```text
-POST /api/chat
+```env
+TRAINING_LLM_PROVIDER=auto
+TRAINING_LLM_BASE_URL=https://api.deepseek.com/v1
+TRAINING_LLM_MODEL=deepseek-chat
+TRAINING_LLM_API_KEY=...
 ```
 
-后端再连接 OpenClaw Gateway WebSocket，并调用：
+兼容变量仍可使用：
 
-```text
-chat.send
+```env
+DEEPSEEK_API_KEY=...
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+DEEPSEEK_MODEL=deepseek-chat
+OPENAI_API_KEY=...
 ```
 
-默认配置：
+`TRAINING_LLM_API_KEY` 优先级最高；未设置时再读取兼容变量。
 
-```text
+## 可选：OpenClaw Gateway
+
+只有显式设置下面的变量时，服务才会尝试通过 OpenClaw Gateway：
+
+```env
+TRAINING_LLM_PROVIDER=openclaw
 OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
+OPENCLAW_GATEWAY_TOKEN=...
+OPENCLAW_GATEWAY_PASSWORD=...
 OPENCLAW_AGENT_ID=training-manager
 OPENCLAW_SESSION_KEY=agent:training-manager:main
+OPENCLAW_CHAT_TIMEOUT_MS=120000
 ```
 
-如果 OpenClaw Gateway 未运行或凭据不正确，`/api/chat` 会返回兜底说明，不会再误当成培训任务。
+该模式用于兼容历史 OpenClaw Agent 和插件编排。网页端、RAG、培训发布和软文功能不要求 OpenClaw Gateway 存在。
 
-例如问：
+## 失败行为
 
-```text
-今天天气怎么样？
-```
+- 未配置可用模型 API 时，普通聊天会返回明确的配置缺失错误。
+- 讲义、试题和软文生成不会使用本地模板兜底，也不会假装调用成功。
+- OpenClaw Gateway 连接失败时，只影响显式选择 `TRAINING_LLM_PROVIDER=openclaw` 的调用路径。
 
-系统会把问题交给 OpenClaw 里已配置的 Agent。是否能查到实时天气，取决于该 Agent 是否拥有联网、浏览器或天气工具。
+## 相关文档
 
-## 连接 OpenClaw Gateway
-
-启动服务前设置环境变量：
-
-```powershell
-$env:OPENCLAW_GATEWAY_URL="ws://127.0.0.1:18789"
-$env:OPENCLAW_GATEWAY_TOKEN="你的 Gateway Token"
-$env:OPENCLAW_AGENT_ID="training-manager"
-$env:OPENCLAW_SESSION_KEY="agent:training-manager:main"
-node src/server.mjs
-```
-
-如果 Gateway 使用 password 认证：
-
-```powershell
-$env:OPENCLAW_GATEWAY_URL="ws://127.0.0.1:18789"
-$env:OPENCLAW_GATEWAY_PASSWORD="你的 Gateway Password"
-$env:OPENCLAW_AGENT_ID="training-manager"
-$env:OPENCLAW_SESSION_KEY="agent:training-manager:main"
-node src/server.mjs
-```
-
-## 可用变量
-
-- `OPENCLAW_GATEWAY_URL`：OpenClaw Gateway WebSocket 地址。
-- `OPENCLAW_GATEWAY_TOKEN`：Gateway token 认证。
-- `OPENCLAW_GATEWAY_PASSWORD`：Gateway password 认证。
-- `OPENCLAW_AGENT_ID`：默认 Agent id，未指定 session key 时使用。
-- `OPENCLAW_SESSION_KEY`：目标会话，默认 `agent:training-manager:main`。
-- `OPENCLAW_CHAT_TIMEOUT_MS`：等待 OpenClaw 回复的超时时间，默认 120000。
+- [README.md](README.md)：服务运行和部署配置。
+- [../docs/PROJECT_OVERVIEW.md](../docs/PROJECT_OVERVIEW.md)：系统架构和模型调用位置。

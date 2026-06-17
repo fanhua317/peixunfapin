@@ -1,8 +1,10 @@
 # 钜洲培训 Agent Training Plugin
 
-这是 OpenClaw 外部插件，把 `training-service` 的培训闭环能力暴露为 Agent tools。`training-service` 可以不安装插件独立运行；插件只负责让外部 OpenClaw Agent 调用现有培训 API。
+这是可选的 OpenClaw 外部插件，用来把 `training-service` 的培训闭环能力暴露为 Agent tools。`training-service` 可以不安装插件独立运行；插件只负责让外部 OpenClaw Agent 调用现有培训 API。
 
-## 工具
+## Tools
+
+插件保留 8 个 tool 名：
 
 - `training_list_knowledge_bases`
 - `training_search_employees`
@@ -13,18 +15,18 @@
 - `training_generate_quiz`
 - `training_grade_answer`
 
-当前插件只保留以上 8 个 training tool。网页端已经有营销软文和本地记忆功能，但本轮没有给 OpenClaw 插件新增软文或记忆 tool。
+网页端已有营销软文、本地记忆、任务中心和 Trace 页面；这些能力本轮没有新增到 OpenClaw 插件 tool 中。
 
-## 安装方式
+## 安装
 
-在 OpenClaw 中安装本地插件：
+本地安装：
 
 ```powershell
 openclaw plugins install "D:\juzhou-agent\peixun\training-plugin"
 openclaw gateway restart
 ```
 
-也可以在 OpenClaw 配置里使用本地加载路径：
+也可以在 OpenClaw 配置里使用本地路径加载：
 
 ```json5
 {
@@ -57,8 +59,10 @@ openclaw gateway restart
 }
 ```
 
-## Agent 使用原则
+## 使用原则
 
-插件附带 `training-agent` skill。老板用自然语言创建任务时，Agent 应先生成草稿并展示确认；只有老板明确确认后，才调用 `training_publish_task`。
-
-高风险动作要由宿主 Agent 做二次确认。插件本身不保存业务数据，所有任务、邀请、考试、报表和 RAG 逻辑都在 `training-service` 中。
+- 外部 Agent 创建培训时，应先调用 `training_create_task_draft` 生成草稿。
+- 只有老板明确确认后，才允许调用 `training_publish_task`。
+- 删除、发布、回滚、恢复等高风险动作需要宿主 Agent 做二次确认。
+- 插件不保存业务数据；任务、邀请、考试、报表和 RAG 逻辑都在 `training-service` 中。
+- 若 `training-service` 不可访问，插件应返回明确错误，不生成假内容。

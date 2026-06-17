@@ -1,35 +1,37 @@
-﻿# 钜洲培训 Agent Server Deployment
+# 钜洲培训 Agent Server Deployment
+
+本文是服务器部署速查。更完整的运行说明见 `training-service/README.md`。
 
 ## Docker Compose
 
-1. Install Docker and Docker Compose on the server.
+1. Install Docker and Docker Compose.
 2. Copy `.env.example` to `.env`.
-3. Edit `.env` and set:
+3. Set at least:
    - `TRAINING_ACCESS_KEY`
-   - `TRAINING_LLM_API_KEY`
-   - `PUBLIC_BASE_URL` only if you want to force one fixed domain; otherwise links are generated from the current browser address.
-4. Start the service:
+   - `TRAINING_LLM_API_KEY` or `DEEPSEEK_API_KEY`
+   - `PUBLIC_BASE_URL` only when a fixed domain/IP should be forced.
+4. Start:
 
 ```bash
 docker compose up -d --build
 ```
 
-Open:
+Default URL:
 
 ```text
 http://your-server-ip:8787/
 ```
 
-For `http://47.95.194.219:8787/`, keep `PUBLIC_BASE_URL_MODE=request` or set:
+For `http://47.95.194.219:8787/`, either keep request-based links or set:
 
-```text
+```env
 PUBLIC_BASE_URL=http://47.95.194.219:8787
 PUBLIC_BASE_URL_MODE=env
 ```
 
 ## Direct Node
 
-Install Node.js 24 or newer, then run:
+Linux:
 
 ```bash
 cp .env.example .env
@@ -38,9 +40,7 @@ chmod +x start-server.sh
 ./start-server.sh
 ```
 
-The start script installs production dependencies with `npm ci --omit=dev` on first run, including the native SQLite module.
-
-On Windows Server, install Node.js 24 LTS and run PowerShell as Administrator:
+Windows Server:
 
 ```powershell
 Copy-Item .env.example .env
@@ -48,22 +48,24 @@ notepad .env
 powershell -ExecutionPolicy Bypass -File .\start-server.ps1
 ```
 
-To run after reboot, create a Windows scheduled task:
+Scheduled task example:
 
 ```powershell
 schtasks /Create /TN "JuzhouAgentTraining" /SC ONSTART /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\apps\JuzhouAgentTrainingServer\start-server.ps1" /RU SYSTEM /RL HIGHEST /F
 schtasks /Run /TN "JuzhouAgentTraining"
 ```
 
+The start script installs production dependencies with `npm ci --omit=dev`, including the native SQLite module.
+
 ## Data
 
-The default data directory is:
+Default packaged data directory:
 
 ```text
 data/training-index
 ```
 
-Back up these files regularly:
+Back up regularly:
 
 ```text
 data/training-index/training.db
@@ -74,9 +76,7 @@ data/training-index/agent-traces.jsonl
 data/training-index/vector-index-bge-m3.json
 ```
 
-`training.db` is the default business state and local memory database. `conversation-history.jsonl` remains an append-only chat history file, and `agent-traces.jsonl` is useful for intent-routing diagnostics. `vector-index-bge-m3.json` only exists when the local vector backend is used.
-
-The package includes built-in runtime backup commands:
+Runtime backup commands:
 
 ```bash
 cd training-service
@@ -85,32 +85,53 @@ npm run backup:verify -- --from /path/to/training-backup.zip
 npm run restore:data -- --from /path/to/training-backup.zip --force
 ```
 
-Backups are written to `data/training-index/backups` by default. Stop the service before a real restore; the restore command verifies the ZIP first and creates a safety backup before overwriting `training.db`.
+Stop the service before a real restore. The restore command verifies the ZIP and creates a safety backup before overwriting `training.db`.
 
-On first SQLite startup, old `state.json` and `memory.json` files are imported automatically and kept as backups. To temporarily roll back to JSON storage, set:
+## LLM
 
-```text
-TRAINING_STORAGE=json
+Default provider is OpenAI-compatible API, usually DeepSeek:
+
+```env
+TRAINING_LLM_PROVIDER=auto
+TRAINING_LLM_BASE_URL=https://api.deepseek.com/v1
+TRAINING_LLM_MODEL=deepseek-chat
+TRAINING_LLM_API_KEY=...
 ```
 
-## RAG With bge-m3
+OpenClaw Gateway is optional and only used when:
 
-For a 2-core / 4GB Windows server, prefer the local vector index instead of Qdrant:
-
-```powershell
-ollama pull bge-m3
-cd C:\Users\Administrator\Desktop\JuzhouAgentTrainingServer\training-service
-$env:TRAINING_DATA_DIR="C:\Users\Administrator\Desktop\JuzhouAgentTrainingServer\data\training-index"
-npm run embed:local -- --model=bge-m3
+```env
+TRAINING_LLM_PROVIDER=openclaw
 ```
 
-Keep these values in `.env`:
+## RAG With Local Vector Index
 
-```text
-TRAINING_HYBRID_RETRIEVAL=auto
-TRAINING_VECTOR_BACKEND=local
-TRAINING_EMBEDDING_MODEL=bge-m3
-```
+For a low-concurrency 2-core / 4GB Windows server, prefer local vector index + optional Ollama query embedding.
 
-If you run Qdrant instead, keep the Qdrant volume or snapshot together with `training.db`; otherwise retrieval will fall back to BM25 until vectors are rebuilt or restored.
+Recommended flow:
 
+1. Build or refresh the knowledge base locally.
+2. Run local embedding against the same `chunks` / `chunkParents`:
+
+   ```powershell
+   cd D:\juzhou-agent\peixun\training-service
+   npm run embed:local -- --full
+   ```
+
+3. Upload matching `training.db` / clean data and `vector-index-bge-m3.json` to the server.
+4. On the server, optionally install Ollama and pull only `bge-m3` for query embedding:
+
+   ```powershell
+   ollama pull bge-m3
+   ```
+
+5. Use:
+
+   ```env
+   TRAINING_HYBRID_RETRIEVAL=auto
+   TRAINING_VECTOR_BACKEND=local
+   TRAINING_EMBEDDING_MODEL=bge-m3
+   OLLAMA_URL=http://127.0.0.1:11434
+   ```
+
+If Ollama or the vector index is unavailable, retrieval falls back to BM25. Qdrant remains an optional high-resource deployment path; when used, back up its volume or collection snapshot together with the application data.
