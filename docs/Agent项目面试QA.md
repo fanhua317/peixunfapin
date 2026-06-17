@@ -1,4 +1,4 @@
-# Agent 项目面试 QA
+﻿# Agent 项目面试 QA
 
 更新时间：2026-05-26  
 适用项目：钜洲培训 Agent / 企业业务 Agent 原型  
@@ -97,6 +97,14 @@ A：短期不建议直接删除，建议降级为可选适配器。
 - 如果长期不再使用 OpenClaw 插件，再做一次独立删除。
 
 这样既能减少运行时困惑，又不会过早切断历史兼容能力。
+
+### Q8-2：为什么把数据从 OpenClawData 迁到 juzhou-agent\data？
+
+A：这是为了让项目边界更清楚。早期项目借用了 OpenClaw 的目录和运行习惯，业务资料、向量索引、SQLite 数据库和 trace 文件放在 `D:\OpenClawData`，容易让人误以为培训系统必须依赖 OpenClaw 主仓库。
+
+迁移后源码在 `D:\juzhou-agent\peixun`，运行数据在 `D:\juzhou-agent\data`。服务默认从项目根推导数据目录：`training-index` 保存 `training.db`、JSON 回滚文件、聊天日志、Agent Run、任务队列和本地向量索引；`training-raw`、`training-clean`、`training-vision` 保存导入资料和清洗产物。
+
+这样项目可以独立部署、独立备份、独立迁移。OpenClaw 插件仍保留，但只是外部 Agent 调用培训 API 的兼容层，不再是默认运行前提。
 
 ## 3. Agent 架构
 
@@ -429,7 +437,7 @@ A：当前把业务状态和 Agent 记忆统一迁移到 SQLite，但仍保持�
 - `state.json` 和 `memory.json` 是旧版兼容文件，首次启动 SQLite 会自动导入，`npm run export:json` 可以重新导出。
 - `conversation-history.jsonl` 追加完整聊天和工具调用摘要，按 `sessionId` 区分会话。
 
-这些文件都放在 `TRAINING_DATA_DIR` 下，默认是 `D:\OpenClawData\training-index`，不提交 Git。大量聊天历史继续放在 JSONL 里，避免把日志塞进主数据库。
+这些文件都放在 `TRAINING_DATA_DIR` 下，默认是 `D:\juzhou-agent\data\training-index`，不提交 Git。大量聊天历史继续放在 JSONL 里，避免把日志塞进主数据库。
 
 ## 10. 安全与可靠性
 
@@ -574,7 +582,7 @@ A：项目里采用“小 chunk 检索，大 parent 生成”的结构：
 
 ### Q51：这次 RAG 改造有什么可量化结果？
 
-A：本轮重建了现有电机培训知识库，重新导入 `D:\OpenClawData\training-clean`。重建后父块 137 个、子块 166 个、表格行父块 42 个，最长子块从原来的 3000+ 字符降到 720 字符，且没有孤儿子块。
+A：本轮重建了现有电机培训知识库，重新导入 `D:\juzhou-agent\data\training-clean`。重建后父块 137 个、子块 166 个、表格行父块 42 个，最长子块从原来的 3000+ 字符降到 720 字符，且没有孤儿子块。
 
 验证结果包括：
 

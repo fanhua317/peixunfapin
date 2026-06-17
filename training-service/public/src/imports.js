@@ -152,7 +152,7 @@ function renderOverview() {
         <section class="import-panel">
           <h2>本机目录导入</h2>
           <form id="directoryImportForm" class="import-form">
-            <label>目录路径<input name="inputDir" placeholder="D:\\OpenClawData\\training-clean" required /></label>
+            <label>目录路径<input name="inputDir" placeholder="D:\\juzhou-agent\\data\\training-clean" required /></label>
             <label>知识库名称<input name="kbName" placeholder="电机培训资料库" required /></label>
             <label>别名<input name="aliases" placeholder="电机, 电机培训" /></label>
             <label>清洗模式

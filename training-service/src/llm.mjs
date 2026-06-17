@@ -7,17 +7,13 @@ async function callOpenClawProvider(message, options) {
   return await askOpenClaw(message, options);
 }
 
-function hasDirectLlmConfig() {
-  return getDirectLlmRuntimeConfig().apiKeyConfigured;
-}
-
 export function getLlmRuntimeConfig() {
   const requestedProvider = String(process.env.TRAINING_LLM_PROVIDER || DEFAULT_PROVIDER || "auto").toLowerCase();
   const direct = getDirectLlmRuntimeConfig();
   const directConfigured = direct.apiKeyConfigured;
   return {
     provider: requestedProvider,
-    effectiveProvider: requestedProvider === "auto" ? (directConfigured ? "openai-compatible" : "openclaw") : requestedProvider,
+    effectiveProvider: requestedProvider === "auto" ? "openai-compatible" : requestedProvider,
     directConfigured,
     baseUrl: direct.baseUrl,
     model: direct.model,
@@ -30,10 +26,7 @@ async function callOpenAiCompatibleProvider(message, options = {}) {
 }
 
 async function callAutoProvider(message, options = {}) {
-  if (hasDirectLlmConfig()) {
-    return await callOpenAiCompatibleProvider(message, options);
-  }
-  return await callOpenClawProvider(message, options);
+  return await callOpenAiCompatibleProvider(message, options);
 }
 
 const PROVIDERS = {

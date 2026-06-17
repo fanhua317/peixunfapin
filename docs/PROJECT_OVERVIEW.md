@@ -1,8 +1,8 @@
-# 钜洲培训 Agent 项目总览文档
+﻿# 钜洲培训 Agent 项目总览文档
 
-更新时间：2026-05-28
+更新时间：2026-06-16
 项目目录：`D:\juzhou-agent\peixun`  
-业务数据目录：`D:\OpenClawData`
+业务数据目录：`D:\juzhou-agent\data`
 
 ## 1. 项目目标与背景
 
@@ -58,10 +58,10 @@
    `training-service` 可以在没有 OpenClaw 主仓库的情况下运行。OpenClaw 只作为可选插件宿主。
 
 3. 数据与代码分离  
-   源码放在 `D:\juzhou-agent\peixun`，真实业务数据放在 `D:\OpenClawData`，避免把资料、索引、密钥和运行数据提交到 Git。
+   源码放在 `D:\juzhou-agent\peixun`，真实业务数据放在 `D:\juzhou-agent\data`，避免把资料、索引、密钥和运行数据提交到 Git。
 
 4. 大模型可替换  
-   通过 OpenAI-compatible API 直连 DeepSeek、Kimi、OpenAI 等模型，也保留 OpenClaw Gateway 接入能力。
+   默认通过 OpenAI-compatible API 直连 DeepSeek、Kimi、OpenAI 等模型；OpenClaw Gateway 只作为显式启用的兼容 provider。
 
 5. RAG 检索约束  
    本地向量索引、Qdrant、Ollama 不可用时，服务仍可回退 BM25 文本检索，不能因为语义检索离线导致业务完全不可用。
@@ -225,7 +225,7 @@ D:\juzhou-agent\peixun
 ### 5.3 数据存储
 
 - 当前默认使用 SQLite 保存业务状态和本地长期记忆。
-- 默认路径：`D:\OpenClawData\training-index\training.db`。
+- 默认路径：`D:\juzhou-agent\data\training-index\training.db`。
 - 可通过 `TRAINING_DATA_DIR` 覆盖数据目录，也可通过 `TRAINING_SQLITE_PATH` 指定数据库文件。
 - `TRAINING_STORAGE=sqlite|json` 控制存储模式，默认 `sqlite`；`json` 用于临时回滚。
 - 首次 SQLite 启动会从旧版 `state.json` 和 `memory.json` 导入，导入前保留 `.backup-时间戳.json`。
@@ -290,6 +290,7 @@ SQLite 采用“集合分表 + 完整 JSON 原文保留”的兼容方案，外�
 
 2. OpenClaw Gateway  
    `training-service` 保留 WebSocket 调用 OpenClaw Gateway 的能力，但不再硬依赖 `D:\OpenClaw\openclaw`。
+   默认 `TRAINING_LLM_PROVIDER=auto` 不再自动转 OpenClaw；需要兼容旧 Gateway 时显式设置 `TRAINING_LLM_PROVIDER=openclaw`。
 
 默认建议：
 
@@ -1035,12 +1036,13 @@ npm run restore:data -- --from <backup.zip> --force
 | `PUBLIC_BASE_URL_MODE` | 链接生成模式 | `request` 或 `env` |
 | `TRAINING_ACCESS_KEY` | 网页登录密钥 | 长随机字符串 |
 | `TRAINING_AUTH_DISABLED` | 是否关闭登录校验 | 生产不要开启 |
-| `TRAINING_DATA_DIR` | 业务状态、记忆、路由轨迹和本地向量索引目录 | `D:\OpenClawData\training-index` |
+| `TRAINING_DATA_DIR` | 业务状态、记忆、路由轨迹和本地向量索引目录 | `D:\juzhou-agent\data\training-index` |
 | `TRAINING_STORAGE` | 主存储模式 | `sqlite`，回滚时设为 `json` |
 | `TRAINING_SQLITE_PATH` | SQLite 数据库路径 | 默认 `${TRAINING_DATA_DIR}/training.db` |
 | `TRAINING_SQLITE_BUSY_TIMEOUT_MS` | SQLite 忙等待超时 | `5000` |
 | `TRAINING_JOB_CONCURRENCY` | 本地异步任务并发数 | `1` |
-| `TRAINING_LLM_PROVIDER` | LLM 提供方 | `auto` |
+| `TRAINING_DATA_ROOT` | 项目业务数据根目录 | `D:\juzhou-agent\data` |
+| `TRAINING_LLM_PROVIDER` | LLM 提供方；`auto` 默认走 OpenAI-compatible API，OpenClaw 需显式设为 `openclaw` | `auto` |
 | `TRAINING_LLM_BASE_URL` | 模型 API 地址 | `https://api.deepseek.com/v1` |
 | `TRAINING_LLM_MODEL` | 模型名 | `deepseek-chat` 或兼容模型 |
 | `TRAINING_LLM_API_KEY` | 模型 API Key | 生产密钥 |

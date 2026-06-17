@@ -33,16 +33,18 @@ openclaw gateway restart
 
 ## 数据目录
 
-真实业务数据默认放在 `D:\OpenClawData`，不要提交到 Git：
+真实业务数据默认放在 `D:\juzhou-agent\data`，不要提交到 Git：
 
 ```text
-D:\OpenClawData\training-raw
-D:\OpenClawData\training-clean
-D:\OpenClawData\training-index
-D:\OpenClawData\training-vision
-D:\OpenClawData\qdrant
-D:\OpenClawData\ollama
+D:\juzhou-agent\data\training-raw
+D:\juzhou-agent\data\training-clean
+D:\juzhou-agent\data\training-index
+D:\juzhou-agent\data\training-vision
+D:\juzhou-agent\data\qdrant
+D:\juzhou-agent\data\ollama
 ```
+
+服务默认从项目根推导数据根目录，不再依赖 `D:\OpenClawData`。默认运行索引目录是 `D:\juzhou-agent\data\training-index`；如需覆盖，可设置 `TRAINING_DATA_ROOT` 或 `TRAINING_DATA_DIR`。
 
 `training-index` 下默认使用 SQLite 保存业务状态和本地 Agent 记忆，旧版 JSON 仍保留为首次迁移来源和回滚导出格式：
 
@@ -135,8 +137,8 @@ npm run export:json
 
 ```powershell
 npm run backup:data
-npm run backup:verify -- --from D:\OpenClawData\training-index\backups\training-backup-YYYYMMDD-HHmmss.zip
-npm run restore:data -- --from D:\OpenClawData\training-index\backups\training-backup-YYYYMMDD-HHmmss.zip --force
+npm run backup:verify -- --from D:\juzhou-agent\data\training-index\backups\training-backup-YYYYMMDD-HHmmss.zip
+npm run restore:data -- --from D:\juzhou-agent\data\training-index\backups\training-backup-YYYYMMDD-HHmmss.zip --force
 ```
 
 `backup:data` 默认输出到 `TRAINING_DATA_DIR\backups`，包含 `training.db` 快照、JSON 回滚副本、聊天/路由日志、Agent Run 记录、JSON 模式任务队列、JSON 模式知识库版本文件和本地向量索引。恢复属于高风险操作，执行 `--force` 前建议先停止服务；脚本会在覆盖前自动为当前数据再做一份安全备份。
@@ -157,9 +159,9 @@ dist\JuzhouAgentTraining.zip
 dist\JuzhouAgentTraining-Setup.exe
 ```
 
-`-IncludeData` 会打包 `D:\OpenClawData\training-index`、`training-clean` 和 `training-vision`，不会打包原始 PDF、Qdrant、Ollama 或密钥。
+`-IncludeData` 会打包 `D:\juzhou-agent\data\training-index`、`training-clean` 和 `training-vision`，不会打包原始 PDF、Qdrant、Ollama 或密钥。
 
-普通聊天和大模型出题/生成资料建议通过服务端环境变量配置：
+普通聊天和大模型出题/生成资料默认走 OpenAI-compatible API。OpenClaw Gateway 只作为可选兼容 provider，使用时显式设置 `TRAINING_LLM_PROVIDER=openclaw`：
 
 ```text
 TRAINING_LLM_PROVIDER=auto

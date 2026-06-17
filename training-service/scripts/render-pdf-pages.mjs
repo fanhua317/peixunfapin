@@ -1,6 +1,7 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { dataRootPath } from "../src/project-paths.mjs";
 
 const serviceRoot = path.resolve(import.meta.dirname, "..");
 const pdfJsRoot = path.resolve(
@@ -10,9 +11,9 @@ const canvasModulePath = path.resolve(
   process.env.CANVAS_MODULE_PATH ||
     path.join(serviceRoot, "node_modules", "@napi-rs", "canvas", "index.js"),
 );
-const inputPath = path.resolve(process.argv[2] || process.env.TRAINING_RENDER_INPUT || "D:\\OpenClawData\\training-raw");
+const inputPath = path.resolve(process.argv[2] || process.env.TRAINING_RENDER_INPUT || dataRootPath("training-raw"));
 const inputRoot = /\.pdf$/i.test(inputPath) ? path.dirname(inputPath) : inputPath;
-const outputRoot = path.resolve(process.argv[3] || process.env.TRAINING_RENDER_OUTPUT || "D:\\OpenClawData\\training-vision");
+const outputRoot = path.resolve(process.argv[3] || process.env.TRAINING_RENDER_OUTPUT || dataRootPath("training-vision"));
 const maxPages = Number(process.argv[4] || process.env.TRAINING_RENDER_MAX_PAGES || 0);
 const scale = Number(process.argv[5] || process.env.TRAINING_RENDER_SCALE || 1.6);
 

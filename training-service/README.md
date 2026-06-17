@@ -1,6 +1,6 @@
 ﻿# 钜洲培训 Agent Service MVP
 
-这是培训系统的外部 Web/API 服务。它保存员工、知识库、培训任务、邀请链接、考试和报表数据，OpenClaw 通过外部插件调用它。
+这是培训系统的 Web/API 服务。它保存员工、知识库、培训任务、邀请链接、考试和报表数据，可以独立运行；OpenClaw 只通过可选外部插件调用它。
 
 ## 运行
 
@@ -29,31 +29,33 @@ D:\juzhou-agent\peixun\training-service
 业务数据放在代码目录外：
 
 ```text
-D:\OpenClawData\training-raw    # 原始 PDF、Excel、CSV、TXT、Markdown
-D:\OpenClawData\training-clean  # 清洗后的 Markdown/TXT
-D:\OpenClawData\training-index  # training.db、JSON 回滚文件、conversation-history.jsonl、本地向量索引
-D:\OpenClawData\qdrant          # 本机 Qdrant Docker 持久化目录
+D:\juzhou-agent\data\training-raw    # 原始 PDF、Excel、CSV、TXT、Markdown
+D:\juzhou-agent\data\training-clean  # 清洗后的 Markdown/TXT
+D:\juzhou-agent\data\training-index  # training.db、JSON 回滚文件、conversation-history.jsonl、本地向量索引
+D:\juzhou-agent\data\qdrant          # 本机 Qdrant Docker 持久化目录
 ```
+
+默认数据根目录由项目根推导为 `D:\juzhou-agent\data`。如需整体换盘，可设置 `TRAINING_DATA_ROOT`；如只想覆盖运行索引目录，可设置 `TRAINING_DATA_DIR`。
 
 默认主数据库：
 
 ```text
-D:\OpenClawData\training-index\training.db
-D:\OpenClawData\training-index\training.db-shm
-D:\OpenClawData\training-index\training.db-wal
+D:\juzhou-agent\data\training-index\training.db
+D:\juzhou-agent\data\training-index\training.db-shm
+D:\juzhou-agent\data\training-index\training.db-wal
 ```
 
 旧版 JSON 文件仍保留为首次迁移来源和回滚导出目标：
 
 ```text
-D:\OpenClawData\training-index\state.json
-D:\OpenClawData\training-index\memory.json
-D:\OpenClawData\training-index\conversation-history.jsonl
-D:\OpenClawData\training-index\agent-traces.jsonl
-D:\OpenClawData\training-index\agent-runs.jsonl
-D:\OpenClawData\training-index\jobs.json
-D:\OpenClawData\training-index\knowledge-base-versions.json
-D:\OpenClawData\training-index\vector-index-bge-m3.json
+D:\juzhou-agent\data\training-index\state.json
+D:\juzhou-agent\data\training-index\memory.json
+D:\juzhou-agent\data\training-index\conversation-history.jsonl
+D:\juzhou-agent\data\training-index\agent-traces.jsonl
+D:\juzhou-agent\data\training-index\agent-runs.jsonl
+D:\juzhou-agent\data\training-index\jobs.json
+D:\juzhou-agent\data\training-index\knowledge-base-versions.json
+D:\juzhou-agent\data\training-index\vector-index-bge-m3.json
 ```
 
 `training.db` 保存业务状态、长期记忆、SQLite 模式下的异步任务、知识库版本快照和 Agent Run；`conversation-history.jsonl` 追加老板端聊天历史；`agent-traces.jsonl` 记录兼容 Trace 摘要；`agent-runs.jsonl` 是 JSON 回滚模式下的结构化运行记录；`jobs.json` 是 JSON 回滚模式下的任务队列；`knowledge-base-versions.json` 是 JSON 回滚模式下的知识库版本快照；`vector-index-bge-m3.json` 是可选的本地向量索引。它们不提交 Git。导出的 `state.json` 仍保持 `meta.version = 1`，用于回滚和兼容。
@@ -61,7 +63,7 @@ D:\OpenClawData\training-index\vector-index-bge-m3.json
 也可以用环境变量覆盖：
 
 ```powershell
-$env:TRAINING_DATA_DIR="D:\OpenClawData\training-index"
+$env:TRAINING_DATA_DIR="D:\juzhou-agent\data\training-index"
 $env:TRAINING_STORAGE="sqlite"
 npm start
 ```
@@ -87,14 +89,14 @@ npm start
 
 ```powershell
 npm run backup:data
-npm run backup:verify -- --from "D:\OpenClawData\training-index\backups\training-backup-YYYYMMDD-HHmmss.zip"
-npm run restore:data -- --from "D:\OpenClawData\training-index\backups\training-backup-YYYYMMDD-HHmmss.zip" --force
+npm run backup:verify -- --from "D:\juzhou-agent\data\training-index\backups\training-backup-YYYYMMDD-HHmmss.zip"
+npm run restore:data -- --from "D:\juzhou-agent\data\training-index\backups\training-backup-YYYYMMDD-HHmmss.zip" --force
 ```
 
 默认备份目录是：
 
 ```text
-D:\OpenClawData\training-index\backups
+D:\juzhou-agent\data\training-index\backups
 ```
 
 备份包包含：
@@ -124,7 +126,7 @@ D:\OpenClawData\training-index\backups
 1. 把原始文件放到：
 
 ```text
-D:\OpenClawData\training-raw
+D:\juzhou-agent\data\training-raw
 ```
 
 2. 清洗 PDF / Excel / CSV：
@@ -136,7 +138,7 @@ npm run clean:raw
 3. 导入清洗后的知识库：
 
 ```powershell
-npm run import:clean -- "D:\OpenClawData\training-clean" "电机培训资料库" "电机,电动机,三相异步电动机,异步电机,银嘉电机,YINJIA,YINJIA motor,电机应用,电机结构,电机选型,能效等级"
+npm run import:clean -- "D:\juzhou-agent\data\training-clean" "电机培训资料库" "电机,电动机,三相异步电动机,异步电机,银嘉电机,YINJIA,YINJIA motor,电机应用,电机结构,电机选型,能效等级"
 ```
 
 导入后，老板自然语言里提到 `电机`、`电动机`、`三相异步电动机` 等关键词时，系统会尝试匹配到该知识库。
@@ -220,7 +222,7 @@ Qdrant 方式：
 服务器环境变量至少包含：
 
 ```powershell
-$env:TRAINING_DATA_DIR="D:\OpenClawData\training-index"
+$env:TRAINING_DATA_DIR="D:\juzhou-agent\data\training-index"
 $env:TRAINING_STORAGE="sqlite"
 $env:QDRANT_URL="http://127.0.0.1:6333"
 $env:QDRANT_COLLECTION="training_chunks_bge_m3"
@@ -230,13 +232,13 @@ $env:TRAINING_HYBRID_RETRIEVAL="on"
 本地向量索引方式：
 
 ```powershell
-$env:TRAINING_DATA_DIR="D:\OpenClawData\training-index"
+$env:TRAINING_DATA_DIR="D:\juzhou-agent\data\training-index"
 $env:TRAINING_VECTOR_BACKEND="local"
 $env:TRAINING_EMBEDDING_MODEL="bge-m3"
 $env:TRAINING_HYBRID_RETRIEVAL="auto"
 ```
 
-LLM 调用推荐使用 OpenAI-compatible API 直连 DeepSeek，也可以继续走 OpenClaw Gateway：
+LLM 调用默认使用 OpenAI-compatible API 直连 DeepSeek。OpenClaw Gateway 是兼容入口，需要显式设置 `TRAINING_LLM_PROVIDER=openclaw` 才会使用：
 
 ```powershell
 $env:TRAINING_LLM_PROVIDER="auto"
@@ -245,24 +247,29 @@ $env:TRAINING_LLM_MODEL="deepseek-chat"
 $env:TRAINING_LLM_API_KEY="..."
 ```
 
+```powershell
+$env:TRAINING_LLM_PROVIDER="openclaw"
+$env:OPENCLAW_GATEWAY_URL="ws://127.0.0.1:18789"
+```
+
 ## 图片型 PDF 处理
 
 如果 PDF 不能直接抽取文字，可以先渲染为图片页：
 
 ```powershell
-npm run render:pdf -- "D:\OpenClawData\training-raw\电机\电机1.pdf" "D:\OpenClawData\training-vision" 3 1.4
+npm run render:pdf -- "D:\juzhou-agent\data\training-raw\电机\电机1.pdf" "D:\juzhou-agent\data\training-vision" 3 1.4
 ```
 
 渲染图片会输出到：
 
 ```text
-D:\OpenClawData\training-vision
+D:\juzhou-agent\data\training-vision
 ```
 
 随后将视觉识别出的内容整理为 Markdown，放回：
 
 ```text
-D:\OpenClawData\training-clean
+D:\juzhou-agent\data\training-clean
 ```
 
 再运行 `scripts/import-clean.mjs` 重新导入知识库。

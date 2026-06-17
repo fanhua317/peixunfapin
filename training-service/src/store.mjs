@@ -8,10 +8,11 @@ import {
   sqlitePathFor,
   sqliteStatus,
 } from "./sqlite-store.mjs";
+import { dataRootPath } from "./project-paths.mjs";
 
 export const dataDir = process.env.TRAINING_DATA_DIR
   ? path.resolve(process.env.TRAINING_DATA_DIR)
-  : "D:\\OpenClawData\\training-index";
+  : dataRootPath("training-index");
 
 export const statePath = path.join(dataDir, "state.json");
 export const sqlitePath = sqlitePathFor(dataDir);

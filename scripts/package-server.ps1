@@ -1,6 +1,6 @@
 ﻿param(
   [switch]$IncludeData,
-  [string]$DataRoot = "D:\OpenClawData",
+  [string]$DataRoot = "D:\juzhou-agent\data",
   [string]$OutputDir = ".\dist",
   [string]$AppName = "JuzhouAgentTrainingServer"
 )

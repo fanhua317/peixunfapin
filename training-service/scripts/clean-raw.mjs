@@ -1,8 +1,9 @@
 import path from "node:path";
 import { cleanRawDirectory } from "../src/import/cleaner.mjs";
+import { dataRootPath } from "../src/project-paths.mjs";
 
-const rawDir = path.resolve(process.argv[2] || process.env.TRAINING_RAW_DIR || "D:\\OpenClawData\\training-raw");
-const cleanDir = path.resolve(process.argv[3] || process.env.TRAINING_CLEAN_DIR || "D:\\OpenClawData\\training-clean");
+const rawDir = path.resolve(process.argv[2] || process.env.TRAINING_RAW_DIR || dataRootPath("training-raw"));
+const cleanDir = path.resolve(process.argv[3] || process.env.TRAINING_CLEAN_DIR || dataRootPath("training-clean"));
 
 const result = await cleanRawDirectory({ rawDir, cleanDir });
 for (const item of result.outputs) {
