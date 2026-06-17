@@ -1096,6 +1096,11 @@ button:disabled {
   margin: 0 0 10px;
 }
 
+.user-message .bubble .user-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .bubble p:last-child {
   margin-bottom: 0;
 }

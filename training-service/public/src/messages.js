@@ -33,7 +33,7 @@ export function appendMessage(role, html, actions = []) {
 }
 
 export function appendUserText(text) {
-  return appendMessage("user", `<p>${escapeHtml(text)}</p>`);
+  return appendMessage("user", `<p class="user-text">${escapeHtml(text)}</p>`);
 }
 
 export function appendAssistantHtml(html, actions = []) {
