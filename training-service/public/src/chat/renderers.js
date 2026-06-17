@@ -1,7 +1,15 @@
 import { escapeHtml, formatDate, renderQualitySummary, renderStageProgress } from "../ui.js";
 import { renderMarkdown } from "../markdown.js";
 
-export function renderDraftCard(draft) {
+function renderDraftStatusNote(status) {
+  return {
+    canceled: "这版草稿已取消。",
+    published: "这版草稿已发布。",
+    superseded: "这版草稿已被后续草稿替代。",
+  }[status] || "";
+}
+
+export function renderDraftCard(draft, { status = "pending" } = {}) {
   const matchedEmployees = (draft.employees || []).map((employee) => employee.temporary
     ? `${employee.name}（自定义）`
     : `${employee.name}（${employee.department} / ${employee.role}）`);
@@ -10,8 +18,10 @@ export function renderDraftCard(draft) {
   const warnings = draft.warnings?.length
     ? `<div class="warning-box">${draft.warnings.map((warning) => `<div>${escapeHtml(warning)}</div>`).join("")}</div>`
     : "";
+  const statusNote = renderDraftStatusNote(status);
   return `
     <h2>请确认培训安排</h2>
+    ${statusNote ? `<p class="muted draft-status-note">${escapeHtml(statusNote)}</p>` : ""}
     <div class="info-grid">
       <div><span>培训主题</span><strong>${escapeHtml(draft.title)}</strong></div>
       <div><span>培训对象</span><strong>${escapeHtml(employees)}</strong></div>
@@ -93,14 +103,19 @@ export function renderIntentConfirmResult(result) {
 }
 
 export function renderPublishResult(result) {
-  const links = result.inviteLinks
-    .map((link) => `<li><strong>${escapeHtml(link.employeeName)}${link.temporary ? "（自定义）" : ""}</strong><a href="${link.url}" target="_blank" rel="noreferrer">${escapeHtml(link.url)}</a></li>`)
+  const inviteLinks = Array.isArray(result.inviteLinks) ? result.inviteLinks : result.invites || [];
+  const links = inviteLinks
+    .map((link) => {
+      const url = link.url || link.inviteUrl || link.link || "";
+      const employeeName = link.employeeName || link.name || link.employee?.name || "学习对象";
+      return `<li><strong>${escapeHtml(employeeName)}${link.temporary ? "（自定义）" : ""}</strong>${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(url)}</a>` : ""}</li>`;
+    })
     .join("");
   return `
     <h2>培训已发布</h2>
-    <p>任务：${escapeHtml(result.task.title)}</p>
+    <p>任务：${escapeHtml(result.task?.title || result.title || "培训任务")}</p>
     <p>请将以下员工专属链接转发给对应人员：</p>
-    <ul class="link-list">${links}</ul>
+    ${links ? `<ul class="link-list">${links}</ul>` : `<p class="muted">暂无学习链接。</p>`}
   `;
 }
 

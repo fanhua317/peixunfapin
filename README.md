@@ -29,6 +29,7 @@ http://127.0.0.1:8787/
 ## 核心能力
 
 - 老板端自然语言创建培训草稿、确认发布、生成员工学习链接。
+- 老板端聊天历史按 `boss-default` 账号规划服务端持久化，同一服务数据目录下跨浏览器/电脑可见。
 - 老板端提到已导入资料相关内容时，自动转为知识库答疑并展示来源片段。
 - 员工端查看讲义、提问、生成考试、提交答案。
 - 基于本地知识库生成营销软文，不保存文章记录。
@@ -44,6 +45,7 @@ http://127.0.0.1:8787/
 ```text
 D:\juzhou-agent\data
 ├── training-index\        # SQLite、JSONL、向量索引、备份
+│   └── boss-chat-sessions.json  # JSON 回滚模式下的老板端聊天历史
 ├── training-clean\        # 清洗后的知识库资料
 ├── training-vision\       # PDF 页面渲染和视觉补充资料
 └── qdrant\                # 可选 Qdrant 数据，不是轻量部署默认项
@@ -167,6 +169,7 @@ npm run eval:sqlite
 npm run eval:backup
 npm run eval:import
 npm run eval:jobs
+npm run eval:boss-chat
 npm run eval:kb-versions
 git diff --check
 ```

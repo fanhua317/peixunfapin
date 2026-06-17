@@ -11,14 +11,15 @@ export function memorySummary(memoryContext = {}) {
 }
 
 export function decisionSummary(decision = {}) {
+  const value = decision || {};
   return {
-    intent: decision.intent || "",
-    skill: decision.skill || "",
-    confidence: Number(decision.confidence) || 0,
-    source: decision.source || "",
-    reason: decision.reason || "",
-    needsConfirmation: decision.needsConfirmation === true,
-    alternatives: (decision.alternatives || []).map((item) => ({
+    intent: value.intent || "",
+    skill: value.skill || "",
+    confidence: Number(value.confidence) || 0,
+    source: value.source || "",
+    reason: value.reason || "",
+    needsConfirmation: value.needsConfirmation === true,
+    alternatives: (value.alternatives || []).map((item) => ({
       skill: item.skill || item.intent || "",
       confidence: Number(item.confidence) || 0,
     })),

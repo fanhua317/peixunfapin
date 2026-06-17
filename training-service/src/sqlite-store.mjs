@@ -2,8 +2,9 @@ import Database from "better-sqlite3";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { ensureAgentRunTables } from "./agent-runs/schema.mjs";
+import { ensureBossChatTables } from "./boss-chat/schema.mjs";
 
-export const SQLITE_SCHEMA_VERSION = 4;
+export const SQLITE_SCHEMA_VERSION = 5;
 
 const STATE_COLLECTIONS = [
   { key: "knowledgeBases", table: "knowledge_bases" },
@@ -138,6 +139,7 @@ function ensureSchema(db) {
     );
   `);
   ensureAgentRunTables(db);
+  ensureBossChatTables(db);
   setMeta(db, "schemaVersion", String(SQLITE_SCHEMA_VERSION));
 }
 

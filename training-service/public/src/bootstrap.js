@@ -19,6 +19,6 @@ export async function bootstrapApp() {
   } else if (window.location.pathname === "/traces") {
     await setupTracesApp();
   } else {
-    setupChatApp();
+    await setupChatApp();
   }
 }

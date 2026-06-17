@@ -32,6 +32,7 @@ http://127.0.0.1:8787/
 D:\juzhou-agent\data\training-index
 ├── training.db                  # 默认业务状态和本地记忆
 ├── conversation-history.jsonl   # 聊天历史追加日志
+├── boss-chat-sessions.json      # JSON 回滚模式下的老板端会话历史
 ├── agent-traces.jsonl           # 脱敏路由 trace
 ├── agent-runs.jsonl             # JSON 回滚模式下的 run 记录
 ├── jobs.json                    # JSON 回滚模式下的任务队列
@@ -56,6 +57,8 @@ TRAINING_STORAGE=json
 ```
 
 `state.json` 的 `meta.version` 继续保持 `1`，但它不再是默认主存储。
+
+老板端聊天历史随服务 schemaVersion `5` 保存到 SQLite 的 `boss_chat_sessions` / `boss_chat_messages`；JSON 回滚模式使用 `boss-chat-sessions.json`。当前账号口径固定为 `boss-default`，同一服务和数据目录下的不同浏览器或电脑应看到同一批老板端会话。
 
 ## LLM 配置
 
@@ -210,6 +213,24 @@ GET  /api/traces
 GET  /api/traces/:traceId
 ```
 
+老板端聊天历史：
+
+```text
+GET    /api/boss-chat/sessions
+POST   /api/boss-chat/sessions
+GET    /api/boss-chat/sessions/:sessionId
+PATCH  /api/boss-chat/sessions/:sessionId
+DELETE /api/boss-chat/sessions/:sessionId
+POST   /api/boss-chat/import-local
+```
+
+当前行为：
+
+- `/api/chat`、`/api/agent/dispatch`、`/api/agent/draft` 和 `/api/agent/stream` 的老板端 turn 进入当前 `sessionId` 对应会话。
+- 会话保留 30 天；过期会话和消息在读取/写入路径中清理或过滤。
+- 删除聊天会话只删除/隐藏该会话历史，不删除 `tasks`、`invites`、`quizzes` 或本地 `memories`。
+- 旧前端 `localStorage` 聊天记录只在用户确认导入后进入 `POST /api/boss-chat/import-local`，服务端保存为去 HTML/script 的安全文本 `local_transcript`，不复原成可执行富文本。
+
 知识库和导入：
 
 ```text
@@ -274,6 +295,7 @@ npm run eval:sqlite
 npm run eval:backup
 npm run eval:import
 npm run eval:jobs
+npm run eval:boss-chat
 npm run eval:kb-versions
 git diff --check
 ```

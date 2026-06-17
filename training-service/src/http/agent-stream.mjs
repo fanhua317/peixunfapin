@@ -16,6 +16,7 @@ import {
   toolExecutionSummary,
 } from "../agent/summaries.mjs";
 import { streamGeneralChat } from "../chat/general-chat.mjs";
+import { appendBossChatTurn } from "../boss-chat/store.mjs";
 import {
   buildMemoryContext,
   normalizeMemoryMode,
@@ -31,6 +32,19 @@ import {
 } from "../tools/registry.mjs";
 import { isAuthenticated } from "./auth.mjs";
 import { acceptWebSocket, closeWebSocket, createWebSocketParser, sendWsJson } from "./websocket.mjs";
+
+async function persistBossTurn({ body, payload, runId }) {
+  try {
+    await appendBossChatTurn({
+      sessionId: body.sessionId,
+      message: body.message,
+      payload,
+      runId,
+    });
+  } catch (error) {
+    console.warn("boss chat persistence failed:", error instanceof Error ? error.message : String(error));
+  }
+}
 
 function rejectUpgrade(socket, status = 404, message = "Not Found") {
   socket.write(`HTTP/1.1 ${status} ${message}\r\nConnection: close\r\n\r\n`);
@@ -157,6 +171,7 @@ async function handleStreamMessage(socket, raw, abortController) {
     ), confirmationSummary(body));
     if (confirmation && !confirmation.ok) {
       const payload = { action: "error", error: confirmation.error, reason: confirmation.reason };
+      await persistBossTurn({ body, payload, runId: run.id });
       sendWsJson(socket, { type: "error", error: confirmation.error, reason: confirmation.reason });
       await traceAndFinish({ run, startedAt, body, payload, confirmation, error: `${confirmation.error}:${confirmation.reason || ""}` });
       closeWebSocket(socket, confirmation.status, confirmation.error);
@@ -186,6 +201,7 @@ async function handleStreamMessage(socket, raw, abortController) {
           memoryMode: body.memoryMode,
         })
       ), memoryWriteSummary);
+      await persistBossTurn({ body, payload, runId: run.id });
       sendWsJson(socket, { type: "result", payload });
       sendWsJson(socket, { type: "done", action: payload.action });
       await traceAndFinish({ run, startedAt, body, payload, confirmation });
@@ -211,6 +227,7 @@ async function handleStreamMessage(socket, raw, abortController) {
           memoryMode: body.memoryMode,
         })
       ), memoryWriteSummary);
+      await persistBossTurn({ body, payload, runId: run.id });
       sendWsJson(socket, { type: "result", payload });
       sendWsJson(socket, { type: "done", action: "intent_confirm" });
       await traceAndFinish({ run, startedAt, body, decision, payload, confirmation });
@@ -230,6 +247,7 @@ async function handleStreamMessage(socket, raw, abortController) {
         memoryMode: body.memoryMode,
       })
     ), memoryWriteSummary);
+    await persistBossTurn({ body, payload, runId: run.id });
 
     if (payload.action === "chat") {
       sendWsJson(socket, { type: "done", action: "chat", payload });
@@ -240,6 +258,13 @@ async function handleStreamMessage(socket, raw, abortController) {
     await traceAndFinish({ run, startedAt, body, decision, payload, confirmation });
     closeWebSocket(socket);
   } catch (error) {
+    const payload = {
+      action: "chat",
+      error: error instanceof Error ? error.message : String(error),
+      source: "agent-stream",
+      route: "agent_stream",
+    };
+    await persistBossTurn({ body, payload, runId: run.id });
     await traceAndFinish({ run, startedAt, body, decision, confirmation, error });
     throw error;
   }

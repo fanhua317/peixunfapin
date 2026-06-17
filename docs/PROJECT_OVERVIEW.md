@@ -45,6 +45,7 @@ SQLite + JSONL + local vector index + clean documents
 - `src/import`：资料清洗、语义切片、导入写入和质量统计。
 - `src/jobs`：异步任务队列，覆盖导入、embedding 和知识库回滚。
 - `src/memory`：短期会话记忆、长期偏好记忆和记忆策略。
+- `src/boss-chat`：老板端会话历史、消息追加、30 天保留和旧本地记录导入。
 - `public/src`：无构建前端模块。
 
 ## 4. 核心流程
@@ -102,6 +103,17 @@ SQLite + JSONL + local vector index + clean documents
 ```
 
 如果用户明确选择“当普通聊天”，`/api/chat` 会带 `forceGeneralChat: true`，后端跳过知识库答疑探测。
+
+### 老板端聊天历史
+
+```text
+浏览器生成或选择 sessionId
+-> 老板端 HTTP / WebSocket 请求携带 sessionId
+-> 服务端按 boss-default 账号追加 user/assistant turn
+-> /api/boss-chat/sessions 系列接口读取、重命名或删除会话
+```
+
+第一版账号口径固定为 `boss-default`，目标是让同一服务和数据目录下的老板端会话跨浏览器/电脑可见。旧 `localStorage` 记录不直接信任 HTML，只在用户确认后导入为安全文本 transcript。
 
 ## 5. Agent 运行治理
 
@@ -194,15 +206,19 @@ SQLite 默认保存：
 - 任务队列。
 - Agent Run 和 Step。
 - 知识库当前版和上一版快照。
+- 老板端聊天会话和消息，随 SQLite schemaVersion `5` 使用 `boss_chat_sessions` / `boss_chat_messages`。
 
 仍保留的文件：
 
 - `conversation-history.jsonl`：完整聊天历史追加日志。
+- `boss-chat-sessions.json`：老板端聊天历史的 JSON 回滚文件。
 - `agent-traces.jsonl`：脱敏 trace。
 - `vector-index-bge-m3.json`：本地向量索引。
 - `state.json` / `memory.json`：迁移、导出和 JSON 回滚格式。
 
 `state.json meta.version` 保持 `1`；SQLite 内部 schema 独立演进。
+
+老板端聊天历史保留 30 天。删除某条聊天会话只影响该会话历史，不应删除培训任务、邀请、考试或本地记忆。
 
 ## 9. 记忆模块
 
@@ -281,6 +297,7 @@ npm run eval:sqlite
 npm run eval:backup
 npm run eval:import
 npm run eval:jobs
+npm run eval:boss-chat
 npm run eval:kb-versions
 git diff --check
 ```
@@ -292,6 +309,7 @@ RAG 评测集当前维护在 `scripts/fixtures/rag-eval-cases.mjs`，覆盖型�
 - 资料质量仍是效果上限。扫描型 PDF、图片、目录页、低价值页眉会影响生成质量。
 - SQLite 适合当前单机部署，不是最终多租户 SaaS 数据库。
 - 本地记忆需要可查看、可删除、可确认，避免“偷偷记住”。
+- 老板端旧本地聊天记录导入需要确认，并且只能作为安全文本 transcript 进入服务端历史。
 - 大模型仍可能表达偏差，必须依赖来源引用、低置信拒答和评测约束。
 - 服务器资源有限时，不建议同时运行完整聊天模型、Qdrant 和重型 embedding 服务。
 - `TRAINING_ACCESS_KEY` 不是完整账号体系，公网部署时仍需反向代理、HTTPS、防火墙和更细权限。

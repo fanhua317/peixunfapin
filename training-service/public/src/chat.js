@@ -1,6 +1,11 @@
 import { api } from "./api.js";
-import { appendAssistantHtml, appendTyping, appendUserText, removeMessage, scrollToBottom } from "./messages.js";
-import { mountChatHistory, persistCurrentChatHistory } from "./chat/history.js";
+import { appendAssistantHtml, appendUserText, removeMessage, scrollToBottom } from "./messages.js";
+import {
+  dismissLegacyChatImport,
+  importLegacyChatHistory,
+  mountChatHistory,
+  persistCurrentChatHistory,
+} from "./chat/history.js";
 import { createMemoryHandlers } from "./chat/memory-actions.js";
 import { agentBody, agentStreamUrl, chatSessionId } from "./chat/session.js";
 import {
@@ -24,12 +29,15 @@ import {
 import { escapeHtml, renderStageProgress } from "./ui.js";
 
 let currentDraft = null;
+let saveHistoryTimer = null;
+let restoringConversation = false;
+let observerStarted = false;
+
 const memoryHandlers = createMemoryHandlers({
   appendAgentResult,
   cancelIntentConfirmation,
   disableActionButtons,
 });
-let saveHistoryTimer = null;
 
 function focusComposer() {
   const input = document.querySelector("#chatInput");
@@ -43,28 +51,205 @@ function disableActionButtons(button) {
   });
 }
 
-function deriveConversationMeta() {
-  const messages = document.querySelector("#messages");
-  const userTexts = [...(messages?.querySelectorAll(".user-message .bubble") || [])]
-    .map((item) => item.textContent || "")
-    .filter(Boolean);
-  const allTexts = [...(messages?.querySelectorAll(".message .bubble") || [])]
-    .map((item) => item.textContent || "")
-    .filter(Boolean);
+function createMessageId() {
+  return `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function cloneJson(value) {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return value;
+  }
+}
+
+function createMessageRecord(role, payload = {}) {
   return {
-    html: messages?.innerHTML || "",
-    title: userTexts[0] || "新聊天",
-    preview: allTexts.at(-1) || userTexts[0] || "还没有消息",
+    id: payload.id || createMessageId(),
+    role,
+    createdAt: payload.createdAt || new Date().toISOString(),
+    ...payload,
+  };
+}
+
+function setArticleMessage(article, message) {
+  if (!article || !message) return null;
+  article.dataset.chatMessage = JSON.stringify(message);
+  return message;
+}
+
+function bubbleHtmlWithoutActions(bubble) {
+  const clone = bubble?.cloneNode(true);
+  clone?.querySelectorAll(".message-actions").forEach((item) => item.remove());
+  return clone?.innerHTML?.trim() || "";
+}
+
+function htmlToText(html) {
+  const template = document.createElement("template");
+  template.innerHTML = html || "";
+  return (template.content.textContent || "").replace(/\s+/g, " ").trim();
+}
+
+function isWelcomeMessage(message) {
+  return message?.role === "assistant"
+    && typeof message.html === "string"
+    && message.html.includes("class=\"suggestions\"")
+    && message.html.includes("data-command");
+}
+
+function normalizeStoredMessage(message) {
+  if (!message || typeof message !== "object") return null;
+  const role = message.role === "user" ? "user" : "assistant";
+  if (role === "user") {
+    return createMessageRecord("user", {
+      ...message,
+      role: "user",
+      text: String(message.text ?? message.content ?? ""),
+    });
+  }
+  if (message.payload && typeof message.payload === "object") {
+    return createMessageRecord("assistant", {
+      ...message,
+      role: "assistant",
+      result: message.payload,
+      draftStatus: message.draftStatus || message.payload.draftStatus || "",
+    });
+  }
+  if (message.result && typeof message.result === "object") {
+    return createMessageRecord("assistant", {
+      ...message,
+      role: "assistant",
+      result: message.result,
+      draftStatus: message.draftStatus || message.result.draftStatus || "",
+    });
+  }
+  return createMessageRecord("assistant", {
+    ...message,
+    role: "assistant",
+    html: String(message.html ?? message.content ?? ""),
+  });
+}
+
+function readArticleMessage(article) {
+  if (article.dataset.chatMessage) {
+    try {
+      return normalizeStoredMessage(JSON.parse(article.dataset.chatMessage));
+    } catch {
+      // Fall through to DOM-based recovery.
+    }
+  }
+  const bubble = article.querySelector(".bubble");
+  if (!bubble) return null;
+  if (article.classList.contains("user-message")) {
+    return createMessageRecord("user", {
+      text: (bubble.textContent || "").trim(),
+    });
+  }
+  if (bubble.querySelector(".stage-progress.active")) return null;
+  return createMessageRecord("assistant", {
+    html: bubbleHtmlWithoutActions(bubble),
+  });
+}
+
+function readConversationMessages() {
+  const messages = document.querySelector("#messages");
+  const records = [...(messages?.querySelectorAll(":scope > .message") || [])]
+    .map(readArticleMessage)
+    .filter(Boolean);
+  return records.filter((message, index) => index !== 0 || !isWelcomeMessage(message));
+}
+
+function messagePreview(message) {
+  if (!message) return "";
+  if (message.role === "user") return message.text || "";
+  const result = message.result || {};
+  if (result.action === "draft") return `培训草稿：${result.draft?.title || ""}`;
+  if (result.action === "publish_result" || result.action === "publish") return "培训已发布";
+  if (result.action === "status") return "培训进度";
+  if (result.action === "delete_records") return "培训记录删除结果";
+  if (result.action === "marketing_article") return result.article?.title || "营销软文";
+  if (result.action === "knowledge_answer") return result.answer || "知识库答疑";
+  if (result.answer) return result.answer;
+  if (message.html) return htmlToText(message.html);
+  return "";
+}
+
+function compact(value, limit = 80) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+}
+
+function deriveConversationMeta() {
+  const messages = readConversationMessages();
+  const firstUser = messages.find((message) => message.role === "user" && message.text);
+  const preview = [...messages].reverse().map(messagePreview).find(Boolean);
+  return {
+    messages,
+    title: compact(firstUser?.text || "新聊天", 32),
+    preview: compact(preview || firstUser?.text || "还没有消息", 72),
   };
 }
 
 function persistConversation() {
-  persistCurrentChatHistory(deriveConversationMeta());
+  clearTimeout(saveHistoryTimer);
+  if (restoringConversation) return Promise.resolve();
+  return persistCurrentChatHistory(deriveConversationMeta());
 }
 
 function scheduleHistorySave() {
+  if (restoringConversation) return;
   clearTimeout(saveHistoryTimer);
   saveHistoryTimer = setTimeout(() => persistConversation(), 250);
+}
+
+function appendRecordedUserText(text) {
+  const article = appendUserText(text);
+  setArticleMessage(article, createMessageRecord("user", { text }));
+  scheduleHistorySave();
+  return article;
+}
+
+function appendRecordedAssistantHtml(html, actions = []) {
+  const article = appendAssistantHtml(html, actions);
+  setArticleMessage(article, createMessageRecord("assistant", { html }));
+  scheduleHistorySave();
+  return article;
+}
+
+function recordAssistantResult(article, result, extra = {}) {
+  setArticleMessage(article, createMessageRecord("assistant", {
+    result: cloneJson(result),
+    ...extra,
+  }));
+  scheduleHistorySave();
+  return article;
+}
+
+function appendAgentResultMessage(result, html, actions = [], options = {}) {
+  const article = appendAssistantHtml(html, actions);
+  if (options.record !== false) {
+    recordAssistantResult(article, result, result.action === "draft"
+      ? { draftStatus: options.draftStatus || "pending" }
+      : {});
+  }
+  return article;
+}
+
+function markDraftMessages(draftId, status) {
+  if (!draftId) return;
+  document.querySelectorAll("#messages > .assistant-message").forEach((article) => {
+    const message = readArticleMessage(article);
+    if (message?.result?.action !== "draft") return;
+    if (message.result.draft?.id !== draftId) return;
+    const updated = {
+      ...message,
+      draftStatus: status,
+    };
+    setArticleMessage(article, updated);
+    const bubble = article.querySelector(".bubble");
+    if (bubble) bubble.innerHTML = renderDraftCard(message.result.draft, { status });
+  });
+  scheduleHistorySave();
 }
 
 function wireSuggestionButtons() {
@@ -87,9 +272,10 @@ function cancelDraft(draft, button) {
   if (isCurrentDraft(draft)) {
     currentDraft = null;
   }
+  markDraftMessages(draft?.id, "canceled");
   disableActionButtons(button);
   if (button) button.textContent = "已取消";
-  appendAssistantHtml(`<p class="muted">已取消上一版草稿，请重新输入新的培训安排。</p>`);
+  appendRecordedAssistantHtml(`<p class="muted">已取消上一版草稿，请重新输入新的培训安排。</p>`);
   focusComposer();
 }
 
@@ -104,58 +290,61 @@ function draftActionButtons(draft) {
   return actions;
 }
 
-function appendAgentResult(result) {
+function appendAgentResult(result, options = {}) {
   if (result.action === "memory_confirm") {
-    appendAssistantHtml(renderMemoryConfirmResult(result), memoryHandlers.memoryConfirmActionButtons(result));
-    return;
+    return appendAgentResultMessage(result, renderMemoryConfirmResult(result), memoryHandlers.memoryConfirmActionButtons(result), options);
   }
   if (result.action === "memory_saved") {
-    appendAssistantHtml(renderMemorySavedResult(result));
-    return;
+    return appendAgentResultMessage(result, renderMemorySavedResult(result), [], options);
   }
   if (result.action === "memory_list") {
-    const article = appendAssistantHtml(renderMemoryListResult(result), [
+    const article = appendAgentResultMessage(result, renderMemoryListResult(result), [
       { label: "刷新记忆", variant: "secondary", onClick: () => memoryHandlers.refreshMemoryList() },
       { label: "清空记忆", variant: "secondary", onClick: () => memoryHandlers.requestClearMemory() },
-    ]);
+    ], options);
     memoryHandlers.wireMemoryListButtons(article);
-    return;
+    return article;
   }
   if (result.action === "memory_deleted" || result.action === "memory_archived" || result.action === "memory_cleared") {
-    appendAssistantHtml(`<h2>记忆已更新</h2><p class="muted">${escapeHtml(result.action)}</p>`);
-    return;
+    return appendAgentResultMessage(result, `<h2>记忆已更新</h2><p class="muted">${escapeHtml(result.action)}</p>`, [], options);
   }
   if (result.action === "intent_confirm") {
-    appendAssistantHtml(renderIntentConfirmResult(result), intentConfirmActionButtons(result));
-    return;
+    return appendAgentResultMessage(result, renderIntentConfirmResult(result), intentConfirmActionButtons(result), options);
   }
   if (result.action === "draft") {
-    appendDraftResult(result);
-    memoryHandlers.appendMemoryFeedback(result);
-    return;
+    const article = appendDraftResult(result, options);
+    if (options.record !== false) memoryHandlers.appendMemoryFeedback(result);
+    return article;
   }
   if (result.action === "status") {
-    appendAssistantHtml(renderTaskStatusResult(result.tasks));
-    memoryHandlers.appendMemoryFeedback(result);
-    return;
+    const article = appendAgentResultMessage(result, renderTaskStatusResult(result.tasks), [], options);
+    if (options.record !== false) memoryHandlers.appendMemoryFeedback(result);
+    return article;
   }
   if (result.action === "delete_records") {
-    appendAssistantHtml(renderDeleteRecordsResult(result));
-    memoryHandlers.appendMemoryFeedback(result);
-    return;
+    const article = appendAgentResultMessage(result, renderDeleteRecordsResult(result), [], options);
+    if (options.record !== false) memoryHandlers.appendMemoryFeedback(result);
+    return article;
   }
   if (result.action === "marketing_article") {
-    appendAssistantHtml(renderMarketingArticleResult(result));
-    memoryHandlers.appendMemoryFeedback(result);
-    return;
+    const article = appendAgentResultMessage(result, renderMarketingArticleResult(result), [], options);
+    if (options.record !== false) memoryHandlers.appendMemoryFeedback(result);
+    return article;
   }
   if (result.action === "knowledge_answer") {
-    appendAssistantHtml(renderKnowledgeAnswerResult(result));
-    memoryHandlers.appendMemoryFeedback(result);
-    return;
+    const article = appendAgentResultMessage(result, renderKnowledgeAnswerResult(result), [], options);
+    if (options.record !== false) memoryHandlers.appendMemoryFeedback(result);
+    return article;
   }
-  appendAssistantHtml(renderChatAnswer(result.answer || "已处理。"));
-  memoryHandlers.appendMemoryFeedback(result);
+  if (result.action === "publish_result" || result.action === "publish") {
+    currentDraft = null;
+    markDraftMessages(result.draftId, "published");
+    return appendAgentResultMessage(result, renderPublishResult(result), [], options);
+  }
+  if (result.action === "local_transcript") {
+    return appendAgentResultMessage(result, renderChatAnswer(result.transcript || result.answer || "已导入旧聊天记录。"), [], options);
+  }
+  return appendAgentResultMessage(result, renderChatAnswer(result.answer || result.transcript || "已处理。"), [], options);
 }
 
 function intentConfirmActionButtons(result) {
@@ -181,7 +370,7 @@ function intentConfirmActionButtons(result) {
 function cancelIntentConfirmation(button) {
   disableActionButtons(button);
   if (button) button.textContent = "已取消";
-  appendAssistantHtml(`<p class="muted">已取消这次操作判断，请重新输入你的需求。</p>`);
+  appendRecordedAssistantHtml(`<p class="muted">已取消这次操作判断，请重新输入你的需求。</p>`);
   focusComposer();
 }
 
@@ -210,7 +399,7 @@ async function confirmIntentAction(result, button) {
     appendAgentResult(response);
   } catch (error) {
     removeMessage(progress);
-    appendAssistantHtml(`<p class="error-text">${escapeHtml(error.message)}</p>`);
+    appendRecordedAssistantHtml(`<p class="error-text">${escapeHtml(error.message)}</p>`);
   }
 }
 
@@ -231,7 +420,7 @@ async function sendIntentAsGeneralChat(result, button) {
     appendAgentResult(response);
   } catch (error) {
     removeMessage(progress);
-    appendAssistantHtml(`<p class="error-text">${escapeHtml(error.message)}</p>`);
+    appendRecordedAssistantHtml(`<p class="error-text">${escapeHtml(error.message)}</p>`);
   }
 }
 
@@ -315,12 +504,14 @@ async function dispatchUserMessageStream(message) {
           answer = data.payload.answer;
         }
         setArticleBubble(article, renderChatAnswer(answer));
+        recordAssistantResult(article, { action: "chat_answer", answer });
         finish();
         ws.close();
         return;
       }
       if (data.type === "error") {
         setArticleBubble(article, `<p class="error-text">${escapeHtml(data.error || "stream failed")}</p>`);
+        recordAssistantResult(article, { action: "chat_error", answer: data.error || "stream failed" });
         finish();
         ws.close();
       }
@@ -345,11 +536,11 @@ async function dispatchUserMessageStream(message) {
   });
 }
 
-async function publishCurrentDraft(button, options = {}, expectedDraft = null) {
+async function publishCurrentDraft(button, options = {}, expectedDraft = null, userMessage = "") {
   if (!currentDraft) return;
   if (expectedDraft && !isCurrentDraft(expectedDraft)) {
     disableActionButtons(button);
-    appendAssistantHtml(`<p class="muted">这版草稿已经不是当前草稿，请以最新的确认卡片为准。</p>`);
+    appendRecordedAssistantHtml(`<p class="muted">这版草稿已经不是当前草稿，请以最新的确认卡片为准。</p>`);
     focusComposer();
     return;
   }
@@ -379,7 +570,11 @@ async function publishCurrentDraft(button, options = {}, expectedDraft = null) {
   try {
     const result = await api("/api/tasks/publish", {
       method: "POST",
-      body: JSON.stringify({ draft: { ...draft, ...options } }),
+      body: JSON.stringify({
+        sessionId: chatSessionId,
+        userMessage,
+        draft: { ...draft, ...options },
+      }),
     });
     timers.forEach(clearTimeout);
     setArticleBubble(progress, renderStageProgress({
@@ -389,21 +584,36 @@ async function publishCurrentDraft(button, options = {}, expectedDraft = null) {
       active: false,
     }));
     removeMessage(progress);
-    appendAssistantHtml(renderPublishResult(result));
+    markDraftMessages(draft.id, "published");
+    appendAgentResult({ ...result, action: result.action || "publish" });
   } catch (error) {
     currentDraft = draft;
     timers.forEach(clearTimeout);
     removeMessage(progress);
-    appendAssistantHtml(`<p class="error-text">${escapeHtml(error.message)}</p>`);
+    appendRecordedAssistantHtml(`<p class="error-text">${escapeHtml(error.message)}</p>`);
   }
 }
 
-function appendDraftResult(result) {
-  currentDraft = result.draft;
+function appendDraftResult(result, options = {}) {
+  const draftStatus = options.draftStatus || result.draftStatus || "pending";
+  if (draftStatus === "pending") {
+    if (currentDraft?.id && currentDraft.id !== result.draft?.id) {
+      markDraftMessages(currentDraft.id, "superseded");
+    }
+    currentDraft = result.draft;
+  } else if (isCurrentDraft(result.draft)) {
+    currentDraft = null;
+  }
   const decision = result.decision
     ? `<p class="muted">已由智能助手判定意图：${escapeHtml(result.decision.intent || result.decision.skill)} ｜ ${escapeHtml(result.decision.source || "local")}${result.decision.thinking ? ` ｜ ${escapeHtml(result.decision.thinking)}` : ""}${result.decision.model ? ` ｜ ${escapeHtml(result.decision.model)}` : ""}</p>`
     : "";
-  appendAssistantHtml(`${decision}${renderDraftCard(currentDraft)}`, draftActionButtons(currentDraft));
+  const actions = draftStatus === "pending" ? draftActionButtons(result.draft) : [];
+  return appendAgentResultMessage(
+    result,
+    `${decision}${renderDraftCard(result.draft, { status: draftStatus })}`,
+    actions,
+    { ...options, draftStatus },
+  );
 }
 
 async function dispatchUserMessageHttp(message) {
@@ -421,21 +631,21 @@ async function dispatchUserMessageHttp(message) {
     appendAgentResult(result);
   } catch (error) {
     removeMessage(typing);
-    appendAssistantHtml(`<p class="error-text">${escapeHtml(error.message)}</p>`);
+    appendRecordedAssistantHtml(`<p class="error-text">${escapeHtml(error.message)}</p>`);
   }
 }
 
 async function dispatchUserMessage(message) {
   if (currentDraft && isDraftConfirmationMessage(message)) {
     if (canPublishDraft(currentDraft)) {
-      await publishCurrentDraft();
+      await publishCurrentDraft(null, {}, null, message);
       return;
     }
     if (canForcePublishUnmatched(currentDraft)) {
-      await publishCurrentDraft(null, { allowUnmatchedEmployees: true });
+      await publishCurrentDraft(null, { allowUnmatchedEmployees: true }, null, message);
       return;
     }
-    appendAssistantHtml(`<p class="error-text">当前草稿还不能发布，请先补充知识库或培训对象。</p>`);
+    appendRecordedAssistantHtml(`<p class="error-text">当前草稿还不能发布，请先补充知识库或培训对象。</p>`);
     return;
   }
   try {
@@ -445,18 +655,95 @@ async function dispatchUserMessage(message) {
       await dispatchUserMessageHttp(message);
       return;
     }
-    appendAssistantHtml(`<p class="error-text">${escapeHtml(error.message)}</p>`);
+    appendRecordedAssistantHtml(`<p class="error-text">${escapeHtml(error.message)}</p>`);
   }
 }
 
 async function handleUserText(text) {
   const trimmed = text.trim();
   if (!trimmed) return;
-  appendUserText(trimmed);
+  appendRecordedUserText(trimmed);
   await dispatchUserMessage(trimmed);
 }
 
-export function setupChatApp() {
+function renderStoredMessage(message) {
+  const normalized = normalizeStoredMessage(message);
+  if (!normalized) return;
+  if (normalized.role === "user") {
+    const article = appendUserText(normalized.text || "");
+    setArticleMessage(article, normalized);
+    return;
+  }
+  if (normalized.result) {
+    const article = appendAgentResult(normalized.result, {
+      record: false,
+      draftStatus: normalized.draftStatus || normalized.result.draftStatus || "pending",
+    });
+    setArticleMessage(article, normalized);
+    return;
+  }
+  const article = appendAssistantHtml(normalized.html || "");
+  setArticleMessage(article, normalized);
+}
+
+function restoreSessionMessages(session, initialMessagesHtml) {
+  const messages = document.querySelector("#messages");
+  if (!messages) return;
+  restoringConversation = true;
+  currentDraft = null;
+  messages.innerHTML = "";
+  const records = Array.isArray(session?.messages) ? session.messages : [];
+  if (records.length) {
+    records.forEach(renderStoredMessage);
+  } else {
+    messages.innerHTML = initialMessagesHtml;
+  }
+  wireSuggestionButtons();
+  scrollToBottom();
+  focusComposer();
+  setTimeout(() => {
+    restoringConversation = false;
+  }, 0);
+}
+
+function startHistoryObserver(messages) {
+  if (!messages || observerStarted) return;
+  observerStarted = true;
+  const observer = new MutationObserver(scheduleHistorySave);
+  observer.observe(messages, { childList: true, subtree: true, characterData: true });
+}
+
+function appendLegacyImportNotice() {
+  appendRecordedAssistantHtml(`
+    <h2>发现本机旧聊天记录</h2>
+    <p class="muted">这些记录目前只保存在当前浏览器。确认导入后，会以安全文本形式保存到后台，其他电脑登录同一后台也能查看。</p>
+  `, [
+    {
+      label: "导入旧记录",
+      onClick: async (button) => {
+        disableActionButtons(button);
+        if (button) button.textContent = "导入中...";
+        try {
+          const result = await importLegacyChatHistory();
+          appendRecordedAssistantHtml(`<p class="muted">已导入 ${escapeHtml(result.imported || 0)} 条旧聊天记录。</p>`);
+        } catch (error) {
+          appendRecordedAssistantHtml(`<p class="error-text">${escapeHtml(error.message)}</p>`);
+        }
+      },
+    },
+    {
+      label: "不导入",
+      variant: "secondary",
+      onClick: (button) => {
+        disableActionButtons(button);
+        dismissLegacyChatImport();
+        appendRecordedAssistantHtml(`<p class="muted">已忽略本机旧记录，后续新聊天会自动保存到后台。</p>`);
+      },
+    },
+  ]);
+}
+
+export async function setupChatApp() {
   document.querySelector(".chat-shell")?.classList.add("chat-history-mode");
   const form = document.querySelector("#chatForm");
   const input = document.querySelector("#chatInput");
@@ -464,25 +751,19 @@ export function setupChatApp() {
   const messages = document.querySelector("#messages");
   const initialMessagesHtml = messages?.innerHTML || "";
 
-  const activeSession = mountChatHistory({
-    initialHtml: initialMessagesHtml,
-    beforeSelect: persistConversation,
-    onSelect: (session) => {
-      currentDraft = null;
-      if (messages) messages.innerHTML = session.html || initialMessagesHtml;
-      wireSuggestionButtons();
-      scrollToBottom();
-      focusComposer();
-    },
-  });
-  if (activeSession?.html && messages) messages.innerHTML = activeSession.html;
-  wireSuggestionButtons();
+  const applySession = (session) => {
+    restoreSessionMessages(session, initialMessagesHtml);
+  };
 
-  if (messages) {
-    const observer = new MutationObserver(scheduleHistorySave);
-    observer.observe(messages, { childList: true, subtree: true, characterData: true });
-    persistConversation();
-  }
+  const activeSession = await mountChatHistory({
+    beforeSelect: persistConversation,
+    onSelect: applySession,
+    onLegacyImport: appendLegacyImportNotice,
+  });
+  if (activeSession) applySession(activeSession);
+  startHistoryObserver(messages);
+
+  wireSuggestionButtons();
 
   input.addEventListener("input", () => {
     input.style.height = "auto";

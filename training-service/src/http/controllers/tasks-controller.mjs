@@ -1,4 +1,6 @@
 import { deleteTrainingRecords, getReportsOverview, getTaskStatus, publishTask } from "../../domain/index.mjs";
+import { appendBossChatTurn } from "../../boss-chat/store.mjs";
+import { normalizeSessionId } from "../../memory/index.mjs";
 import { loadState, mutateState } from "../../store.mjs";
 import { publicBaseUrl } from "../public-url.mjs";
 import { readBody } from "../request.mjs";
@@ -25,10 +27,24 @@ export async function handleTasks(req, res, url, context) {
     const body = await readBody(req);
     const result = await mutateState((state) => publishTask(state, body.draft));
     const base = publicBaseUrl(req, context);
-    sendJson(res, 200, {
+    const payload = {
+      action: "publish",
+      draftId: body.draft?.id || "",
       ...result,
       inviteLinks: inviteLinks(result.invites, base),
-    });
+    };
+    if (body.sessionId) {
+      try {
+        await appendBossChatTurn({
+          sessionId: normalizeSessionId(body.sessionId),
+          message: body.userMessage || "",
+          payload,
+        });
+      } catch (error) {
+        console.warn("boss chat persistence failed:", error instanceof Error ? error.message : String(error));
+      }
+    }
+    sendJson(res, 200, payload);
     return true;
   }
 

@@ -20,6 +20,7 @@
     "eval:import": "node scripts/eval-import.mjs",
     "eval:kb-versions": "node scripts/eval-kb-versions.mjs",
     "eval:jobs": "node scripts/eval-jobs.mjs",
+    "eval:boss-chat": "node scripts/eval-boss-chat.mjs",
     "eval:traces": "node scripts/eval-traces.mjs",
     "eval:agent-trajectory": "node scripts/eval-agent-trajectory.mjs",
     "eval:intent": "node scripts/eval-intent.mjs",
