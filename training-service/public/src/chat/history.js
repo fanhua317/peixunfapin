@@ -165,13 +165,19 @@ function normalizeSession(session = {}) {
   const timestamp = nowIso();
   const messages = normalizeMessages(session.messages, session.html);
   const id = String(session.id || session.sessionId || createChatSessionId());
+  const createdAt = normalizeDate(session.createdAt, timestamp);
+  const lastMessageAt = normalizeDate(
+    session.lastMessageAt || messages.at(-1)?.createdAt || session.updatedAt || createdAt,
+    createdAt,
+  );
   return {
     id,
     title: compact(session.title || messages.find((message) => message.role === "user")?.text || "新聊天", 32),
     preview: compact(session.preview || inferSessionPreview(messages), 72),
     messages,
-    createdAt: normalizeDate(session.createdAt, timestamp),
-    updatedAt: normalizeDate(session.updatedAt || session.lastMessageAt, timestamp),
+    createdAt,
+    updatedAt: normalizeDate(session.updatedAt || lastMessageAt, lastMessageAt),
+    lastMessageAt,
   };
 }
 
@@ -184,6 +190,7 @@ function createSession(messages = []) {
     messages,
     createdAt: timestamp,
     updatedAt: timestamp,
+    lastMessageAt: timestamp,
   });
 }
 
@@ -208,7 +215,7 @@ function normalizeSessionPayload(payload) {
 
 function sortSessions(sessions) {
   return [...sessions]
-    .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || 0) - Date.parse(a.updatedAt || a.createdAt || 0))
+    .sort((a, b) => Date.parse(b.lastMessageAt || b.createdAt || 0) - Date.parse(a.lastMessageAt || a.createdAt || 0))
     .slice(0, MAX_SESSIONS);
 }
 
@@ -269,7 +276,7 @@ function renderHistoryList() {
       <button type="button" class="chat-history-item ${session.id === active ? "active" : ""}" data-chat-session="${escapeHtml(session.id)}">
         <span class="chat-history-title">${escapeHtml(session.title || "新聊天")}</span>
         <span class="chat-history-preview">${escapeHtml(session.preview || "")}</span>
-        <span class="chat-history-time">${escapeHtml(formatDate(session.updatedAt))}</span>
+        <span class="chat-history-time">${escapeHtml(formatDate(session.lastMessageAt || session.createdAt))}</span>
         <span class="chat-history-delete" role="button" tabindex="0" title="删除这条记录" aria-label="删除这条记录" data-chat-delete="${escapeHtml(session.id)}">×</span>
       </button>
     `).join("")
@@ -508,7 +515,6 @@ export async function persistCurrentChatHistory({ messages = [], title, preview 
     title: compact(title || existing?.title || "新聊天", 32),
     preview: compact(preview || existing?.preview || "还没有消息", 72),
     messages,
-    updatedAt: timestamp,
   });
   upsertSession(session, session.id);
   historyState = { ...historyState, activeSessionId: session.id, syncing: true, error: "" };

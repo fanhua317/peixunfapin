@@ -17,6 +17,7 @@ const {
   createBossChatSession,
   getBossChatSession,
   listBossChatSessions,
+  updateBossChatSession,
 } = await import("../src/boss-chat/store.mjs");
 const { createApp } = await import("../src/http/app.mjs");
 const { loadMemoryStore, upsertMemory } = await import("../src/memory/store.mjs");
@@ -37,6 +38,19 @@ function assert(condition, message) {
 
 function oldIso(daysAgo = 31) {
   return new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function recentIso(minutesAgo = 0) {
+  return new Date(Date.now() - minutesAgo * 60 * 1000).toISOString();
+}
+
+function assertSessionOrder(sessions, expectedIds, message) {
+  const ids = sessions.map((session) => session.id);
+  const positions = expectedIds.map((id) => ids.indexOf(id));
+  assert(positions.every((position) => position >= 0), `${message}: missing ids in ${ids.join(",")}`);
+  for (let index = 1; index < positions.length; index += 1) {
+    assert(positions[index - 1] < positions[index], `${message}: expected ${expectedIds.join(" before ")}, got ${ids.join(",")}`);
+  }
 }
 
 async function startServer() {
@@ -228,6 +242,44 @@ try {
   assert(read.messages[1]?.action === "memory_saved", "assistant message should capture action payload");
   results.push({ name: "append and read persisted turn", ok: true });
 
+  await createBossChatSession({ id: "boss-chat-sort-a", title: "Sort A", preview: "created first" });
+  await createBossChatSession({ id: "boss-chat-sort-b", title: "Sort B", preview: "created second" });
+  await appendBossChatMessages("boss-chat-sort-a", [{
+    role: "user",
+    content: "A older last message",
+    action: "user_message",
+    createdAt: recentIso(20),
+  }]);
+  await appendBossChatMessages("boss-chat-sort-b", [{
+    role: "user",
+    content: "B newer last message",
+    action: "user_message",
+    createdAt: recentIso(10),
+  }]);
+  const sortedByLastMessage = await request("/api/boss-chat/sessions?limit=20");
+  assertSessionOrder(sortedByLastMessage.sessions, ["boss-chat-sort-b", "boss-chat-sort-a"], "sessions should sort by lastMessageAt");
+
+  await request("/api/boss-chat/sessions/boss-chat-sort-a");
+  const afterSortGet = await request("/api/boss-chat/sessions?limit=20");
+  assertSessionOrder(afterSortGet.sessions, ["boss-chat-sort-b", "boss-chat-sort-a"], "GET session should not change lastMessageAt ordering");
+
+  await request("/api/boss-chat/sessions/boss-chat-sort-a", {
+    method: "PATCH",
+    body: { title: "Sort A renamed", preview: "metadata changed only" },
+  });
+  const afterSortPatch = await request("/api/boss-chat/sessions?limit=20");
+  assertSessionOrder(afterSortPatch.sessions, ["boss-chat-sort-b", "boss-chat-sort-a"], "PATCH title/preview should not change lastMessageAt ordering");
+
+  await appendBossChatMessages("boss-chat-sort-a", [{
+    role: "assistant",
+    content: "A latest message",
+    action: "chat",
+    createdAt: recentIso(1),
+  }]);
+  const afterSortAppend = await request("/api/boss-chat/sessions?limit=20");
+  assertSessionOrder(afterSortAppend.sessions, ["boss-chat-sort-a", "boss-chat-sort-b"], "appending a newer message should move session first");
+  results.push({ name: "sqlite list sorts by lastMessageAt not metadata updatedAt", ok: true });
+
   const importResult = await request("/api/boss-chat/import-local", {
     method: "POST",
     body: {
@@ -284,6 +336,27 @@ try {
   assert(jsonStore.sessions.some((session) => session.id === jsonSession.id), "json fallback file should contain session");
   assert(jsonStore.messages.some((message) => message.sessionId === jsonSession.id), "json fallback file should contain messages");
   results.push({ name: "json fallback store", ok: true });
+
+  await createBossChatSession({ id: "boss-chat-json-sort-a", title: "JSON Sort A", preview: "created first" });
+  await createBossChatSession({ id: "boss-chat-json-sort-b", title: "JSON Sort B", preview: "created second" });
+  await appendBossChatMessages("boss-chat-json-sort-a", [{
+    role: "user",
+    content: "JSON A older last message",
+    action: "user_message",
+    createdAt: recentIso(20),
+  }]);
+  await appendBossChatMessages("boss-chat-json-sort-b", [{
+    role: "user",
+    content: "JSON B newer last message",
+    action: "user_message",
+    createdAt: recentIso(10),
+  }]);
+  const jsonSortedByLastMessage = await listBossChatSessions({ limit: 20 });
+  assertSessionOrder(jsonSortedByLastMessage, ["boss-chat-json-sort-b", "boss-chat-json-sort-a"], "json sessions should sort by lastMessageAt");
+  await updateBossChatSession("boss-chat-json-sort-a", { title: "JSON Sort A renamed", preview: "metadata changed only" });
+  const jsonAfterPatch = await listBossChatSessions({ limit: 20 });
+  assertSessionOrder(jsonAfterPatch, ["boss-chat-json-sort-b", "boss-chat-json-sort-a"], "json PATCH title/preview should not change lastMessageAt ordering");
+  results.push({ name: "json list sorts by lastMessageAt after metadata patch", ok: true });
 
   await writeFile(bossChatPath, `${JSON.stringify({
     meta: { version: 1, createdAt: oldIso(1), updatedAt: oldIso(1) },

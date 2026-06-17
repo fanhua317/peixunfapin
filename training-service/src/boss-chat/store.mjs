@@ -116,7 +116,7 @@ async function ensureDir() {
 }
 
 function isExpiredSession(session) {
-  const value = session.lastMessageAt || session.updatedAt || session.createdAt || "";
+  const value = session.lastMessageAt || session.createdAt || "";
   const time = Date.parse(value);
   return Number.isFinite(time) && time < Date.parse(cutoffIso());
 }
@@ -160,7 +160,7 @@ function pruneSqlite() {
   const cutoff = cutoffIso();
   const expired = database.prepare(`
     SELECT id FROM boss_chat_sessions
-    WHERE COALESCE(lastMessageAt, updatedAt, createdAt) < ?
+    WHERE COALESCE(lastMessageAt, createdAt) < ?
   `).all(cutoff).map((row) => row.id);
   if (!expired.length) return;
   const deleteMessages = database.prepare("DELETE FROM boss_chat_messages WHERE sessionId = ?");
@@ -265,7 +265,7 @@ function sessionMetaFromMessages(session, messages = []) {
     title,
     preview,
     lastMessageAt,
-    updatedAt: lastMessageAt,
+    updatedAt: nowIso(),
     messageCount: messages.length,
   };
 }
@@ -298,14 +298,14 @@ export async function listBossChatSessions({ accountId = BOSS_ACCOUNT_ID, limit 
     return db().prepare(`
       SELECT json FROM boss_chat_sessions
       WHERE accountId = ? AND status != 'deleted'
-      ORDER BY updatedAt DESC, id DESC
+      ORDER BY COALESCE(lastMessageAt, createdAt) DESC, id DESC
       LIMIT ?
     `).all(accountId, max).map((row) => normalizeSession(JSON.parse(row.json)));
   }
   const store = await loadJsonStore();
   return store.sessions
     .filter((session) => session.accountId === accountId && session.status !== "deleted")
-    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+    .sort((left, right) => Date.parse(right.lastMessageAt || right.createdAt || 0) - Date.parse(left.lastMessageAt || left.createdAt || 0))
     .slice(0, max);
 }
 
