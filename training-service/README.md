@@ -254,7 +254,7 @@ $env:OPENCLAW_GATEWAY_URL="ws://127.0.0.1:18789"
 
 ## 图片型 PDF 处理
 
-如果 PDF 不能直接抽取文字，可以先渲染为图片页：
+如果 PDF 不能直接抽取文字，可以先渲染为图片页，再由人工或 Codex 视觉阅读把可确认内容整理成 Markdown。这个流程不等同于 OCR：不调用外部 OCR API，也不运行 Tesseract/PaddleOCR；看不清的参数宁可不写，不猜测。
 
 ```powershell
 npm run render:pdf -- "D:\juzhou-agent\data\training-raw\电机\电机1.pdf" "D:\juzhou-agent\data\training-vision" 3 1.4
@@ -272,7 +272,19 @@ D:\juzhou-agent\data\training-vision
 D:\juzhou-agent\data\training-clean
 ```
 
-再运行 `scripts/import-clean.mjs` 重新导入知识库。
+再运行 `scripts/import-clean.mjs` 重新导入知识库，并重建本地向量索引：
+
+```powershell
+$env:TRAINING_DATA_DIR="D:\juzhou-agent\data\training-index"
+$env:TRAINING_STORAGE="sqlite"
+npm run import:clean -- "D:\juzhou-agent\data\training-clean" "电机培训资料库" "电机,电动机,三相异步电动机,异步电机,银嘉电机,YINJIA,YINJIA motor,电机应用,电机结构,电机选型,能效等级,WONDER"
+
+$env:TRAINING_VECTOR_BACKEND="local"
+$env:TRAINING_EMBEDDING_MODEL="bge-m3"
+npm run embed:local -- --full
+```
+
+当前电机资料库已经用这个流程补全 `YINJIA motor catalog-2025.10.pdf`、`电机1-4.pdf` 和电机 3D 爆炸图。补全后本地数据为 15 个文档、184 个父块、213 个子块、204 个可用向量 chunk；质量评分 98，OCR 占位为 0。
 
 ## API 概览
 
@@ -363,7 +375,7 @@ RAG 检索评测用例维护在 `scripts/fixtures/rag-eval-cases.mjs`，当前�
 - 服务器模式不建议运行大规模 embedding 构建；embedding 推荐在本机离线构建后迁移 Qdrant snapshot 或本地向量索引。
 - 如果使用本地向量索引，迁移服务器时需要一起备份 `vector-index-bge-m3.json`。
 - Qdrant collection 的向量维度固定；更换 embedding 模型后需要重建 collection。
-- 图片型或扫描型 PDF 需要 OCR 后才能得到完整文本；当前清洗脚本只能直接抽取可复制文本。
+- 图片型或扫描型 PDF 无法由清洗脚本自动抽取完整文本；可以先渲染页面图片，再人工式视觉整理为 Markdown。需要大批量自动处理时，后续仍应接正式 OCR/版面解析服务。
 - 当前邀请链接没有手机号/企业身份校验，正式版需要补权限验证。
 - 记忆模块只用于老板端聊天连续性和默认偏好，不作为产品事实来源；敏感信息、高风险动作和一次性任务不会自动保存为长期记忆。
 

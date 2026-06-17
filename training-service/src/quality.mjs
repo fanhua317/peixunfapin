@@ -1,7 +1,7 @@
 const DEFAULT_SHORT_TEXT_CHARS = Number(process.env.TRAINING_SHORT_CHUNK_CHARS || 80);
 
-const OCR_PLACEHOLDER_RE = /(OCR|扫描件|图片型\s*PDF|未抽取|无法抽取|未能.*PDF.*文本|no\s+text\s+extracted)/i;
-const LOW_VALUE_RE = /^(?:来源文件|页数|页码|第\s*\d+\s*页|目录|contents|封面|结束|谢谢|感谢)[\s#\-:：，。、]*$/i;
+const OCR_PLACEHOLDER_RE = /(?:未能从(?:该|.*)?\s*(?:PDF|文件).*?(?:抽取|提取).*?(?:文本|可复制文本)|未抽取到(?:可复制)?文本|无法抽取(?:到)?(?:可复制)?文本|no\s+text\s+extracted|OCR\s*占位|图片型\s*PDF\s*占位)/i;
+const LOW_VALUE_RE = /^(?:来源文件|页数|页码|第\s*\d+\s*页|目录|contents|封面|结束|谢谢|感谢)[\s#\-:：，。]*$/i;
 const COMPANY_BOILERPLATE_RE = /(?:FUJIAN\s+NEW\s+YINJIA\s+PUMP\s+CO\.?,?\s*LTD\.?|A\s+TRUSTED\s+BRAND|YOUR\s+RELIABLE\s+PARTNER|YINJIA|银嘉)/gi;
 const TRAINING_SIGNAL_RE = /(电机|三相|异步|定子|转子|绕组|铁芯|铸铝|导条|端环|铁损|断条|功率|电压|电流|频率|效率|能效|机座|级数|型号|YE\d|Y2|IE\d|客户|销售|售后|工艺|质量|品质|检测|参数|范围|标准|负载|专利|ZL\d+|motor|rotor|stator|power|efficiency|frame|pole)/i;
 
@@ -24,7 +24,7 @@ export function normalizeInformativeText(value) {
     .replace(COMPANY_BOILERPLATE_RE, " ")
     .replace(/^[\s\d]+(?=\d+(?:\.\d+)+\s*[\u3400-\u9fffA-Za-z])/g, "")
     .replace(/^[\s\d]+(?=[\u3400-\u9fffA-Za-z]{3,})/g, "")
-    .replace(/[●◆■□▪]/g, " ")
+    .replace(/[•·▪◆■]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -42,7 +42,7 @@ export function isLowValueTrainingChunk(chunk) {
   const text = normalizeInformativeText(chunk?.content || chunk?.searchText);
   if (!text) return true;
   if (LOW_VALUE_RE.test(text)) return true;
-  if (!TRAINING_SIGNAL_RE.test(text) && text.length < 36 && !/[。！？；;,.，：:]/.test(text)) return true;
+  if (!TRAINING_SIGNAL_RE.test(text) && text.length < 36 && !/[。！；;,.，：:]/.test(text)) return true;
   return false;
 }
 
@@ -75,7 +75,7 @@ export function cleanQuestionText(value, maxLength = 72) {
 
 export function chunkToLearningPoints(chunk, limit = 4) {
   const text = normalizeInformativeText(chunk?.content);
-  return [...new Set((text.match(/[^。！？；;.!?]+[。！？；;.!?]?/g) || [])
+  return [...new Set((text.match(/[^。！；;.!?]+[。！；;.!?]?/g) || [])
     .map((sentence) => cleanQuestionText(sentence, 90))
     .filter((sentence) => sentence.length >= 8 && !LOW_VALUE_RE.test(sentence)))]
     .slice(0, limit);

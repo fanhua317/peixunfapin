@@ -184,6 +184,8 @@ TRAINING_SQLITE_BUSY_TIMEOUT_MS=5000
 
 知识库导入使用业务语义切片：SQLite 中保留 `chunkParents` 作为父级业务上下文，`chunks` 作为检索子块并带 `parentId`、`childType`、`businessKeys`、`searchText`。检索时 BM25 和向量都命中 child，生成讲义、答疑、出题和软文时再展开 parent。执行 `npm run export:json` 时仍会导出兼容的 `state.json`。
 
+图片型 PDF 不再只能停留在占位提示。当前电机资料库已按“本地 `render:pdf` 渲染页面图片 -> 人工式视觉识别整理 Markdown -> 重新导入 -> `embed:local` 重建本地向量索引”的流程补全 `YINJIA motor catalog-2025.10.pdf`、`电机1-4.pdf` 和电机 3D 爆炸图资料；补全后电机库为 15 个文档、184 个父块、213 个子块、204 个可用向量 chunk，质量评分 98，OCR 占位为 0。这个流程不调用外部 OCR 服务，也不跑 Tesseract/PaddleOCR。
+
 ## 打包部署到服务器
 
 生成服务器部署包：
