@@ -187,7 +187,16 @@ npm run render:pdf
 -> embed:local 重建向量索引
 ```
 
-已处理过的电机资料包括 `YINJIA motor catalog-2025.10.pdf`、`电机1-4.pdf` 和电机 3D 爆炸图。看不清的参数必须留空或标注不确定，不允许编造。
+已处理过的电机资料包括 `YINJIA motor catalog-2025.10.pdf`、`电机1-4.pdf` 和电机 3D 爆炸图。银嘉泵目录中的型号表按“系列 -> 型号 -> 参数行”整理到 `visual-pump-model-tables.md`，用于 VM、QB、WZB、CPM、SCM 等型号级检索。看不清的参数必须留空或标注不确定，不允许编造。
+
+服务器同步视觉补全资料时，推荐上传 clean 目录后在服务器重新导入并执行：
+
+```powershell
+npm run import:clean -- <clean-dir> "银嘉泵产品资料库" "银嘉泵,水泵,YINJIA Pump,YINJIA"
+npm run embed:local -- --full
+```
+
+不要直接上传本地向量索引覆盖服务器索引，除非确认两边的 `chunks` / `chunkParents` 完全一致。
 
 ## 任务中心与 Trace
 

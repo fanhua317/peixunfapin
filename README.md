@@ -120,6 +120,7 @@ render:pdf 渲染页面图片
 ```
 
 这个流程不调用外部 OCR API，也不运行 Tesseract/PaddleOCR。看不清或无法确认的参数不要编造。
+型号参数表类资料按“系列 -> 型号 -> 参数行”整理成结构化 Markdown，例如银嘉泵目录补充文件 `visual-pump-model-tables.md`。服务器同步这类资料时优先在服务器重新导入并执行 `npm run embed:local -- --full`，避免本地和服务器 chunk id 不一致。
 
 ## 备份与恢复
 
