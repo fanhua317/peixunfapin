@@ -58,7 +58,7 @@ TRAINING_STORAGE=json
 
 `state.json` 的 `meta.version` 继续保持 `1`，但它不再是默认主存储。
 
-老板端聊天历史随服务 schemaVersion `5` 保存到 SQLite 的 `boss_chat_sessions` / `boss_chat_messages`；JSON 回滚模式使用 `boss-chat-sessions.json`。当前账号口径固定为 `boss-default`，同一服务和数据目录下的不同浏览器或电脑应看到同一批老板端会话。会话列表按 `lastMessageAt`（最后消息时间）倒序；`updatedAt` 只表示标题、预览、删除状态等元数据更新时间，不用于列表排序。
+老板端聊天历史随服务 schemaVersion `5` 保存到 SQLite 的 `boss_chat_sessions` / `boss_chat_messages`；JSON 回滚模式使用 `boss-chat-sessions.json`。当前账号口径固定为 `boss-default`，同一服务和数据目录下的不同浏览器或电脑应看到同一批老板端会话。会话列表按最后一条真实消息的 `lastMessageAt` 倒序；服务会按消息记录修复旧的 `lastMessageAt` 污染，`updatedAt` 只表示标题、预览、删除状态等元数据更新时间，不参与排序。
 
 ## LLM 配置
 
@@ -264,7 +264,7 @@ POST   /api/boss-chat/import-local
 当前行为：
 
 - `/api/chat`、`/api/agent/dispatch`、`/api/agent/draft` 和 `/api/agent/stream` 的老板端 turn 进入当前 `sessionId` 对应会话。
-- 会话列表按 `lastMessageAt`（最后消息时间）倒序；GET 读取会话、PATCH 标题/预览只更新元数据，不应把会话顶到列表前面，只有追加新消息才会刷新排序时间。
+- 会话列表按最后一条真实消息的 `lastMessageAt` 倒序；GET 读取会话、PATCH 标题/预览、前端恢复渲染只更新元数据，不应把会话顶到列表前面，只有追加新消息才会刷新排序时间。
 - 翻译 skill 的助手消息以 `action: "translation"` 保存；缺正文时的追问以 `action: "translation_request"` 保存。
 - 会话保留 30 天；过期会话和消息在读取/写入路径中清理或过滤。
 - 删除聊天会话只删除/隐藏该会话历史，不删除 `tasks`、`invites`、`quizzes` 或本地 `memories`。

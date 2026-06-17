@@ -13,6 +13,10 @@ const MAX_IMPORT_TRANSCRIPT_CHARS = 12000;
 
 const nowIso = () => new Date().toISOString();
 
+function isValidIso(value) {
+  return Number.isFinite(Date.parse(value || ""));
+}
+
 function cutoffIso() {
   return new Date(Date.now() - BOSS_CHAT_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
 }
@@ -76,8 +80,8 @@ function normalizeSession(session = {}) {
     preview: compactText(session.preview || "还没有消息", 120),
     status: session.status === "deleted" || session.status === "archived" ? session.status : "active",
     createdAt: timestamp,
-    updatedAt: session.updatedAt || session.lastMessageAt || timestamp,
-    lastMessageAt: session.lastMessageAt || session.updatedAt || timestamp,
+    updatedAt: session.updatedAt || timestamp,
+    lastMessageAt: session.lastMessageAt || timestamp,
     deletedAt: session.deletedAt || null,
     messageCount: Number(session.messageCount) || 0,
   };
@@ -131,10 +135,36 @@ function pruneStore(store) {
   };
 }
 
+function latestMessageCreatedAt(messages = []) {
+  return messages
+    .map((message) => message.createdAt)
+    .filter(isValidIso)
+    .sort()
+    .at(-1) || "";
+}
+
+function messagesForSession(messages = [], sessionId) {
+  return messages
+    .filter((message) => message.sessionId === sessionId)
+    .sort((left, right) => {
+      const byTime = Date.parse(left.createdAt || "") - Date.parse(right.createdAt || "");
+      return byTime || String(left.id || "").localeCompare(String(right.id || ""));
+    });
+}
+
+function repairStoreSessionTimes(store, options = {}) {
+  const value = normalizeStore(store);
+  value.sessions = value.sessions.map((session) => {
+    const sessionMessages = messagesForSession(value.messages, session.id);
+    return sessionMetaFromMessages(session, sessionMessages, { touchUpdatedAt: Boolean(options.touchUpdatedAt) });
+  });
+  return value;
+}
+
 async function loadJsonStore() {
   await ensureDir();
   try {
-    return pruneStore(normalizeStore(JSON.parse(await readFile(bossChatPath, "utf8"))));
+    return pruneStore(repairStoreSessionTimes(JSON.parse(await readFile(bossChatPath, "utf8"))));
   } catch (error) {
     if (error && error.code !== "ENOENT") throw error;
     const store = defaultStore();
@@ -145,7 +175,7 @@ async function loadJsonStore() {
 
 async function saveJsonStore(store) {
   await ensureDir();
-  const value = pruneStore(normalizeStore(store));
+  const value = pruneStore(repairStoreSessionTimes(store));
   value.meta.updatedAt = nowIso();
   await writeFile(bossChatPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   return value;
@@ -171,6 +201,34 @@ function pruneSqlite() {
       deleteSession.run(id);
     }
   })();
+}
+
+function repairSqliteSessionTimes() {
+  const database = db();
+  const rows = database.prepare("SELECT json FROM boss_chat_sessions").all();
+  if (!rows.length) return;
+  const repaired = [];
+  for (const row of rows) {
+    const session = normalizeSession(JSON.parse(row.json));
+    const messages = readSqliteMessages(session.id);
+    const next = sessionMetaFromMessages(session, messages, { touchUpdatedAt: false });
+    if (
+      next.lastMessageAt !== session.lastMessageAt
+      || next.messageCount !== session.messageCount
+      || next.preview !== session.preview
+    ) {
+      repaired.push(next);
+    }
+  }
+  if (!repaired.length) return;
+  database.transaction(() => {
+    repaired.forEach((session) => writeSqliteSession(session));
+  })();
+}
+
+function prepareSqliteSessions() {
+  repairSqliteSessionTimes();
+  pruneSqlite();
 }
 
 function writeSqliteSession(session) {
@@ -252,20 +310,24 @@ function assistantContentFromPayload(payload = {}) {
   return compactText(payload.answer || payload.message || action || "已处理。", 600);
 }
 
-function sessionMetaFromMessages(session, messages = []) {
+function sessionMetaFromMessages(session, messages = [], options = {}) {
   const userMessages = messages.filter((message) => message.role === "user");
-  const lastMessage = messages.at(-1);
+  const sortedMessages = [...messages].sort((left, right) => {
+    const byTime = Date.parse(left.createdAt || "") - Date.parse(right.createdAt || "");
+    return byTime || String(left.id || "").localeCompare(String(right.id || ""));
+  });
+  const lastMessage = sortedMessages.at(-1);
   const title = session.title && session.title !== "新聊天"
     ? session.title
     : compactText(userMessages[0]?.content || session.title || "新聊天", 48);
   const preview = compactText(lastMessage?.content || session.preview || "还没有消息", 120);
-  const lastMessageAt = lastMessage?.createdAt || session.lastMessageAt || session.updatedAt || nowIso();
+  const lastMessageAt = latestMessageCreatedAt(sortedMessages) || session.createdAt || nowIso();
   return {
     ...session,
     title,
     preview,
     lastMessageAt,
-    updatedAt: nowIso(),
+    updatedAt: options.touchUpdatedAt === false ? (session.updatedAt || session.createdAt || lastMessageAt) : nowIso(),
     messageCount: messages.length,
   };
 }
@@ -281,7 +343,7 @@ export async function createBossChatSession({ id, title, preview, accountId = BO
     updatedAt: nowIso(),
   });
   if (isSqliteStorage()) {
-    pruneSqlite();
+    prepareSqliteSessions();
     return writeSqliteSession(session);
   }
   const store = await loadJsonStore();
@@ -294,7 +356,7 @@ export async function createBossChatSession({ id, title, preview, accountId = BO
 export async function listBossChatSessions({ accountId = BOSS_ACCOUNT_ID, limit = 80 } = {}) {
   const max = Math.max(1, Math.min(500, Number(limit) || 80));
   if (isSqliteStorage()) {
-    pruneSqlite();
+    prepareSqliteSessions();
     return db().prepare(`
       SELECT json FROM boss_chat_sessions
       WHERE accountId = ? AND status != 'deleted'
@@ -312,7 +374,7 @@ export async function listBossChatSessions({ accountId = BOSS_ACCOUNT_ID, limit 
 export async function getBossChatSession(sessionId, { accountId = BOSS_ACCOUNT_ID } = {}) {
   const id = makeBossChatSessionId(sessionId);
   if (isSqliteStorage()) {
-    pruneSqlite();
+    prepareSqliteSessions();
     const session = readSqliteSession(id);
     if (!session || session.accountId !== accountId || session.status === "deleted") return null;
     return { session, messages: readSqliteMessages(id) };

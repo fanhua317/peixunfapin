@@ -152,6 +152,7 @@ async function seedBusinessData() {
 function insertExpiredSqliteSession() {
   const db = openTrainingDatabase(dataDir);
   const timestamp = oldIso();
+  const pollutedTimestamp = recentIso(0);
   const session = {
     id: "boss-chat-expired-sqlite",
     accountId: BOSS_ACCOUNT_ID,
@@ -159,8 +160,8 @@ function insertExpiredSqliteSession() {
     preview: "这条会话应该被 30 天保留策略清理",
     status: "active",
     createdAt: timestamp,
-    updatedAt: timestamp,
-    lastMessageAt: timestamp,
+    updatedAt: pollutedTimestamp,
+    lastMessageAt: pollutedTimestamp,
     deletedAt: null,
     messageCount: 1,
   };
@@ -191,6 +192,25 @@ function insertExpiredSqliteSession() {
       @id, @sessionId, @accountId, @role, @action, @createdAt, 0, @json
     )
   `).run({ ...message, json: JSON.stringify(message) });
+}
+
+function corruptSqliteSessionTime(sessionId, patch = {}) {
+  const db = openTrainingDatabase(dataDir);
+  const row = db.prepare("SELECT json FROM boss_chat_sessions WHERE id = ?").get(sessionId);
+  assert(row, `cannot corrupt missing sqlite session ${sessionId}`);
+  const session = { ...JSON.parse(row.json), ...patch };
+  db.prepare(`
+    UPDATE boss_chat_sessions
+    SET updatedAt = @updatedAt,
+        lastMessageAt = @lastMessageAt,
+        json = @json
+    WHERE id = @id
+  `).run({
+    id: sessionId,
+    updatedAt: session.updatedAt,
+    lastMessageAt: session.lastMessageAt,
+    json: JSON.stringify(session),
+  });
 }
 
 async function assertBusinessDataSurvived() {
@@ -244,24 +264,30 @@ try {
 
   await createBossChatSession({ id: "boss-chat-sort-a", title: "Sort A", preview: "created first" });
   await createBossChatSession({ id: "boss-chat-sort-b", title: "Sort B", preview: "created second" });
+  const sqliteAOlderAt = recentIso(20);
+  const sqliteBNewerAt = recentIso(10);
   await appendBossChatMessages("boss-chat-sort-a", [{
     role: "user",
     content: "A older last message",
     action: "user_message",
-    createdAt: recentIso(20),
+    createdAt: sqliteAOlderAt,
   }]);
   await appendBossChatMessages("boss-chat-sort-b", [{
     role: "user",
     content: "B newer last message",
     action: "user_message",
-    createdAt: recentIso(10),
+    createdAt: sqliteBNewerAt,
   }]);
   const sortedByLastMessage = await request("/api/boss-chat/sessions?limit=20");
   assertSessionOrder(sortedByLastMessage.sessions, ["boss-chat-sort-b", "boss-chat-sort-a"], "sessions should sort by lastMessageAt");
+  const sqliteAInitial = sortedByLastMessage.sessions.find((session) => session.id === "boss-chat-sort-a");
+  assert(sqliteAInitial?.lastMessageAt === sqliteAOlderAt, `initial sqlite lastMessageAt should come from message, got ${sqliteAInitial?.lastMessageAt}`);
 
   await request("/api/boss-chat/sessions/boss-chat-sort-a");
   const afterSortGet = await request("/api/boss-chat/sessions?limit=20");
   assertSessionOrder(afterSortGet.sessions, ["boss-chat-sort-b", "boss-chat-sort-a"], "GET session should not change lastMessageAt ordering");
+  const sqliteAAfterGet = afterSortGet.sessions.find((session) => session.id === "boss-chat-sort-a");
+  assert(sqliteAAfterGet?.lastMessageAt === sqliteAOlderAt, `GET should not change sqlite lastMessageAt, got ${sqliteAAfterGet?.lastMessageAt}`);
 
   await request("/api/boss-chat/sessions/boss-chat-sort-a", {
     method: "PATCH",
@@ -269,6 +295,18 @@ try {
   });
   const afterSortPatch = await request("/api/boss-chat/sessions?limit=20");
   assertSessionOrder(afterSortPatch.sessions, ["boss-chat-sort-b", "boss-chat-sort-a"], "PATCH title/preview should not change lastMessageAt ordering");
+  const sqliteAAfterPatch = afterSortPatch.sessions.find((session) => session.id === "boss-chat-sort-a");
+  assert(sqliteAAfterPatch?.lastMessageAt === sqliteAOlderAt, `PATCH should not change sqlite lastMessageAt, got ${sqliteAAfterPatch?.lastMessageAt}`);
+
+  corruptSqliteSessionTime("boss-chat-sort-a", { updatedAt: recentIso(0), lastMessageAt: sqliteAOlderAt });
+  const afterUpdatedAtCorrupt = await request("/api/boss-chat/sessions?limit=20");
+  assertSessionOrder(afterUpdatedAtCorrupt.sessions, ["boss-chat-sort-b", "boss-chat-sort-a"], "corrupted updatedAt should not change lastMessageAt ordering");
+
+  corruptSqliteSessionTime("boss-chat-sort-a", { updatedAt: recentIso(0), lastMessageAt: recentIso(0) });
+  const afterLastMessageCorrupt = await request("/api/boss-chat/sessions?limit=20");
+  assertSessionOrder(afterLastMessageCorrupt.sessions, ["boss-chat-sort-b", "boss-chat-sort-a"], "corrupted sqlite lastMessageAt should be repaired from messages before sorting");
+  const repairedSqliteA = afterLastMessageCorrupt.sessions.find((session) => session.id === "boss-chat-sort-a");
+  assert(repairedSqliteA?.lastMessageAt === sqliteAOlderAt, `sqlite repair should restore lastMessageAt from messages, got ${repairedSqliteA?.lastMessageAt}`);
 
   await appendBossChatMessages("boss-chat-sort-a", [{
     role: "assistant",
@@ -339,23 +377,40 @@ try {
 
   await createBossChatSession({ id: "boss-chat-json-sort-a", title: "JSON Sort A", preview: "created first" });
   await createBossChatSession({ id: "boss-chat-json-sort-b", title: "JSON Sort B", preview: "created second" });
+  const jsonAOlderAt = recentIso(20);
+  const jsonBNewerAt = recentIso(10);
   await appendBossChatMessages("boss-chat-json-sort-a", [{
     role: "user",
     content: "JSON A older last message",
     action: "user_message",
-    createdAt: recentIso(20),
+    createdAt: jsonAOlderAt,
   }]);
   await appendBossChatMessages("boss-chat-json-sort-b", [{
     role: "user",
     content: "JSON B newer last message",
     action: "user_message",
-    createdAt: recentIso(10),
+    createdAt: jsonBNewerAt,
   }]);
   const jsonSortedByLastMessage = await listBossChatSessions({ limit: 20 });
   assertSessionOrder(jsonSortedByLastMessage, ["boss-chat-json-sort-b", "boss-chat-json-sort-a"], "json sessions should sort by lastMessageAt");
+  const jsonAInitial = jsonSortedByLastMessage.find((session) => session.id === "boss-chat-json-sort-a");
+  assert(jsonAInitial?.lastMessageAt === jsonAOlderAt, `initial json lastMessageAt should come from message, got ${jsonAInitial?.lastMessageAt}`);
   await updateBossChatSession("boss-chat-json-sort-a", { title: "JSON Sort A renamed", preview: "metadata changed only" });
   const jsonAfterPatch = await listBossChatSessions({ limit: 20 });
   assertSessionOrder(jsonAfterPatch, ["boss-chat-json-sort-b", "boss-chat-json-sort-a"], "json PATCH title/preview should not change lastMessageAt ordering");
+  const jsonAAfterPatch = jsonAfterPatch.find((session) => session.id === "boss-chat-json-sort-a");
+  assert(jsonAAfterPatch?.lastMessageAt === jsonAOlderAt, `json PATCH should not change lastMessageAt, got ${jsonAAfterPatch?.lastMessageAt}`);
+  const pollutedJsonStore = JSON.parse(await readFile(bossChatPath, "utf8"));
+  pollutedJsonStore.sessions = pollutedJsonStore.sessions.map((session) => (
+    session.id === "boss-chat-json-sort-a"
+      ? { ...session, updatedAt: recentIso(0), lastMessageAt: recentIso(0) }
+      : session
+  ));
+  await writeFile(bossChatPath, `${JSON.stringify(pollutedJsonStore, null, 2)}\n`, "utf8");
+  const jsonAfterPollutedLastMessage = await listBossChatSessions({ limit: 20 });
+  assertSessionOrder(jsonAfterPollutedLastMessage, ["boss-chat-json-sort-b", "boss-chat-json-sort-a"], "json polluted lastMessageAt should be repaired from messages before sorting");
+  const repairedJsonA = jsonAfterPollutedLastMessage.find((session) => session.id === "boss-chat-json-sort-a");
+  assert(repairedJsonA?.lastMessageAt === jsonAOlderAt, `json repair should restore lastMessageAt from messages, got ${repairedJsonA?.lastMessageAt}`);
   results.push({ name: "json list sorts by lastMessageAt after metadata patch", ok: true });
 
   await writeFile(bossChatPath, `${JSON.stringify({

@@ -113,7 +113,7 @@ SQLite + JSONL + local vector index + clean documents
 -> /api/boss-chat/sessions 系列接口读取、重命名或删除会话
 ```
 
-第一版账号口径固定为 `boss-default`，目标是让同一服务和数据目录下的老板端会话跨浏览器/电脑可见。会话列表按 `lastMessageAt`（最后消息时间）倒序；`updatedAt` 只表示标题、预览、删除状态等元数据更新时间，不用于列表排序。旧 `localStorage` 记录不直接信任 HTML，只在用户确认后导入为安全文本 transcript。
+第一版账号口径固定为 `boss-default`，目标是让同一服务和数据目录下的老板端会话跨浏览器/电脑可见。会话列表按最后一条真实消息的 `lastMessageAt` 倒序；服务会按消息记录修复旧的时间污染，`updatedAt` 只表示标题、预览、删除状态等元数据更新时间，不用于列表排序。旧 `localStorage` 记录不直接信任 HTML，只在用户确认后导入为安全文本 transcript。
 
 ### 多语言翻译
 
@@ -234,7 +234,7 @@ SQLite 默认保存：
 
 `state.json meta.version` 保持 `1`；SQLite 内部 schema 独立演进。
 
-老板端聊天历史保留 30 天。列表按 `lastMessageAt`（最后消息时间）排序，GET 读取和 PATCH 标题/预览不改变排序位置，追加新消息才会刷新排序时间。删除某条聊天会话只影响该会话历史，不应删除培训任务、邀请、考试或本地记忆。
+老板端聊天历史保留 30 天。列表按最后一条真实消息的 `lastMessageAt` 排序，GET 读取、PATCH 标题/预览和前端恢复渲染不改变排序位置，追加新消息才会刷新排序时间。删除某条聊天会话只影响该会话历史，不应删除培训任务、邀请、考试或本地记忆。
 
 ## 9. 记忆模块
 

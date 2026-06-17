@@ -230,7 +230,7 @@ A：不能精确知道模型内部思考进度。项目里适合显示阶段进�
 
 ### Q51：为什么把聊天记录从本地侧边栏迁到服务端？
 
-A：本地侧边栏只能覆盖单浏览器体验，老板换电脑后看不到历史。当前设计改为服务端会话历史：前端请求携带 `sessionId`，后端按固定的 `boss-default` 账号把 user/assistant turn 写入 SQLite 的会话表；同一服务和数据目录下，不同浏览器或电脑可以读取同一批会话。左侧会话列表按 `lastMessageAt`（最后消息时间）倒序，`updatedAt` 只代表标题、预览、删除状态等元数据更新时间，不用于列表排序，所以 GET 查看或 PATCH 重命名不会把旧会话顶到最前，只有追加新消息才会前移。旧 `localStorage` 记录需要用户确认后导入，并只保存为去 HTML/script 的安全文本 transcript。
+A：本地侧边栏只能覆盖单浏览器体验，老板换电脑后看不到历史。当前设计改为服务端会话历史：前端请求携带 `sessionId`，后端按固定的 `boss-default` 账号把 user/assistant turn 写入 SQLite 的会话表；同一服务和数据目录下，不同浏览器或电脑可以读取同一批会话。左侧会话列表按最后一条真实消息的 `lastMessageAt` 倒序，旧的 `lastMessageAt/updatedAt` 污染会按消息记录修复；GET 查看、PATCH 重命名或前端恢复渲染不会把旧会话顶到最前，只有追加新消息才会前移。旧 `localStorage` 记录需要用户确认后导入，并只保存为去 HTML/script 的安全文本 transcript。
 
 ### Q51-1：删除一条老板端聊天会不会删业务数据？
 

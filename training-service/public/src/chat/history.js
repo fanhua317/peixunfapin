@@ -31,6 +31,18 @@ function normalizeDate(value, fallback = nowIso()) {
   return Number.isFinite(Date.parse(value || "")) ? value : fallback;
 }
 
+function validDate(value) {
+  return Number.isFinite(Date.parse(value || "")) ? value : "";
+}
+
+function latestMessageDate(messages = []) {
+  return messages
+    .map((message) => validDate(message.createdAt))
+    .filter(Boolean)
+    .sort()
+    .at(-1) || "";
+}
+
 function readLegacyStore() {
   try {
     const parsed = JSON.parse(localStorage.getItem(LEGACY_HISTORY_KEY) || "{}");
@@ -118,7 +130,7 @@ function normalizeMessage(message) {
   const base = {
     id: message.id || `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     role,
-    createdAt: normalizeDate(message.createdAt),
+    createdAt: validDate(message.createdAt),
   };
   if (role === "user") {
     return {
@@ -166,8 +178,9 @@ function normalizeSession(session = {}) {
   const messages = normalizeMessages(session.messages, session.html);
   const id = String(session.id || session.sessionId || createChatSessionId());
   const createdAt = normalizeDate(session.createdAt, timestamp);
+  const messageLastAt = latestMessageDate(messages);
   const lastMessageAt = normalizeDate(
-    session.lastMessageAt || messages.at(-1)?.createdAt || session.updatedAt || createdAt,
+    messageLastAt || session.lastMessageAt || createdAt,
     createdAt,
   );
   return {
@@ -241,7 +254,7 @@ function setSessions(sessions, activeSessionId = historyState.activeSessionId) {
 
 function upsertSession(session, activeSessionId = session.id) {
   const sessions = historyState.sessions.filter((item) => item.id !== session.id);
-  sessions.unshift(session);
+  sessions.push(session);
   setSessions(sessions, activeSessionId);
   return session;
 }
