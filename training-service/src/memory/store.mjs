@@ -242,6 +242,11 @@ export function summarizeAssistantResult(result = {}) {
       ? `软文生成失败：${result.article?.summary || "资料不足"}`
       : `已生成营销软文：${result.article?.title || "营销软文"}`;
   }
+  if (action === "knowledge_answer") {
+    return result.insufficient
+      ? `知识库答疑失败：${result.answer || result.errorMessage || "资料不足"}`
+      : `已基于${result.knowledgeBase?.name || "知识库"}回答：${compactText(result.answer || "", 360)}`;
+  }
   if (action === "memory_saved") return `已保存 ${result.memory?.saved?.length || 0} 条记忆。`;
   if (action === "memory_list") return `已列出 ${result.memories?.length || 0} 条记忆。`;
   if (action === "memory_confirm") return "已请求用户确认是否保存或清空记忆。";

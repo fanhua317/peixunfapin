@@ -12,6 +12,7 @@ import {
   renderDeleteRecordsResult,
   renderDraftCard,
   renderIntentConfirmResult,
+  renderKnowledgeAnswerResult,
   renderMarketingArticleResult,
   renderMemoryConfirmResult,
   renderMemoryListResult,
@@ -148,6 +149,11 @@ function appendAgentResult(result) {
     memoryHandlers.appendMemoryFeedback(result);
     return;
   }
+  if (result.action === "knowledge_answer") {
+    appendAssistantHtml(renderKnowledgeAnswerResult(result));
+    memoryHandlers.appendMemoryFeedback(result);
+    return;
+  }
   appendAssistantHtml(renderChatAnswer(result.answer || "已处理。"));
   memoryHandlers.appendMemoryFeedback(result);
 }
@@ -219,7 +225,7 @@ async function sendIntentAsGeneralChat(result, button) {
   try {
     const response = await api("/api/chat", {
       method: "POST",
-      body: agentBody({ message: result.message || "" }),
+      body: agentBody({ message: result.message || "", forceGeneralChat: true }),
     });
     removeMessage(progress);
     appendAgentResult(response);
@@ -287,10 +293,11 @@ async function dispatchUserMessageStream(message) {
       }
       if (data.type === "start") {
         const marketing = data.action === "marketing_article";
+        const knowledge = data.action === "knowledge_answer";
         setArticleBubble(article, renderStageProgress({
-          label: marketing ? "生成软文中" : "模型思考中",
-          detail: marketing ? "正在检索本地资料并组织营销文章" : "等待第一段输出",
-          progress: marketing ? 48 : 38,
+          label: marketing ? "生成软文中" : knowledge ? "检索资料中" : "模型思考中",
+          detail: marketing ? "正在检索本地资料并组织营销文章" : knowledge ? "正在匹配知识库并准备来源片段" : "等待第一段输出",
+          progress: marketing || knowledge ? 48 : 38,
         }));
         return;
       }

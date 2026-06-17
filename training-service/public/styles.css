@@ -1470,8 +1470,39 @@ button:disabled {
   max-width: min(720px, 100%);
 }
 
+.knowledge-answer {
+  display: grid;
+  gap: 12px;
+  max-width: min(760px, 100%);
+}
+
 .marketing-article .section-kicker {
   margin: 0;
+}
+
+.knowledge-answer .section-kicker {
+  margin: 0;
+}
+
+.source-list li + li {
+  margin-top: 12px;
+}
+
+.source-meta {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.source-snippet {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid #dbe5f5;
+  border-radius: 8px;
+  background: #f8fbff;
+  color: #344054;
+  line-height: 1.65;
 }
 
 .article-summary {

@@ -1,6 +1,6 @@
-import { generateMarketingArticle } from "../ai/index.mjs";
+import { generateKnowledgeAnswer, generateMarketingArticle } from "../ai/index.mjs";
 import { answerGeneralChat } from "../chat/general-chat.mjs";
-import { createTaskDraft, deleteTrainingRecords, getTaskStatus } from "../domain/index.mjs";
+import { createTaskDraft, deleteTrainingRecords, getTaskStatus, matchKnowledgeBase } from "../domain/index.mjs";
 import { getRuntimeHealth, getVectorIndexStatus } from "../health.mjs";
 import { trainingDefaultsFromMemory } from "../memory/index.mjs";
 import { getKnowledgeBaseQuality } from "../quality.mjs";
@@ -60,6 +60,19 @@ function summarizeArticle(payload) {
   };
 }
 
+function summarizeKnowledgeAnswer(payload) {
+  return {
+    action: payload.action,
+    knowledgeBaseId: payload.knowledgeBase?.id || "",
+    sourceCount: payload.sourceRefs?.length || payload.sources?.length || payload.usedSources?.length || 0,
+    retrievalMode: payload.retrievalMode || "",
+    confidence: payload.confidence || "",
+    insufficient: payload.insufficient === true || payload.answerQuality?.status === "insufficient",
+    hasAnswer: Boolean(payload.answer),
+    answerPreview: compact(payload.answer || payload.errorMessage, 160),
+  };
+}
+
 function summarizeChat(payload) {
   return {
     action: payload.action,
@@ -67,6 +80,44 @@ function summarizeChat(payload) {
     route: payload.route || "",
     hasAnswer: Boolean(payload.answer),
     answerPreview: compact(payload.answer, 160),
+  };
+}
+
+function resolveKnowledgeBaseForAnswer(state, message, decision = {}) {
+  const ready = (state.knowledgeBases || []).filter((kb) => kb.status === "ready");
+  const byDecision = ready.find((kb) => kb.id === decision?.knowledgeBaseId);
+  if (byDecision) return byDecision;
+  const matched = matchKnowledgeBase({ ...state, knowledgeBases: ready }, message);
+  if (matched) return matched;
+  return ready.length === 1 ? ready[0] : null;
+}
+
+function insufficientKnowledgeAnswer(message, { decision, knowledgeBase, error } = {}) {
+  return {
+    action: "knowledge_answer",
+    decision,
+    answer: message,
+    keyPoints: [],
+    caveats: [message].filter(Boolean),
+    sources: [],
+    usedSources: [],
+    sourceRefs: [],
+    confidence: "low",
+    generatedBy: "none",
+    source: "knowledge-base",
+    route: "knowledge_answer",
+    knowledgeBase: knowledgeBase ? { id: knowledgeBase.id, name: knowledgeBase.name } : null,
+    retrievalMode: "none",
+    insufficient: true,
+    errorMessage: error || "",
+    answerQuality: {
+      status: "insufficient",
+      generatedBy: "none",
+      retrievalMode: "none",
+      sourceCount: 0,
+      answerChars: String(message || "").length,
+      warnings: error ? [error] : [],
+    },
   };
 }
 
@@ -145,6 +196,54 @@ const webSkills = [
         decision,
         article: await generateMarketingArticle(state, { instruction: message, memoryContext }),
       };
+    },
+  },
+  {
+    id: "answer_knowledge_question",
+    kind: "web-skill",
+    label: "知识库答疑",
+    description: "自动匹配本地知识库，基于 RAG chunk 和来源回答老板端资料问题。",
+    risk: "low",
+    requiresConfirmation: false,
+    idempotent: true,
+    timeoutMs: 60000,
+    inputSummary: ({ message, decision }) => ({
+      questionPreview: compact(message),
+      knowledgeBaseId: decision?.knowledgeBaseId || "",
+    }),
+    summarizeResult: summarizeKnowledgeAnswer,
+    async execute({ state, message, decision }) {
+      const knowledgeBase = resolveKnowledgeBaseForAnswer(state, message, decision);
+      if (!knowledgeBase) {
+        return insufficientKnowledgeAnswer("当前没有匹配到可用于答疑的知识库，请先导入或明确资料库名称。", { decision });
+      }
+      try {
+        const answer = await generateKnowledgeAnswer(state, {
+          knowledgeBaseId: knowledgeBase.id,
+          question: message,
+        });
+        const sources = answer.usedSources?.length ? answer.usedSources : answer.sources || [];
+        return {
+          action: "knowledge_answer",
+          decision,
+          ...answer,
+          sources,
+          usedSources: sources,
+          source: "knowledge-base",
+          route: "knowledge_answer",
+          knowledgeBase: {
+            id: knowledgeBase.id,
+            name: knowledgeBase.name,
+          },
+        };
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : String(error);
+        return insufficientKnowledgeAnswer(messageText || "当前知识库没有检索到足够相关的资料，已停止回答。", {
+          decision,
+          knowledgeBase,
+          error: messageText,
+        });
+      }
     },
   },
   {
@@ -246,4 +345,3 @@ export function summarizeToolResult(skillId, payload) {
   if (!tool?.summarizeResult) return { action: payload?.action || "" };
   return tool.summarizeResult(payload);
 }
-

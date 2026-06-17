@@ -75,6 +75,15 @@ async function executeSkillForStream(socket, run, state, body, decision, memoryC
       route: "marketing_article",
     });
   }
+  if (skill === "answer_knowledge_question") {
+    sendWsJson(socket, {
+      type: "start",
+      action: "knowledge_answer",
+      decision,
+      source: "knowledge-base",
+      route: "knowledge_answer",
+    });
+  }
   const payload = await recordRunStep(run.id, "tool_execute", skill, async () => (
     await executeWebSkill(skill, { state, message: body.message, decision, memoryContext })
   ), toolExecutionSummary(skill, summarizeToolInput(skill, { state, message: body.message, decision, memoryContext })));

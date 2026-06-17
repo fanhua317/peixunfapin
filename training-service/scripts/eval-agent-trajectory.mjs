@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { agentTrajectoryCases } from "./fixtures/agent-trajectory-cases.mjs";
@@ -8,6 +8,70 @@ const root = path.resolve(import.meta.dirname, "..");
 const tempDataDir = await mkdtemp(path.join(os.tmpdir(), "juzhou-agent-trajectory-"));
 const port = 18891;
 const baseUrl = `http://127.0.0.1:${port}`;
+
+const seededState = {
+  meta: {
+    version: 1,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+  knowledgeBases: [
+    {
+      id: "kb-motor",
+      name: "电机基础资料库",
+      aliases: ["电机", "电动机", "电机基础培训", "低压铸铝"],
+      status: "ready",
+      description: "Agent trajectory eval fixture",
+    },
+  ],
+  documents: [],
+  chunkParents: [
+    {
+      id: "parent-low-pressure-casting",
+      knowledgeBaseId: "kb-motor",
+      documentId: "doc-motor",
+      sourceRef: "电机工艺.md :: 低压铸铝",
+      content: "低压铸铝相比压力铸铝排气更好，转子填充率和电气性能更稳定；相比离心铸铝，工艺一致性更容易控制。",
+    },
+  ],
+  chunks: [
+    {
+      id: "chunk-low-pressure-casting",
+      parentId: "parent-low-pressure-casting",
+      knowledgeBaseId: "kb-motor",
+      documentId: "doc-motor",
+      sourceRef: "电机工艺.md :: 低压铸铝",
+      content: "低压铸铝排气更好，转子填充率和电气性能更稳定，是压力铸铝和离心铸铝对比中的优势工艺。",
+      searchText: "低压铸铝 优势 压力铸铝 离心铸铝 电气性能",
+    },
+  ],
+  employees: [
+    {
+      id: "emp-wang-xiaoming",
+      name: "王小明",
+      aliases: ["小明"],
+      department: "销售部",
+      role: "销售新人",
+      status: "active",
+    },
+    {
+      id: "emp-li-xiaohong",
+      name: "李小红",
+      aliases: ["小红"],
+      department: "销售部",
+      role: "销售新人",
+      status: "active",
+    },
+  ],
+  tasks: [],
+  invites: [],
+  quizzes: [],
+  attempts: [],
+  contentDrafts: [],
+  events: [],
+};
+
+await writeFile(path.join(tempDataDir, "state.json"), `${JSON.stringify(seededState, null, 2)}\n`, "utf8");
 
 async function request(pathname, options = {}) {
   const response = await fetch(`${baseUrl}${pathname}`, {
@@ -49,6 +113,24 @@ function latestRun(runs, beforeIds) {
   return (runs || []).find((run) => !beforeIds.has(run.id));
 }
 
+async function waitForNewFinishedRun(beforeIds, label) {
+  const deadline = Date.now() + 6_000;
+  let lastRun = null;
+  while (Date.now() < deadline) {
+    const after = await request("/api/agent-runs?limit=200");
+    const summaryRun = latestRun(after.payload.runs, beforeIds);
+    if (summaryRun) {
+      const detail = await request(`/api/agent-runs/${encodeURIComponent(summaryRun.id)}`);
+      if (detail.ok) {
+        lastRun = detail.payload.run;
+        if (lastRun.status !== "running" && hasStep(lastRun, "result_output")) return lastRun;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  throw new Error(`${label}: no finished run recorded${lastRun ? `; last status ${lastRun.status}` : ""}`);
+}
+
 const child = spawn(process.execPath, ["src/server.mjs"], {
   cwd: root,
   env: {
@@ -56,6 +138,7 @@ const child = spawn(process.execPath, ["src/server.mjs"], {
     PORT: String(port),
     HOST: "127.0.0.1",
     TRAINING_DATA_DIR: tempDataDir,
+    TRAINING_STORAGE: "json",
     TRAINING_LLM_INTENT_ROUTER: "0",
     TRAINING_LLM_TIMEOUT_MS: "1500",
     OPENCLAW_CHAT_TIMEOUT_MS: "1500",
@@ -89,6 +172,7 @@ try {
     "show_training_status",
     "delete_training_records",
     "generate_marketing_article",
+    "answer_knowledge_question",
     "answer_general_chat",
     "training_publish_task",
     "training_grade_answer",
@@ -105,12 +189,7 @@ try {
     });
     assert(response.ok || response.status === 503, `${item.id}: dispatch failed ${JSON.stringify(response.payload)}`);
     assert(response.payload.action === item.expectedAction, `${item.id}: expected action ${item.expectedAction}, got ${response.payload.action}`);
-    const after = await request("/api/agent-runs?limit=200");
-    const summaryRun = latestRun(after.payload.runs, beforeIds);
-    assert(summaryRun, `${item.id}: no new run recorded`);
-    const detail = await request(`/api/agent-runs/${encodeURIComponent(summaryRun.id)}`);
-    assert(detail.ok, `${item.id}: run detail not found`);
-    const run = detail.payload.run;
+    const run = await waitForNewFinishedRun(beforeIds, item.id);
     if (item.expectedSkill) assert(run.skill === item.expectedSkill, `${item.id}: expected skill ${item.expectedSkill}, got ${run.skill}`);
     if (item.mustNotAction) assert(run.action !== item.mustNotAction, `${item.id}: action must not be ${item.mustNotAction}`);
     for (const step of item.mustSteps || []) {

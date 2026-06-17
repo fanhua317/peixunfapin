@@ -55,6 +55,7 @@ export function intentDisplayName(skill) {
     show_training_status: "查询培训进度",
     delete_training_records: "删除培训记录",
     generate_marketing_article: "生成营销软文",
+    answer_knowledge_question: "知识库答疑",
     answer_general_chat: "普通聊天",
   }[skill] || "执行操作";
 }
@@ -201,6 +202,65 @@ export function renderMarketingArticleResult(result) {
       ${sellingPoints ? `<div class="task-section-title">核心卖点</div><ul class="compact-list">${sellingPoints}</ul>` : ""}
       <div class="article-body">${body || "<p>未生成正文。</p>"}</div>
       ${sourceRefs ? `<div class="task-section-title">资料来源</div><ul class="compact-list">${sourceRefs}</ul>` : ""}
+    </div>
+  `;
+}
+
+function sourcePreview(source) {
+  return source.matchedPreview || source.contentPreview || "";
+}
+
+export function renderKnowledgeAnswerResult(result) {
+  const sources = result.usedSources?.length ? result.usedSources : result.sources || [];
+  const sourceItems = sources
+    .slice(0, 6)
+    .map((source) => {
+      const preview = sourcePreview(source);
+      const ids = [
+        source.chunkId ? `chunk ${source.chunkId}` : "",
+        source.parentId ? `parent ${source.parentId}` : "",
+        source.retrieval ? `检索 ${source.retrieval}` : "",
+      ].filter(Boolean).join(" ｜ ");
+      return `
+        <li>
+          <strong>${escapeHtml(source.sourceRef || "未标注来源")}</strong>
+          ${ids ? `<div class="source-meta">${escapeHtml(ids)}</div>` : ""}
+          ${preview ? `<div class="source-snippet">${escapeHtml(preview)}</div>` : ""}
+        </li>
+      `;
+    })
+    .join("");
+  const caveats = (result.caveats || [])
+    .map((item) => `<li>${escapeHtml(item)}</li>`)
+    .join("");
+  const keyPoints = (result.keyPoints || [])
+    .map((item) => `<li>${escapeHtml(item)}</li>`)
+    .join("");
+  const meta = [
+    result.knowledgeBase?.name ? `资料：${result.knowledgeBase.name}` : "",
+    result.retrievalMode ? `检索：${result.retrievalMode}` : "",
+    result.confidence ? `置信度：${result.confidence}` : "",
+    result.model ? `模型：${result.model}` : "",
+  ].filter(Boolean).join(" ｜ ");
+  if (result.insufficient || result.answerQuality?.status === "insufficient") {
+    return `
+      <div class="knowledge-answer">
+        <p class="section-kicker">知识库答疑</p>
+        <h2>资料不足，无法可靠回答</h2>
+        <p class="error-text">${escapeHtml(result.answer || result.errorMessage || "当前知识库没有检索到足够相关的资料。")}</p>
+        ${meta ? `<p class="muted">${escapeHtml(meta)}</p>` : ""}
+        ${caveats ? `<div class="task-section-title">说明</div><ul class="compact-list">${caveats}</ul>` : ""}
+      </div>
+    `;
+  }
+  return `
+    <div class="knowledge-answer">
+      <p class="section-kicker">知识库答疑</p>
+      ${meta ? `<p class="muted">${escapeHtml(meta)}</p>` : ""}
+      <div class="markdown-body">${renderMarkdown(result.answer || "")}</div>
+      ${keyPoints ? `<div class="task-section-title">要点</div><ul class="compact-list">${keyPoints}</ul>` : ""}
+      ${caveats ? `<div class="task-section-title">注意</div><ul class="compact-list">${caveats}</ul>` : ""}
+      ${sourceItems ? `<div class="task-section-title">来源片段</div><ul class="compact-list source-list">${sourceItems}</ul>` : ""}
     </div>
   `;
 }

@@ -112,6 +112,8 @@ npm run eval:import
 -> 将父块上下文交给讲义、答疑、出题或软文生成
 ```
 
+老板端聊天会先识别发布、删除、进度、软文等明确业务操作；剩余普通聊天候选如果命中知识库别名或电机资料领域词，并且 RAG 检索有足够相关的 chunk，会自动走 `answer_knowledge_question`，返回 `knowledge_answer`、知识库名、检索模式、来源和命中片段。用户在确认卡片里选择“当普通聊天”时，前端会向 `/api/chat` 传 `forceGeneralChat: true`，后端跳过自动知识库探测。
+
 本地向量索引推荐命令：
 
 ```powershell
@@ -200,7 +202,7 @@ GET  /api/health
 ```text
 POST /api/agent/dispatch
 GET  /api/agent/stream
-POST /api/chat
+POST /api/chat                 # 可传 forceGeneralChat=true 跳过自动知识库答疑
 GET  /api/tools/registry
 GET  /api/agent-runs
 GET  /api/agent-runs/:runId

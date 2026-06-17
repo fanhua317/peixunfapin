@@ -108,7 +108,7 @@ export function renderShell(data, filters) {
           <input name="q" placeholder="搜索消息预览或原因" value="${escapeHtml(filters.q)}" />
           <select name="skill">
             <option value="">全部 skill</option>
-            ${["create_training_draft", "show_training_status", "delete_training_records", "generate_marketing_article", "answer_general_chat"].map((skill) => `<option value="${skill}" ${filters.skill === skill ? "selected" : ""}>${skill}</option>`).join("")}
+            ${["create_training_draft", "show_training_status", "delete_training_records", "generate_marketing_article", "answer_knowledge_question", "answer_general_chat"].map((skill) => `<option value="${skill}" ${filters.skill === skill ? "selected" : ""}>${skill}</option>`).join("")}
           </select>
           <select name="action">
             <option value="">全部 action</option>

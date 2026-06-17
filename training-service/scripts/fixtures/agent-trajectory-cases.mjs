@@ -38,6 +38,14 @@ export const agentTrajectoryCases = [
     mustSteps: ["intent_route", "tool_execute:generate_marketing_article"],
   },
   {
+    id: "knowledge-answer",
+    message: "低压铸铝有什么优势",
+    expectedAction: "knowledge_answer",
+    expectedSkill: "answer_knowledge_question",
+    mustSteps: ["intent_route", "tool_execute:answer_knowledge_question"],
+    mustNotSteps: ["tool_execute:create_training_draft", "tool_execute:delete_training_records"],
+  },
+  {
     id: "memory-instruction",
     message: "以后软文默认短一点，偏公众号",
     expectedAction: "memory_saved",
@@ -45,4 +53,3 @@ export const agentTrajectoryCases = [
     mustNotSteps: ["tool_execute:create_training_draft", "tool_execute:delete_training_records"],
   },
 ];
-

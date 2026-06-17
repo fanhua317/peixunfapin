@@ -90,14 +90,28 @@ SQLite + JSONL + local vector index + clean documents
 
 当前版本不联网搜索。资料不足时返回“资料不足”，不编造产品参数。
 
+### 老板端资料答疑
+
+```text
+用户提到已导入资料相关内容
+-> 操作意图优先过滤
+-> 知识库别名/领域信号探测
+-> hybrid RAG 获取 chunk 和 parent context
+-> answer_knowledge_question 生成有来源回答
+-> 前端展示答案、来源和命中片段
+```
+
+如果用户明确选择“当普通聊天”，`/api/chat` 会带 `forceGeneralChat: true`，后端跳过知识库答疑探测。
+
 ## 5. Agent 运行治理
 
-网页端已登记 5 个内部 skill：
+网页端已登记 6 个内部 skill：
 
 - `create_training_draft`
 - `show_training_status`
 - `delete_training_records`
 - `generate_marketing_article`
+- `answer_knowledge_question`
 - `answer_general_chat`
 
 OpenClaw 插件保留 8 个 training tool：
@@ -133,7 +147,8 @@ Run 和 Trace 只保存脱敏摘要、message hash、message preview、意图、
 - 模糊表达交给 LLM router。
 - 低置信操作返回 `intent_confirm`。
 - 删除、发布、回滚、恢复、清空记忆等高风险动作必须确认。
-- 普通聊天默认走 `answer_general_chat`，不能被宽泛关键词误拦成操作。
+- 资料相关问题会走 `answer_knowledge_question`，但必须先满足知识库别名或领域信号以及 RAG 命中门槛。
+- 普通聊天默认走 `answer_general_chat`，不能被宽泛关键词或无关高分 chunk 误拦成操作或资料答疑。
 
 模型判定错误时，前端确认卡片允许用户改为普通聊天、重新输入或确认执行；后端仍按 Tool Registry 的风险等级和确认要求做最终门禁。
 

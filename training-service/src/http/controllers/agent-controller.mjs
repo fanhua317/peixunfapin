@@ -1,5 +1,5 @@
 import { searchEmployees } from "../../domain/index.mjs";
-import { classifyTrainingIntent } from "../../ai/index.mjs";
+import { classifyTrainingIntent, detectKnowledgeAnswerIntent } from "../../ai/index.mjs";
 import { recordRunStep, startRun } from "../../agent-runs/store.mjs";
 import { intentConfirmPayload, validateConfirmedSkill } from "../../agent/confirmation.mjs";
 import { finalizeAgentRun } from "../../agent/run-lifecycle.mjs";
@@ -191,6 +191,7 @@ export async function handleAgent(req, res, url) {
     const sessionId = normalizeSessionId(body.sessionId);
     const memoryMode = normalizeMemoryMode(body.memoryMode);
     const message = body.message || "";
+    const forceGeneralChat = body.forceGeneralChat === true || ["1", "true", "yes", "on"].includes(String(body.forceGeneralChat || "").toLowerCase());
     const run = await startRun({
       sessionId,
       transport: "http",
@@ -200,18 +201,27 @@ export async function handleAgent(req, res, url) {
     const memoryContext = await recordRunStep(run.id, "memory_recall", "build_memory_context", async () => (
       await buildMemoryContext({ sessionId, message, memoryMode })
     ), memorySummary);
-    const decision = { intent: "answer_general_chat", skill: "answer_general_chat", confidence: 1, source: "direct_chat", reason: "用户选择普通聊天入口。", needsConfirmation: false };
+    let state = null;
+    let decision = { intent: "answer_general_chat", skill: "answer_general_chat", confidence: 1, source: "direct_chat", reason: forceGeneralChat ? "用户明确选择普通聊天，已跳过知识库答疑探测。" : "用户选择普通聊天入口。", needsConfirmation: false };
     try {
-      const payload = await recordRunStep(run.id, "tool_execute", "answer_general_chat", async () => (
-        await executeWebSkill("answer_general_chat", { message, decision, memoryContext, state: null })
+      if (!forceGeneralChat) {
+        state = await recordRunStep(run.id, "state_load", "load_state", loadState, stateSummary);
+        const knowledgeDecision = await recordRunStep(run.id, "intent_route", "detect_knowledge_answer", async () => (
+          await detectKnowledgeAnswerIntent(state, message)
+        ), decisionSummary);
+        if (knowledgeDecision) decision = knowledgeDecision;
+      }
+      const skill = decision.skill || decision.intent || "answer_general_chat";
+      const payload = await recordRunStep(run.id, "tool_execute", skill, async () => (
+        await executeWebSkill(skill, { message, decision, memoryContext, state })
       ), (result) => ({
-        skill: "answer_general_chat",
-        result: summarizeToolResult("answer_general_chat", result),
+        skill,
+        result: summarizeToolResult(skill, result),
       }));
       const withMemory = await recordRunStep(run.id, "memory_write", "apply_memory_after_turn", async () => (
         await applyMemoryAfterTurn({ message, payload, memoryContext, sessionId, memoryMode })
       ), memoryWriteSummary);
-      const status = withMemory.error ? 503 : 200;
+      const status = withMemory.action === "chat" && withMemory.error ? 503 : 200;
       sendJson(res, status, withMemory);
       await finalizeAgentRun({
         run,
