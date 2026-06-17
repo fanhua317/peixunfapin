@@ -233,6 +233,12 @@ function assistantContentFromPayload(payload = {}) {
       ? `软文生成失败：${payload.article?.summary || "资料不足"}`
       : `已生成营销软文：${payload.article?.title || "营销软文"}`;
   }
+  if (action === "translation") {
+    return payload.error
+      ? `翻译失败：${payload.error}`
+      : `已翻译成${payload.targetLanguage || "目标语言"}：${payload.translatedText || ""}`;
+  }
+  if (action === "translation_request") return payload.message || "请提供要翻译的内容。";
   if (action === "knowledge_answer") return compactText(payload.answer || payload.error || "已完成知识库答疑", 600);
   if (action === "status") return `已返回培训进度，共 ${payload.tasks?.length || 0} 个任务。`;
   if (action === "delete_records") return `已删除培训任务 ${payload.deleted?.tasks || 0} 个。`;

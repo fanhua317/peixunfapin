@@ -80,7 +80,41 @@ OPENAI_API_KEY=...
 
 只有显式设置 `TRAINING_LLM_PROVIDER=openclaw` 时才走 OpenClaw Gateway。详见 [LLM_CONFIG.md](LLM_CONFIG.md)。
 
-没有可用大模型 API 时，普通聊天和生成类任务会返回明确错误；系统不会用模板假装生成讲义、试题或软文。
+没有可用大模型 API 时，普通聊天、翻译和生成类任务会返回明确错误；系统不会用模板假装生成讲义、试题、软文或翻译结果。
+
+## 多语言翻译 skill
+
+老板端 Agent 支持把明确翻译请求路由到多语言翻译 skill。常见入口包括：
+
+- `翻译成英文：这是一个电机培训系统`
+- `把 hello 翻译成中文`
+- `translate to Spanish: high efficiency motor`
+- `翻译一下：high efficiency motor`
+
+响应契约：
+
+```json
+{
+  "action": "translation",
+  "targetLanguage": "英文",
+  "sourceText": "这是一个电机培训系统",
+  "translatedText": "This is a motor training system."
+}
+```
+
+默认目标语言规则是：英文正文默认翻译成中文，中文正文默认翻译成英文。只说“翻译成法语”但当前请求和老板端上一条正文都没有可用文本时，返回：
+
+```json
+{
+  "action": "translation_request",
+  "targetLanguage": "法语",
+  "message": "请提供要翻译的正文。"
+}
+```
+
+如果同一 `sessionId` 的老板端历史里上一条正文可用，“翻译成法语”应复用上一条正文作为 `sourceText`。翻译 turn 会和其他老板端 Agent 请求一样写入 `/api/boss-chat/sessions/:sessionId`，助手消息的 `action` 为 `translation`。
+
+缺少 `TRAINING_LLM_API_KEY`、`DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY` 时，翻译 skill 返回 `action: "translation"` 和清晰 `error`，不生成伪翻译。
 
 ## 资料导入
 
@@ -227,6 +261,7 @@ POST   /api/boss-chat/import-local
 当前行为：
 
 - `/api/chat`、`/api/agent/dispatch`、`/api/agent/draft` 和 `/api/agent/stream` 的老板端 turn 进入当前 `sessionId` 对应会话。
+- 翻译 skill 的助手消息以 `action: "translation"` 保存；缺正文时的追问以 `action: "translation_request"` 保存。
 - 会话保留 30 天；过期会话和消息在读取/写入路径中清理或过滤。
 - 删除聊天会话只删除/隐藏该会话历史，不删除 `tasks`、`invites`、`quizzes` 或本地 `memories`。
 - 旧前端 `localStorage` 聊天记录只在用户确认导入后进入 `POST /api/boss-chat/import-local`，服务端保存为去 HTML/script 的安全文本 `local_transcript`，不复原成可执行富文本。
@@ -296,11 +331,13 @@ npm run eval:backup
 npm run eval:import
 npm run eval:jobs
 npm run eval:boss-chat
+npm run eval:translation
 npm run eval:kb-versions
 git diff --check
 ```
 
 RAG 评测用例在 `scripts/fixtures/rag-eval-cases.mjs`，当前共 30 条，默认以 retrieval-only 的 Top1/Top3 命中和 hybrid 不低于 BM25 为主要门槛。
+翻译评测会创建临时 `TRAINING_DATA_DIR`，设置 `TRAINING_AUTH_DISABLED=1`，并启动本地 OpenAI-compatible mock 服务覆盖中英日西法、默认目标语言、缺正文追问、上一条老板端正文上下文、LLM API 缺失错误和 boss-chat 写入。
 
 ## 当前限制
 

@@ -55,10 +55,11 @@ async function buildDecisionResult(state, message, decision, options = {}) {
       message,
       decision,
       memoryContext: options.memoryContext,
+      sessionId: options.sessionId,
     })
   ), toolExecutionSummary(
     skill,
-    summarizeToolInput(skill, { state, message, decision, memoryContext: options.memoryContext }),
+    summarizeToolInput(skill, { state, message, decision, memoryContext: options.memoryContext, sessionId: options.sessionId }),
   ));
   const status = payload.action === "chat" && payload.error ? 503 : 200;
   return { status, payload, toolSummary: summarizeToolResult(skill, payload) };
@@ -93,6 +94,7 @@ export async function handleAgent(req, res, url) {
     const startedAt = Date.now();
     const body = await readBody(req);
     const message = body.message || body.instruction || "";
+    const displayMessage = body.displayMessage || message;
     const sessionId = normalizeSessionId(body.sessionId);
     const memoryMode = normalizeMemoryMode(body.memoryMode);
     const confirmedSkill = String(body.confirmedSkill || "").trim();
@@ -112,7 +114,7 @@ export async function handleAgent(req, res, url) {
 
     if (confirmation && !confirmation.ok) {
       const payload = { action: "error", error: confirmation.error, reason: confirmation.reason };
-      await persistBossTurn({ sessionId, message, payload, runId: run.id });
+      await persistBossTurn({ sessionId, message: displayMessage, payload, runId: run.id });
       sendJson(res, confirmation.status, payload);
       await finalizeAgentRun({
         run,
@@ -141,7 +143,7 @@ export async function handleAgent(req, res, url) {
       const payload = await recordRunStep(run.id, "memory_write", "apply_memory_after_turn", async () => (
         await applyMemoryAfterTurn({ message, payload: memoryOnlyPayload, memoryContext, sessionId, memoryMode })
       ), memoryWriteSummary);
-      await persistBossTurn({ sessionId, message, payload, runId: run.id });
+      await persistBossTurn({ sessionId, message: displayMessage, payload, runId: run.id });
       sendJson(res, 200, payload);
       await finalizeAgentRun({
         run,
@@ -166,11 +168,11 @@ export async function handleAgent(req, res, url) {
     ), decisionSummary);
 
     try {
-      const { status, payload: rawPayload } = await buildDecisionResult(state, message, decision, { memoryContext, runId: run.id });
+      const { status, payload: rawPayload } = await buildDecisionResult(state, message, decision, { memoryContext, runId: run.id, sessionId });
       const payload = await recordRunStep(run.id, "memory_write", "apply_memory_after_turn", async () => (
         await applyMemoryAfterTurn({ message, payload: rawPayload, memoryContext, sessionId, memoryMode })
       ), memoryWriteSummary);
-      await persistBossTurn({ sessionId, message, payload, runId: run.id });
+      await persistBossTurn({ sessionId, message: displayMessage, payload, runId: run.id });
       sendJson(res, status, payload);
       await finalizeAgentRun({
         run,
@@ -208,6 +210,7 @@ export async function handleAgent(req, res, url) {
     const sessionId = normalizeSessionId(body.sessionId);
     const memoryMode = normalizeMemoryMode(body.memoryMode);
     const message = body.message || "";
+    const displayMessage = body.displayMessage || message;
     const forceGeneralChat = body.forceGeneralChat === true || ["1", "true", "yes", "on"].includes(String(body.forceGeneralChat || "").toLowerCase());
     const run = await startRun({
       sessionId,
@@ -230,7 +233,7 @@ export async function handleAgent(req, res, url) {
       }
       const skill = decision.skill || decision.intent || "answer_general_chat";
       const payload = await recordRunStep(run.id, "tool_execute", skill, async () => (
-        await executeWebSkill(skill, { message, decision, memoryContext, state })
+        await executeWebSkill(skill, { message, decision, memoryContext, state, sessionId })
       ), (result) => ({
         skill,
         result: summarizeToolResult(skill, result),
@@ -239,7 +242,7 @@ export async function handleAgent(req, res, url) {
         await applyMemoryAfterTurn({ message, payload, memoryContext, sessionId, memoryMode })
       ), memoryWriteSummary);
       const status = withMemory.action === "chat" && withMemory.error ? 503 : 200;
-      await persistBossTurn({ sessionId, message, payload: withMemory, runId: run.id });
+      await persistBossTurn({ sessionId, message: displayMessage, payload: withMemory, runId: run.id });
       sendJson(res, status, withMemory);
       await finalizeAgentRun({
         run,
@@ -259,7 +262,7 @@ export async function handleAgent(req, res, url) {
         llmConfigured: false,
       };
       const withMemory = await applyMemoryAfterTurn({ message, payload, memoryContext, sessionId, memoryMode });
-      await persistBossTurn({ sessionId, message, payload: withMemory, runId: run.id });
+      await persistBossTurn({ sessionId, message: displayMessage, payload: withMemory, runId: run.id });
       sendJson(res, 503, withMemory);
       await finalizeAgentRun({
         run,

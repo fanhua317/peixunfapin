@@ -25,10 +25,13 @@ import {
   renderPublishResult,
   renderStreamingAnswer,
   renderTaskStatusResult,
+  renderTranslationRequest,
+  renderTranslationResult,
 } from "./chat/renderers.js";
 import { escapeHtml, renderStageProgress } from "./ui.js";
 
 let currentDraft = null;
+let pendingTranslation = null;
 let saveHistoryTimer = null;
 let restoringConversation = false;
 let observerStarted = false;
@@ -156,7 +159,7 @@ function readConversationMessages() {
   const records = [...(messages?.querySelectorAll(":scope > .message") || [])]
     .map(readArticleMessage)
     .filter(Boolean);
-  return records.filter((message, index) => index !== 0 || !isWelcomeMessage(message));
+  return records.filter((message) => !isWelcomeMessage(message));
 }
 
 function messagePreview(message) {
@@ -168,6 +171,8 @@ function messagePreview(message) {
   if (result.action === "status") return "培训进度";
   if (result.action === "delete_records") return "培训记录删除结果";
   if (result.action === "marketing_article") return result.article?.title || "营销软文";
+  if (result.action === "translation") return result.translatedText || result.error || "翻译结果";
+  if (result.action === "translation_request") return result.message || "需要补充翻译原文";
   if (result.action === "knowledge_answer") return result.answer || "知识库答疑";
   if (result.answer) return result.answer;
   if (message.html) return htmlToText(message.html);
@@ -330,6 +335,17 @@ function appendAgentResult(result, options = {}) {
     const article = appendAgentResultMessage(result, renderMarketingArticleResult(result), [], options);
     if (options.record !== false) memoryHandlers.appendMemoryFeedback(result);
     return article;
+  }
+  if (result.action === "translation_request") {
+    pendingTranslation = {
+      targetLanguage: result.targetLanguage || "",
+      sourceText: result.sourceText || "",
+    };
+    return appendAgentResultMessage(result, renderTranslationRequest(result), [], options);
+  }
+  if (result.action === "translation") {
+    pendingTranslation = null;
+    return appendAgentResultMessage(result, renderTranslationResult(result), [], options);
   }
   if (result.action === "knowledge_answer") {
     const article = appendAgentResultMessage(result, renderKnowledgeAnswerResult(result), [], options);
@@ -616,7 +632,7 @@ function appendDraftResult(result, options = {}) {
   );
 }
 
-async function dispatchUserMessageHttp(message) {
+async function dispatchUserMessageHttp(message, options = {}) {
   const typing = appendAssistantHtml(renderStageProgress({
     label: "发送请求中",
     detail: "正在等待服务端处理",
@@ -625,7 +641,7 @@ async function dispatchUserMessageHttp(message) {
   try {
     const result = await api("/api/agent/dispatch", {
       method: "POST",
-      body: agentBody({ message }),
+      body: agentBody({ message, displayMessage: options.displayMessage || "" }),
     });
     removeMessage(typing);
     appendAgentResult(result);
@@ -659,10 +675,21 @@ async function dispatchUserMessage(message) {
   }
 }
 
+function isTranslationCommand(text) {
+  return /(翻译|译成|译为|translate\s+(?:to|into)|translation)/i.test(String(text || ""));
+}
+
 async function handleUserText(text) {
   const trimmed = text.trim();
   if (!trimmed) return;
   appendRecordedUserText(trimmed);
+  if (pendingTranslation && !isTranslationCommand(trimmed)) {
+    const targetLanguage = pendingTranslation.targetLanguage || (/[一-龥]/.test(trimmed) ? "英文" : "中文");
+    const synthetic = `翻译成${targetLanguage}：${trimmed}`;
+    pendingTranslation = null;
+    await dispatchUserMessageHttp(synthetic, { displayMessage: trimmed });
+    return;
+  }
   await dispatchUserMessage(trimmed);
 }
 
@@ -691,6 +718,7 @@ function restoreSessionMessages(session, initialMessagesHtml) {
   if (!messages) return;
   restoringConversation = true;
   currentDraft = null;
+  pendingTranslation = null;
   messages.innerHTML = "";
   const records = Array.isArray(session?.messages) ? session.messages : [];
   if (records.length) {

@@ -1,5 +1,6 @@
 import { generateKnowledgeAnswer, generateMarketingArticle } from "../ai/index.mjs";
 import { answerGeneralChat } from "../chat/general-chat.mjs";
+import { summarizeTranslationPayload, translateText } from "../chat/translation.mjs";
 import { createTaskDraft, deleteTrainingRecords, getTaskStatus, matchKnowledgeBase } from "../domain/index.mjs";
 import { getRuntimeHealth, getVectorIndexStatus } from "../health.mjs";
 import { trainingDefaultsFromMemory } from "../memory/index.mjs";
@@ -81,6 +82,10 @@ function summarizeChat(payload) {
     hasAnswer: Boolean(payload.answer),
     answerPreview: compact(payload.answer, 160),
   };
+}
+
+function summarizeTranslation(payload) {
+  return summarizeTranslationPayload(payload);
 }
 
 function resolveKnowledgeBaseForAnswer(state, message, decision = {}) {
@@ -243,6 +248,31 @@ const webSkills = [
           knowledgeBase,
           error: messageText,
         });
+      }
+    },
+  },
+  {
+    id: "translate_text",
+    kind: "web-skill",
+    label: "多语言翻译",
+    description: "把文本翻译成用户指定的任意目标语言，不执行系统写操作。",
+    risk: "low",
+    requiresConfirmation: false,
+    idempotent: true,
+    timeoutMs: 60000,
+    inputSummary: ({ message }) => ({ messagePreview: compact(message) }),
+    summarizeResult: summarizeTranslation,
+    async execute({ message, sessionId }) {
+      try {
+        return await translateText(message, { sessionId });
+      } catch (error) {
+        return {
+          action: "translation",
+          error: error instanceof Error ? error.message : String(error),
+          source: "llm-api",
+          route: "translation",
+          llmConfigured: false,
+        };
       }
     },
   },

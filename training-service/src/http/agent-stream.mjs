@@ -99,8 +99,8 @@ async function executeSkillForStream(socket, run, state, body, decision, memoryC
     });
   }
   const payload = await recordRunStep(run.id, "tool_execute", skill, async () => (
-    await executeWebSkill(skill, { state, message: body.message, decision, memoryContext })
-  ), toolExecutionSummary(skill, summarizeToolInput(skill, { state, message: body.message, decision, memoryContext })));
+    await executeWebSkill(skill, { state, message: body.message, decision, memoryContext, sessionId: body.sessionId })
+  ), toolExecutionSummary(skill, summarizeToolInput(skill, { state, message: body.message, decision, memoryContext, sessionId: body.sessionId })));
   return payload;
 }
 

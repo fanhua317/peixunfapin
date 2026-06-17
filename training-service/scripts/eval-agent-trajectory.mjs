@@ -172,6 +172,7 @@ try {
     "show_training_status",
     "delete_training_records",
     "generate_marketing_article",
+    "translate_text",
     "answer_knowledge_question",
     "answer_general_chat",
     "training_publish_task",

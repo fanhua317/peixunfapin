@@ -6,6 +6,7 @@ import { searchKnowledgeContexts } from "../rag.mjs";
 const KNOWLEDGE_DOMAIN_RE = /(电机|电动机|异步|三相|单相|定子|转子|绕组|铁芯|铸铝|低压铸|离心铸|压力铸|导条|端环|铁损|断条|功率|电压|电流|频率|效率|能效|机座|级数|型号|铭牌|选型|标准|负载|专利|槽配合|斜槽|冲片|硅钢|YE\d|Y2|IE\d|WONDER|YINJIA|motor|rotor|stator|power|efficiency|frame|pole)/i;
 const KNOWLEDGE_QUESTION_RE = /(是什么|为什么|怎么|如何|哪些|多少|有什么|有啥|区别|优势|作用|含义|解释|讲一下|介绍一下|参数|范围|型号|能效|结构|工艺|选型|标准|系列|组成|原理|关系|\?|？)/;
 const SYSTEM_CHAT_RE = /(这个系统|本系统|项目|你是谁|怎么工作|功能|页面|聊天助手|agent|Agent)/i;
+const TRANSLATION_RE = /(翻译|译成|译为|translate\s+(?:to|into)|translation)/i;
 
 function isMarketingArticleIntent(text) {
   const value = String(text || "");
@@ -23,6 +24,7 @@ const KNOWN_INTENT_SKILLS = new Set([
   "show_training_status",
   "delete_training_records",
   "generate_marketing_article",
+  "translate_text",
   "answer_knowledge_question",
   "answer_general_chat",
 ]);
@@ -41,6 +43,7 @@ function normalizeIntentSkill(value) {
   if (skill === "query_training_status") return "show_training_status";
   if (skill === "general_chat") return "answer_general_chat";
   if (skill === "knowledge_answer") return "answer_knowledge_question";
+  if (skill === "translation" || skill === "translate") return "translate_text";
   return KNOWN_INTENT_SKILLS.has(skill) ? skill : "";
 }
 
@@ -249,6 +252,9 @@ function localIntent(message) {
   if (isMarketingArticleIntent(text)) {
     return normalizeIntentDecision({ intent: "generate_marketing_article", confidence: 0.86, skill: "generate_marketing_article", source: "local", reason: "命中营销文章生成关键词。" });
   }
+  if (TRANSLATION_RE.test(text)) {
+    return normalizeIntentDecision({ intent: "translate_text", confidence: 0.9, skill: "translate_text", source: "local", reason: "命中翻译请求关键词。" });
+  }
   if (isTrainingDraftIntent(text)) {
     return normalizeIntentDecision({ intent: "create_training_draft", confidence: 0.84, skill: "create_training_draft", source: "local", reason: "命中培训发布或出题安排关键词。" });
   }
@@ -283,18 +289,20 @@ export async function classifyTrainingIntent(state, message, options = {}) {
 2. show_training_status：用户要查培训进度、完成情况、成绩、报表。
 3. delete_training_records：用户要删除、清空、移除、作废培训记录或培训任务。
 4. generate_marketing_article：用户要写软文、营销文章、推广文案、公众号文章、产品介绍、宣传文案或客户文章。
-5. answer_knowledge_question：用户询问已导入知识库中的产品、参数、工艺、结构、选型、标准、系列或培训资料内容，需要基于 chunk 来源回答。
-6. answer_general_chat：其他普通聊天、解释系统、闲聊、咨询“你是谁”等不执行系统操作的问题。
+5. translate_text：用户要把文本翻译成任意语言，例如“翻译成英文”“翻译为日语”“translate to Spanish”。
+6. answer_knowledge_question：用户询问已导入知识库中的产品、参数、工艺、结构、选型、标准、系列或培训资料内容，需要基于 chunk 来源回答。
+7. answer_general_chat：其他普通聊天、解释系统、闲聊、咨询“你是谁”等不执行系统操作的问题。
 
 判定规则：
 - 只有明确要求培训、学习、考试、员工链接或出题，才选 create_training_draft。
 - “重新输入：给某人发布培训...”是新的 create_training_draft，不是确认发布。
 - “确认发布/可以/发吧”这类短确认语不是后端 skill，由前端已有草稿处理；没有上下文时选 answer_general_chat。
 - 删除、清空、作废培训记录必须选 delete_training_records，但系统会再让用户确认。
+- 翻译请求必须选 translate_text，即使用户没有提供原文，也由翻译 skill 追问或从会话上下文补全。
 - 用户问知识库产品事实、型号参数、结构原理、制造工艺、选型标准时，优先选 answer_knowledge_question。
 - 普通聊天不要因为出现“查看/生成/介绍”就误判为操作。
 
-输出格式：{"intent":"create_training_draft|show_training_status|delete_training_records|generate_marketing_article|answer_knowledge_question|answer_general_chat","skill":"create_training_draft|show_training_status|delete_training_records|generate_marketing_article|answer_knowledge_question|answer_general_chat","confidence":0到1,"reason":"一句话原因","alternatives":[{"skill":"备选skill","confidence":0到1,"reason":"一句话原因"}]}
+输出格式：{"intent":"create_training_draft|show_training_status|delete_training_records|generate_marketing_article|translate_text|answer_knowledge_question|answer_general_chat","skill":"create_training_draft|show_training_status|delete_training_records|generate_marketing_article|translate_text|answer_knowledge_question|answer_general_chat","confidence":0到1,"reason":"一句话原因","alternatives":[{"skill":"备选skill","confidence":0到1,"reason":"一句话原因"}]}
 
 已导入知识库：${JSON.stringify(kbList)}
 员工：${JSON.stringify(employeeList)}

@@ -31,6 +31,7 @@ http://127.0.0.1:8787/
 - 老板端自然语言创建培训草稿、确认发布、生成员工学习链接。
 - 老板端聊天历史按 `boss-default` 账号规划服务端持久化，同一服务数据目录下跨浏览器/电脑可见。
 - 老板端提到已导入资料相关内容时，自动转为知识库答疑并展示来源片段。
+- 老板端支持多语言翻译 skill，可从明确正文或上一条老板端正文中提取待翻译内容。
 - 员工端查看讲义、提问、生成考试、提交答案。
 - 基于本地知识库生成营销软文，不保存文章记录。
 - 本地记忆用于普通聊天连续性和低风险默认偏好。
@@ -62,7 +63,7 @@ TRAINING_DATA_DIR=D:\juzhou-agent\data\training-index
 
 ## 大模型与检索
 
-普通聊天、讲义、出题和软文默认走 OpenAI-compatible API，当前推荐 DeepSeek：
+普通聊天、讲义、出题、软文和多语言翻译默认走 OpenAI-compatible API，当前推荐 DeepSeek：
 
 ```env
 TRAINING_LLM_PROVIDER=auto
@@ -85,7 +86,7 @@ TRAINING_LLM_PROVIDER=openclaw
 OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
 ```
 
-没有可用大模型 API 时，系统不会假装生成讲义、试题或软文，而是返回配置缺失或调用失败的明确错误。
+没有可用大模型 API 时，系统不会假装生成讲义、试题、软文或翻译结果，而是返回配置缺失或调用失败的明确错误。
 
 轻量服务器建议使用本地向量索引：
 
@@ -170,6 +171,7 @@ npm run eval:backup
 npm run eval:import
 npm run eval:jobs
 npm run eval:boss-chat
+npm run eval:translation
 npm run eval:kb-versions
 git diff --check
 ```

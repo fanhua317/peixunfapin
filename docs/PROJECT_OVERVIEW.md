@@ -41,7 +41,7 @@ SQLite + JSONL + local vector index + clean documents
 - `src/agent-runtime`、`src/tools`、`src/agent-runs`：Agent 运行治理、Tool Registry、Run/Step 记录。
 - `src/domain`：培训、员工、邀请、考试、报表等业务逻辑。
 - `src/rag`：BM25、向量检索、parent-child 展开和上下文渲染。
-- `src/ai`：意图识别、普通聊天、讲义、答疑、出题、软文和 LLM 调用。
+- `src/ai`、`src/chat`：意图识别、普通聊天、多语言翻译、讲义、答疑、出题、软文和 LLM 调用。
 - `src/import`：资料清洗、语义切片、导入写入和质量统计。
 - `src/jobs`：异步任务队列，覆盖导入、embedding 和知识库回滚。
 - `src/memory`：短期会话记忆、长期偏好记忆和记忆策略。
@@ -115,9 +115,23 @@ SQLite + JSONL + local vector index + clean documents
 
 第一版账号口径固定为 `boss-default`，目标是让同一服务和数据目录下的老板端会话跨浏览器/电脑可见。旧 `localStorage` 记录不直接信任 HTML，只在用户确认后导入为安全文本 transcript。
 
+### 多语言翻译
+
+```text
+用户输入“翻译成英文：...”或“translate to Spanish: ...”
+-> 本地高置信规则识别翻译意图
+-> 解析 targetLanguage 和 sourceText
+-> sourceText 为空时读取同 session 上一条正文
+-> 仍无正文则返回 translation_request
+-> OpenAI-compatible LLM 生成 translatedText
+-> action translation 写入老板端聊天历史
+```
+
+默认目标语言规则是英文正文翻译成中文、中文正文翻译成英文；显式目标语言优先。缺少大模型 API 时返回 `action: "translation"` 和清晰错误，不伪造翻译。
+
 ## 5. Agent 运行治理
 
-网页端已登记 6 个内部 skill：
+网页端内部 skill 包括：
 
 - `create_training_draft`
 - `show_training_status`
@@ -125,6 +139,7 @@ SQLite + JSONL + local vector index + clean documents
 - `generate_marketing_article`
 - `answer_knowledge_question`
 - `answer_general_chat`
+- `translate_text`（多语言翻译，HTTP action 使用 `translation` / `translation_request`）
 
 OpenClaw 插件保留 8 个 training tool：
 
@@ -159,6 +174,7 @@ Run 和 Trace 只保存脱敏摘要、message hash、message preview、意图、
 - 模糊表达交给 LLM router。
 - 低置信操作返回 `intent_confirm`。
 - 删除、发布、回滚、恢复、清空记忆等高风险动作必须确认。
+- 明确翻译请求属于低风险 skill；只有缺正文时返回 `translation_request`，不进入发布或删除确认流。
 - 资料相关问题会走 `answer_knowledge_question`，但必须先满足知识库别名或领域信号以及 RAG 命中门槛。
 - 普通聊天默认走 `answer_general_chat`，不能被宽泛关键词或无关高分 chunk 误拦成操作或资料答疑。
 
@@ -298,11 +314,13 @@ npm run eval:backup
 npm run eval:import
 npm run eval:jobs
 npm run eval:boss-chat
+npm run eval:translation
 npm run eval:kb-versions
 git diff --check
 ```
 
 RAG 评测集当前维护在 `scripts/fixtures/rag-eval-cases.mjs`，覆盖型号参数、结构原理、制造工艺、销售场景、多语言和标准资料。默认先看 retrieval-only 的 Top1、Top3 和 hybrid 不低于 BM25 的情况。
+翻译评测 `npm run eval:translation` 不依赖真实模型质量：脚本使用临时数据目录和本地 OpenAI-compatible mock，覆盖显式目标语言、默认目标语言、无正文追问、老板端上一条正文上下文、LLM API 缺失错误和 boss-chat 持久化。
 
 ## 14. 主要风险
 

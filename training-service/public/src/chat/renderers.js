@@ -65,9 +65,50 @@ export function intentDisplayName(skill) {
     show_training_status: "查询培训进度",
     delete_training_records: "删除培训记录",
     generate_marketing_article: "生成营销软文",
+    translate_text: "多语言翻译",
     answer_knowledge_question: "知识库答疑",
     answer_general_chat: "普通聊天",
   }[skill] || "执行操作";
+}
+
+export function renderTranslationResult(result) {
+  if (result.error) {
+    return `
+      <div class="translation-card">
+        <p class="section-kicker">多语言翻译</p>
+        <h2>翻译失败</h2>
+        <p class="error-text">${escapeHtml(result.error)}</p>
+      </div>
+    `;
+  }
+  return `
+    <div class="translation-card">
+      <p class="section-kicker">多语言翻译</p>
+      <h2>已翻译成${escapeHtml(result.targetLanguage || "目标语言")}</h2>
+      <div class="translation-grid">
+        <div>
+          <div class="task-section-title">原文</div>
+          <div class="translation-source">${escapeHtml(result.sourceText || "")}</div>
+        </div>
+        <div>
+          <div class="task-section-title">译文</div>
+          <div class="translation-output markdown-body">${renderMarkdown(result.translatedText || "")}</div>
+        </div>
+      </div>
+      ${result.model ? `<p class="muted">模型：${escapeHtml(result.model)}</p>` : ""}
+    </div>
+  `;
+}
+
+export function renderTranslationRequest(result) {
+  return `
+    <div class="translation-card">
+      <p class="section-kicker">多语言翻译</p>
+      <h2>需要补充原文</h2>
+      <p>${escapeHtml(result.message || "请提供要翻译的内容和目标语言。")}</p>
+      ${result.targetLanguage ? `<p class="muted">目标语言：${escapeHtml(result.targetLanguage)}</p>` : ""}
+    </div>
+  `;
 }
 
 function decisionMeta(decision) {

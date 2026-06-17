@@ -38,6 +38,14 @@ export const agentTrajectoryCases = [
     mustSteps: ["intent_route", "tool_execute:generate_marketing_article"],
   },
   {
+    id: "translation",
+    message: "translate to Spanish: high efficiency motor",
+    expectedAction: "translation",
+    expectedSkill: "translate_text",
+    mustSteps: ["intent_route", "tool_execute:translate_text"],
+    mustNotSteps: ["tool_execute:create_training_draft", "tool_execute:delete_training_records"],
+  },
+  {
     id: "knowledge-answer",
     message: "低压铸铝有什么优势",
     expectedAction: "knowledge_answer",

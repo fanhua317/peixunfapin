@@ -124,6 +124,18 @@ const cases = [
     needsConfirmation: false,
   },
   {
+    name: "translation zh to en",
+    message: "翻译成英文：这是一个电机培训系统",
+    skill: "translate_text",
+    needsConfirmation: false,
+  },
+  {
+    name: "translation en command",
+    message: "translate to Spanish: high efficiency motor",
+    skill: "translate_text",
+    needsConfirmation: false,
+  },
+  {
     name: "general identity chat",
     message: "你是谁，帮我解释一下这个系统",
     skill: "answer_general_chat",
