@@ -270,7 +270,7 @@ A：用真实资料中的业务问题构造，覆盖型号参数、结构原理�
 
 ### Q58-1：多语言翻译评测怎么避免依赖真实模型质量？
 
-A：`npm run eval:translation` 会使用临时 `TRAINING_DATA_DIR`、关闭认证，并启动本地 OpenAI-compatible mock 服务。评测重点不是译文文学质量，而是路由和接口契约：显式中英日西法目标语言、英文默认翻中文、中文默认翻英文、无正文返回 `translation_request`、有老板端上一条正文时复用上下文、LLM API 缺失时返回清晰错误，以及翻译结果能写入 boss-chat。
+A：`npm run eval:translation` 会使用临时 `TRAINING_DATA_DIR`、关闭认证，并启动本地 OpenAI-compatible mock 服务。评测重点不是译文文学质量，而是路由和接口契约：显式中英日西法目标语言、英文默认翻中文、中文默认翻英文、正文在前且翻译指令在末尾、长文本不静默截断、无正文返回 `translation_request`、有老板端上一条正文时复用上下文、LLM API 缺失时返回清晰错误，以及翻译结果能写入 boss-chat。
 
 ### Q59：为什么文档也要跟代码一起更新？
 

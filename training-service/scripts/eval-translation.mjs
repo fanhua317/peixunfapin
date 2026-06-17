@@ -68,6 +68,8 @@ function inferMockTranslation(prompt) {
 
   const source = /这是一个电机培训系统/.test(text)
     ? "这是一个电机培训系统"
+    : /末尾校验标记XYZ/.test(text)
+      ? "长文本尾部校验"
     : /这个电机适合工业场景/.test(text)
       ? "这个电机适合工业场景"
       : /high efficiency motor/i.test(text)
@@ -83,6 +85,7 @@ function inferMockTranslation(prompt) {
     "西班牙语|high efficiency motor": "motor de alta eficiencia",
     "中文|high efficiency motor": "高效电机",
     "英文|高效电机": "high efficiency motor",
+    "英文|长文本尾部校验": "long text tail marker XYZ",
     "法语|high efficiency motor": "moteur à haut rendement",
     "法语|高效电机": "moteur à haut rendement",
   };
@@ -220,11 +223,35 @@ try {
   const { createApp } = await import("../src/http/app.mjs");
   const { appendBossChatMessages } = await import("../src/boss-chat/store.mjs");
   const { closeTrainingDatabase } = await import("../src/sqlite-store.mjs");
+  const { parseTranslationRequest, translateText } = await import("../src/chat/translation.mjs");
 
   await startAppServer(createApp);
 
   const health = await request("/api/health");
   assert(health.ok && health.payload?.stateOk, `health check failed: ${JSON.stringify(health.payload)}`);
+
+  const longSource = "银嘉泵业核心卖点包括自有铸造、机加工、电机装配和测试，出口高速加工设备配合严格抽检，提升水力效率并降低噪声。".repeat(130);
+  const suffixParsed = parseTranslationRequest(`${longSource} 翻译成英文`);
+  assert(suffixParsed.matched, "suffix parser should match long source ending with translation command");
+  assert(languageMatches(suffixParsed.targetLanguage, "en"), `suffix parser expected English target, got ${suffixParsed.targetLanguage}`);
+  assert(suffixParsed.sourceText.length > 6000, `suffix parser should not silently truncate at 6000 chars, got ${suffixParsed.sourceText.length}`);
+  assert(!suffixParsed.sourceText.includes("翻译成英文"), "suffix parser should remove the trailing translation command from sourceText");
+  results.push({
+    id: "parser-long-suffix-no-silent-truncation",
+    ok: true,
+    targetLanguage: suffixParsed.targetLanguage,
+    sourceLength: suffixParsed.sourceText.length,
+  });
+
+  const tooLongResult = await translateText(`翻译成英文：${"长文本".repeat(10050)}`);
+  assert(tooLongResult.action === "translation_request", `too long source should request split input, got ${tooLongResult.action}`);
+  assert(tooLongResult.sourceTooLong === true, "too long source should report sourceTooLong");
+  results.push({
+    id: "too-long-source-clear-request",
+    ok: true,
+    action: tooLongResult.action,
+    sourceLength: tooLongResult.sourceLength,
+  });
 
   await runTranslationCase({
     id: "zh-to-en-explicit",
@@ -256,6 +283,20 @@ try {
     message: "翻译一下：高效电机",
     expectedLanguage: "en",
   });
+  await runTranslationCase({
+    id: "zh-suffix-command-to-en",
+    message: "这个电机适合工业场景 翻译成英文",
+    expectedLanguage: "en",
+  });
+  const longTailSource = `${"银嘉泵业核心卖点包括自有铸造、机加工、电机装配和测试，出口高速加工设备配合严格抽检，提升水力效率并降低噪声。".repeat(130)}末尾校验标记XYZ`;
+  const longTailPayload = await runTranslationCase({
+    id: "long-suffix-dispatch-preserves-tail",
+    message: `${longTailSource} 翻译成英文`,
+    expectedLanguage: "en",
+  });
+  assert(longTailPayload.sourceText.length > 6000, `long dispatch should preserve source over 6000 chars, got ${longTailPayload.sourceText.length}`);
+  assert(longTailPayload.sourceText.includes("末尾校验标记XYZ"), "long dispatch sourceText should keep tail marker");
+  assert(/tail marker XYZ/i.test(translatedText(longTailPayload)), `long dispatch should send tail marker to mock LLM, got ${translatedText(longTailPayload)}`);
 
   const noContext = await dispatch("翻译成法语", "translation-eval-no-context");
   assert(noContext.ok, `no-context request should not fail HTTP: ${noContext.status} ${JSON.stringify(noContext.payload)}`);

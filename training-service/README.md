@@ -90,6 +90,7 @@ OPENAI_API_KEY=...
 - `把 hello 翻译成中文`
 - `translate to Spanish: high efficiency motor`
 - `翻译一下：high efficiency motor`
+- `这段长正文 ... 翻译成英文`
 
 响应契约：
 
@@ -113,6 +114,8 @@ OPENAI_API_KEY=...
 ```
 
 如果同一 `sessionId` 的老板端历史里上一条正文可用，“翻译成法语”应复用上一条正文作为 `sourceText`。翻译 turn 会和其他老板端 Agent 请求一样写入 `/api/boss-chat/sessions/:sessionId`，助手消息的 `action` 为 `translation`。
+
+翻译输入不会再被静默截断；默认单次原文上限为 `TRAINING_TRANSLATION_MAX_SOURCE_CHARS=30000`，超过上限会返回 `translation_request`，提示分段发送或调整环境变量。
 
 缺少 `TRAINING_LLM_API_KEY`、`DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY` 时，翻译 skill 返回 `action: "translation"` 和清晰 `error`，不生成伪翻译。
 
@@ -338,7 +341,7 @@ git diff --check
 ```
 
 RAG 评测用例在 `scripts/fixtures/rag-eval-cases.mjs`，当前共 30 条，默认以 retrieval-only 的 Top1/Top3 命中和 hybrid 不低于 BM25 为主要门槛。
-翻译评测会创建临时 `TRAINING_DATA_DIR`，设置 `TRAINING_AUTH_DISABLED=1`，并启动本地 OpenAI-compatible mock 服务覆盖中英日西法、默认目标语言、缺正文追问、上一条老板端正文上下文、LLM API 缺失错误和 boss-chat 写入。
+翻译评测会创建临时 `TRAINING_DATA_DIR`，设置 `TRAINING_AUTH_DISABLED=1`，并启动本地 OpenAI-compatible mock 服务覆盖中英日西法、默认目标语言、缺正文追问、上一条老板端正文上下文、正文在前且翻译指令在末尾、长文本不静默截断、LLM API 缺失错误和 boss-chat 写入。
 
 ## 当前限制
 

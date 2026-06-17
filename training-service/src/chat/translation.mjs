@@ -3,7 +3,8 @@ import { getBossChatSession } from "../boss-chat/store.mjs";
 
 const TRANSLATION_MODEL = process.env.TRAINING_TRANSLATION_MODEL || process.env.TRAINING_LLM_MODEL;
 const TRANSLATION_TIMEOUT_MS = Number(process.env.TRAINING_TRANSLATION_TIMEOUT_MS || process.env.TRAINING_LLM_TIMEOUT_MS || 120_000);
-const MAX_SOURCE_CHARS = Number(process.env.TRAINING_TRANSLATION_MAX_SOURCE_CHARS || 6000);
+const MAX_SOURCE_CHARS = Number(process.env.TRAINING_TRANSLATION_MAX_SOURCE_CHARS || 30000);
+const MIN_SUFFIX_SOURCE_CHARS = 2;
 
 function compact(value, limit = 500) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
@@ -23,8 +24,11 @@ function looksChinese(text) {
 }
 
 function limitSource(value) {
-  const text = cleanText(value);
-  return text.length > MAX_SOURCE_CHARS ? text.slice(0, MAX_SOURCE_CHARS) : text;
+  return cleanText(value);
+}
+
+function isSourceTooLong(value) {
+  return cleanText(value).length > MAX_SOURCE_CHARS;
 }
 
 function normalizeTargetLanguage(value) {
@@ -78,6 +82,33 @@ function extractInlineRequest(text) {
   return null;
 }
 
+function extractSuffixRequest(text) {
+  const value = String(text || "").trim();
+  const cn = value.match(/^([\s\S]+?)\s*(?:请)?(?:帮我|麻烦)?翻译(?:一下)?(?:成|为|到)\s*([^\s：:，,。.!！?？]+)\s*$/i);
+  if (cn) {
+    const sourceText = cleanText(cn[1]);
+    const targetLanguage = normalizeTargetLanguage(cn[2]);
+    if (
+      sourceText.length >= MIN_SUFFIX_SOURCE_CHARS
+      && targetLanguage
+      && !/^(请|帮我|麻烦|帮忙|可以|能不能|能否)$/i.test(sourceText)
+    ) {
+      return { sourceText, targetLanguage };
+    }
+  }
+
+  const en = value.match(/^([\s\S]+?)\s+translate\s+(?:to|into)\s+([^\n:：]+)$/i);
+  if (en) {
+    const sourceText = cleanText(en[1]);
+    const targetLanguage = normalizeTargetLanguage(en[2]);
+    if (sourceText.length >= MIN_SUFFIX_SOURCE_CHARS && targetLanguage) {
+      return { sourceText, targetLanguage };
+    }
+  }
+
+  return null;
+}
+
 function extractBareTarget(text) {
   const value = String(text || "").trim();
   const cn = value.match(/^(?:请)?翻译(?:一下)?(?:成|为|到)?\s*([^\s：:，,。.!！?？]+)\s*$/i)
@@ -90,7 +121,7 @@ function extractBareTarget(text) {
 
 export function parseTranslationRequest(message) {
   const text = String(message || "").trim();
-  const parsed = extractColonRequest(text) || extractInlineRequest(text) || extractBareTarget(text);
+  const parsed = extractColonRequest(text) || extractInlineRequest(text) || extractSuffixRequest(text) || extractBareTarget(text);
   if (!parsed) return { sourceText: "", targetLanguage: "", matched: false };
   const sourceText = limitSource(parsed.sourceText);
   const targetLanguage = normalizeTargetLanguage(parsed.targetLanguage) || (sourceText ? defaultTargetLanguage(sourceText) : "");
@@ -152,6 +183,7 @@ function translationSystemPrompt(targetLanguage) {
   return [
     "你是专业翻译助手，只负责文本翻译。",
     `把用户提供的原文忠实翻译成${targetLanguage}。`,
+    "必须覆盖原文的全部内容，不能只翻译开头，不能概括或省略后续段落。",
     "不要扩写，不要解释，不要加入产品知识，不要添加标题。",
     "保留原文中的数字、型号、单位、专有名词和换行结构；必要时仅做符合目标语言习惯的轻微调整。",
     "只输出译文。",
@@ -164,6 +196,20 @@ export async function translateText(message, options = {}) {
   let targetLanguage = parsed.targetLanguage;
   if (!sourceText) sourceText = await findRecentTranslatableText(options.sessionId);
   if (!targetLanguage && sourceText) targetLanguage = defaultTargetLanguage(sourceText);
+
+  if (isSourceTooLong(sourceText)) {
+    return {
+      action: "translation_request",
+      sourceText: "",
+      targetLanguage: targetLanguage || "",
+      message: `这段文本约 ${sourceText.length} 字，超过当前翻译上限 ${MAX_SOURCE_CHARS} 字。请分段发送，或提高 TRAINING_TRANSLATION_MAX_SOURCE_CHARS 后再试。`,
+      route: "translation",
+      source: "translation-parser",
+      sourceTooLong: true,
+      sourceLength: sourceText.length,
+      maxSourceChars: MAX_SOURCE_CHARS,
+    };
+  }
 
   if (!sourceText || !targetLanguage) {
     return {

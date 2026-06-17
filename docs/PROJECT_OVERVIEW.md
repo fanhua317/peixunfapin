@@ -118,7 +118,7 @@ SQLite + JSONL + local vector index + clean documents
 ### 多语言翻译
 
 ```text
-用户输入“翻译成英文：...”或“translate to Spanish: ...”
+用户输入“翻译成英文：...”“translate to Spanish: ...”或“长正文 ... 翻译成英文”
 -> 本地高置信规则识别翻译意图
 -> 解析 targetLanguage 和 sourceText
 -> sourceText 为空时读取同 session 上一条正文
@@ -127,7 +127,7 @@ SQLite + JSONL + local vector index + clean documents
 -> action translation 写入老板端聊天历史
 ```
 
-默认目标语言规则是英文正文翻译成中文、中文正文翻译成英文；显式目标语言优先。缺少大模型 API 时返回 `action: "translation"` 和清晰错误，不伪造翻译。
+默认目标语言规则是英文正文翻译成中文、中文正文翻译成英文；显式目标语言优先。翻译输入不静默截断，默认超过 `TRAINING_TRANSLATION_MAX_SOURCE_CHARS=30000` 时提示分段或调整配置。缺少大模型 API 时返回 `action: "translation"` 和清晰错误，不伪造翻译。
 
 ## 5. Agent 运行治理
 
@@ -320,7 +320,7 @@ git diff --check
 ```
 
 RAG 评测集当前维护在 `scripts/fixtures/rag-eval-cases.mjs`，覆盖型号参数、结构原理、制造工艺、销售场景、多语言和标准资料。默认先看 retrieval-only 的 Top1、Top3 和 hybrid 不低于 BM25 的情况。
-翻译评测 `npm run eval:translation` 不依赖真实模型质量：脚本使用临时数据目录和本地 OpenAI-compatible mock，覆盖显式目标语言、默认目标语言、无正文追问、老板端上一条正文上下文、LLM API 缺失错误和 boss-chat 持久化。
+翻译评测 `npm run eval:translation` 不依赖真实模型质量：脚本使用临时数据目录和本地 OpenAI-compatible mock，覆盖显式目标语言、默认目标语言、无正文追问、老板端上一条正文上下文、正文在前且翻译指令在末尾、长文本不静默截断、LLM API 缺失错误和 boss-chat 持久化。
 
 ## 14. 主要风险
 
