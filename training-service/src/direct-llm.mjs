@@ -16,10 +16,10 @@ export function resolveDirectBaseUrl() {
 }
 
 export function resolveDirectModel(options = {}) {
-  const configured = process.env.TRAINING_LLM_MODEL || process.env.DEEPSEEK_MODEL || process.env.OPENAI_MODEL;
-  if (configured) return configured;
   const candidate = String(options.model || "").trim();
   if (candidate && !candidate.includes("/")) return candidate;
+  const configured = process.env.TRAINING_LLM_MODEL || process.env.DEEPSEEK_MODEL || process.env.OPENAI_MODEL;
+  if (configured) return configured;
   return process.env.OPENAI_API_KEY && !process.env.DEEPSEEK_API_KEY ? "gpt-4.1-mini" : "deepseek-chat";
 }
 

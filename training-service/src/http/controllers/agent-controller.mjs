@@ -164,6 +164,8 @@ export async function handleAgent(req, res, url) {
       await classifyTrainingIntent(state, message, {
         confirmedSkill,
         memoryHint: renderIntentMemoryHint(memoryContext),
+        memoryContext,
+        sessionId,
       })
     ), decisionSummary);
 
@@ -227,7 +229,7 @@ export async function handleAgent(req, res, url) {
       if (!forceGeneralChat) {
         state = await recordRunStep(run.id, "state_load", "load_state", loadState, stateSummary);
         const knowledgeDecision = await recordRunStep(run.id, "intent_route", "detect_knowledge_answer", async () => (
-          await detectKnowledgeAnswerIntent(state, message)
+          await detectKnowledgeAnswerIntent(state, message, { memoryContext, sessionId })
         ), decisionSummary);
         if (knowledgeDecision) decision = knowledgeDecision;
       }

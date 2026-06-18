@@ -17,6 +17,7 @@ export async function askLlmJson({ purpose, prompt, profile }) {
     thinking: profile.thinking,
     model: profile.model,
     timeoutMs: profile.timeoutMs,
+    temperature: profile.temperature,
   });
   return {
     data: extractJsonObject(result.answer),
@@ -35,6 +36,7 @@ export async function askLlmStructured({ purpose, prompt, profile, repairSchema 
     thinking: profile.thinking,
     model: profile.model,
     timeoutMs: profile.timeoutMs,
+    temperature: profile.temperature,
   });
   try {
     return {

@@ -214,6 +214,8 @@ async function handleStreamMessage(socket, raw, abortController) {
       await classifyTrainingIntent(state, body.message, {
         confirmedSkill: body.confirmedSkill,
         memoryHint: renderIntentMemoryHint(memoryContext),
+        memoryContext,
+        sessionId: body.sessionId,
       })
     ), decisionSummary);
 

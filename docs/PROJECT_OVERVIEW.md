@@ -83,26 +83,27 @@ SQLite + JSONL + local vector index + clean documents
 
 ```text
 用户请求软文
--> generate_marketing_article 意图
+-> 快速 LLM Router 判定 generate_marketing_article
 -> 匹配知识库
 -> hybrid RAG 获取产品卖点和应用场景
 -> LLM 生成结构化文章卡片
 ```
 
-当前版本不联网搜索。资料不足时返回“资料不足”，不编造产品参数。
+当前版本不联网搜索。资料不足时返回“资料不足”，不编造产品参数。“请帮我生成三篇水泵的宣传文章，500词左右，英文”和“请帮我生成三篇英文文章，同时附带中文翻译”都属于 `generate_marketing_article`；后者的中文翻译是文章交付格式要求，不是单独的 `translate_text`。
 
 ### 老板端资料答疑
 
 ```text
 用户提到已导入资料相关内容
--> 操作意图优先过滤
--> 知识库别名/领域信号探测
+-> 快速 LLM Router 判断是否为资料答疑
+-> 安全规则过滤高风险操作
+-> 知识库别名、会话上下文和 RAG 命中校验
 -> hybrid RAG 获取 chunk 和 parent context
 -> answer_knowledge_question 生成有来源回答
 -> 前端展示答案、来源和命中片段
 ```
 
-如果用户明确选择“当普通聊天”，`/api/chat` 会带 `forceGeneralChat: true`，后端跳过知识库答疑探测。
+例如“请帮我检索 CM2 的相关知识”应选择银嘉泵/水泵知识库；水泵答疑后的“有具体型号吗”追问应沿用上一轮水泵资料库；“这是水泵，不是电机”不能选择电机资料库。如果用户明确选择“当普通聊天”，`/api/chat` 会带 `forceGeneralChat: true`，后端跳过知识库答疑探测。
 
 ### 老板端聊天历史
 
@@ -119,7 +120,8 @@ SQLite + JSONL + local vector index + clean documents
 
 ```text
 用户输入“翻译成英文：...”“translate to Spanish: ...”或“长正文 ... 翻译成英文”
--> 本地高置信规则识别翻译意图
+-> 快速 LLM Router 判定 translate_text
+-> 翻译 parser 校验它确实是已有文本翻译
 -> 解析 targetLanguage 和 sourceText
 -> sourceText 为空时读取同 session 上一条正文
 -> 仍无正文则返回 translation_request
@@ -127,7 +129,7 @@ SQLite + JSONL + local vector index + clean documents
 -> action translation 写入老板端聊天历史
 ```
 
-默认目标语言规则是英文正文翻译成中文、中文正文翻译成英文；显式目标语言优先。翻译输入不静默截断，默认超过 `TRAINING_TRANSLATION_MAX_SOURCE_CHARS=30000` 时提示分段或调整配置。缺少大模型 API 时返回 `action: "translation"` 和清晰错误，不伪造翻译。
+默认目标语言规则是英文正文翻译成中文、中文正文翻译成英文；显式目标语言优先。`翻译成英文：这是一台水泵` 属于 `translate_text`。翻译输入不静默截断，默认超过 `TRAINING_TRANSLATION_MAX_SOURCE_CHARS=30000` 时提示分段或调整配置。缺少大模型 API 时返回 `action: "translation"` 和清晰错误，不伪造翻译。
 
 ## 5. Agent 运行治理
 
@@ -168,14 +170,14 @@ Run 和 Trace 只保存脱敏摘要、message hash、message preview、意图、
 
 ## 6. 意图识别与安全门禁
 
-路由策略是本地规则 + 可选 LLM JSON router + 置信度门禁：
+路由策略是快速 LLM Router 优先 + 安全规则门禁 + RAG 证据校验：
 
-- 高置信规则先处理明确短语。
-- 模糊表达交给 LLM router。
+- 快速 LLM Router 先判断应调用的 skill，覆盖软文、翻译、知识库答疑、培训、进度、删除和普通聊天。
+- 本地规则只处理高风险确认、Router 不可用兜底和少量确定性 parser 校验。
 - 低置信操作返回 `intent_confirm`。
 - 删除、发布、回滚、恢复、清空记忆等高风险动作必须确认。
-- 明确翻译请求属于低风险 skill；只有缺正文时返回 `translation_request`，不进入发布或删除确认流。
-- 资料相关问题会走 `answer_knowledge_question`，但必须先满足知识库别名或领域信号以及 RAG 命中门槛。
+- 明确翻译请求属于低风险 skill；只有缺正文时返回 `translation_request`，不进入发布或删除确认流，也不能抢走文章生成需求。
+- 资料相关问题会走 `answer_knowledge_question`，但必须先满足知识库别名、会话上下文或领域信号，并通过 RAG 命中门槛。
 - 普通聊天默认走 `answer_general_chat`，不能被宽泛关键词或无关高分 chunk 误拦成操作或资料答疑。
 
 模型判定错误时，前端确认卡片允许用户改为普通聊天、重新输入或确认执行；后端仍按 Tool Registry 的风险等级和确认要求做最终门禁。
@@ -320,7 +322,9 @@ git diff --check
 ```
 
 RAG 评测集当前维护在 `scripts/fixtures/rag-eval-cases.mjs`，覆盖型号参数、结构原理、制造工艺、销售场景、多语言和标准资料。默认先看 retrieval-only 的 Top1、Top3 和 hybrid 不低于 BM25 的情况。
-翻译评测 `npm run eval:translation` 不依赖真实模型质量：脚本使用临时数据目录和本地 OpenAI-compatible mock，覆盖显式目标语言、默认目标语言、无正文追问、老板端上一条正文上下文、正文在前且翻译指令在末尾、长文本不静默截断、LLM API 缺失错误和 boss-chat 持久化。
+翻译评测 `npm run eval:translation` 不依赖真实模型质量：脚本使用临时数据目录和本地 OpenAI-compatible mock，覆盖显式目标语言、默认目标语言、无正文追问、老板端上一条正文上下文、正文在前且翻译指令在末尾、长文本不静默截断、LLM API 缺失错误、`翻译成英文：这是一台水泵` 和 boss-chat 持久化，并断言“生成英文文章，同时附带中文翻译”不会被翻译 parser 抢走。
+
+本轮项目文档只同步 Markdown 文档和桌面 QA 镜像，不做 Word 导出。
 
 ## 14. 主要风险
 

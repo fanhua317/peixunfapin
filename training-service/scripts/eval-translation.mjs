@@ -68,6 +68,8 @@ function inferMockTranslation(prompt) {
 
   const source = /这是一个电机培训系统/.test(text)
     ? "这是一个电机培训系统"
+    : /这是一台水泵/.test(text)
+      ? "这是一台水泵"
     : /末尾校验标记XYZ/.test(text)
       ? "长文本尾部校验"
     : /这个电机适合工业场景/.test(text)
@@ -80,6 +82,7 @@ function inferMockTranslation(prompt) {
 
   const dictionary = {
     "英文|这是一个电机培训系统": "This is a motor training system.",
+    "英文|这是一台水泵": "This is a water pump.",
     "中文|hello": "你好",
     "日语|这个电机适合工业场景": "このモーターは産業用途に適しています。",
     "西班牙语|high efficiency motor": "motor de alta eficiencia",
@@ -243,6 +246,14 @@ try {
     sourceLength: suffixParsed.sourceText.length,
   });
 
+  const marketingWithTranslationParsed = parseTranslationRequest("请帮我生成三篇英文文章，同时附带中文翻译");
+  assert(!marketingWithTranslationParsed.matched, "article generation with attached Chinese translation should not be parsed as translate_text");
+  results.push({
+    id: "parser-marketing-with-translation-not-translate",
+    ok: true,
+    matched: marketingWithTranslationParsed.matched,
+  });
+
   const tooLongResult = await translateText(`翻译成英文：${"长文本".repeat(10050)}`);
   assert(tooLongResult.action === "translation_request", `too long source should request split input, got ${tooLongResult.action}`);
   assert(tooLongResult.sourceTooLong === true, "too long source should report sourceTooLong");
@@ -256,6 +267,11 @@ try {
   await runTranslationCase({
     id: "zh-to-en-explicit",
     message: "翻译成英文：这是一个电机培训系统",
+    expectedLanguage: "en",
+  });
+  await runTranslationCase({
+    id: "pump-zh-to-en-explicit",
+    message: "翻译成英文：这是一台水泵",
     expectedLanguage: "en",
   });
   await runTranslationCase({

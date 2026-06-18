@@ -1,5 +1,6 @@
 const DEFAULT_FLASH_MODEL = process.env.OPENCLAW_FLASH_MODEL || process.env.OPENCLAW_AI_MODEL || "deepseek/deepseek-v4-flash";
 const DEFAULT_TRAINING_MODEL = process.env.OPENCLAW_TRAINING_MODEL || DEFAULT_FLASH_MODEL;
+const DEFAULT_DIRECT_INTENT_MODEL = process.env.TRAINING_LLM_MODEL || process.env.DEEPSEEK_MODEL || "deepseek-chat";
 
 export const TRAINING_AI_SESSION_KEY = process.env.OPENCLAW_TRAINING_SESSION_KEY || "agent:main:training-service";
 export const MAX_CONTEXT_CHARS = Number(process.env.TRAINING_AI_CONTEXT_CHARS || 12_000);
@@ -13,8 +14,9 @@ export const FACTUAL_SOURCE_LIMIT = 8;
 export const AI_PROFILE = {
   intent: {
     thinking: process.env.OPENCLAW_INTENT_THINKING || process.env.OPENCLAW_TRAINING_INTENT_THINKING || "minimal",
-    model: process.env.OPENCLAW_INTENT_MODEL || process.env.OPENCLAW_TRAINING_INTENT_MODEL || DEFAULT_TRAINING_MODEL,
-    timeoutMs: Number(process.env.OPENCLAW_INTENT_TIMEOUT_MS || process.env.OPENCLAW_TRAINING_TIMEOUT_MS || process.env.OPENCLAW_CHAT_TIMEOUT_MS || 45_000),
+    model: process.env.TRAINING_INTENT_ROUTER_MODEL || process.env.OPENCLAW_INTENT_MODEL || process.env.OPENCLAW_TRAINING_INTENT_MODEL || DEFAULT_DIRECT_INTENT_MODEL,
+    timeoutMs: Number(process.env.TRAINING_INTENT_ROUTER_TIMEOUT_MS || process.env.OPENCLAW_INTENT_TIMEOUT_MS || process.env.OPENCLAW_TRAINING_TIMEOUT_MS || process.env.OPENCLAW_CHAT_TIMEOUT_MS || 8_000),
+    temperature: Number(process.env.TRAINING_INTENT_ROUTER_TEMPERATURE ?? 0),
   },
   material: {
     thinking: process.env.OPENCLAW_MATERIAL_THINKING || process.env.OPENCLAW_TRAINING_MATERIAL_THINKING || "low",

@@ -1,6 +1,38 @@
 import { classifyTrainingIntent } from "../src/ai/index.mjs";
+import { registerLlmProvider } from "../src/llm.mjs";
 
-process.env.TRAINING_LLM_INTENT_ROUTER = "0";
+process.env.TRAINING_LLM_PROVIDER = "eval-intent-router";
+process.env.TRAINING_LLM_INTENT_ROUTER = "1";
+
+function routerDecisionForPrompt(prompt) {
+  const userInputMatch = String(prompt || "").match(/用户输入：(".*")/s);
+  let message = "";
+  try {
+    message = userInputMatch ? JSON.parse(userInputMatch[1]) : "";
+  } catch {
+    message = "";
+  }
+  if (/生成三篇水泵的宣传文章|生成三篇英文文章，同时附带中文翻译/.test(message)) {
+    return { intent: "generate_marketing_article", skill: "generate_marketing_article", confidence: 0.94, reason: "用户要生成文章，翻译只是文章附加要求。" };
+  }
+  if (/请帮我检索 CM2 的相关知识|有具体型号吗/.test(message)) {
+    return { intent: "answer_knowledge_question", skill: "answer_knowledge_question", confidence: 0.91, reason: "用户询问水泵知识库资料和型号。" };
+  }
+  if (/这是水泵，不是电机/.test(message)) {
+    return { intent: "answer_knowledge_question", skill: "answer_knowledge_question", confidence: 0.86, reason: "用户纠正主题为水泵，应优先水泵资料。" };
+  }
+  return { intent: "answer_general_chat", skill: "answer_general_chat", confidence: 0.6, reason: "eval mock fallback" };
+}
+
+const evalIntentRouter = async (prompt) => ({
+  answer: JSON.stringify(routerDecisionForPrompt(prompt)),
+  source: "eval-intent-router",
+  provider: "eval",
+  model: "eval-router-mock",
+});
+
+registerLlmProvider("eval-intent-router", evalIntentRouter);
+registerLlmProvider("auto", evalIntentRouter);
 
 const state = {
   knowledgeBases: [
@@ -8,6 +40,12 @@ const state = {
       id: "kb-motor",
       name: "电机基础资料库",
       aliases: ["电机", "电动机", "电机基础培训", "WONDER"],
+      status: "ready",
+    },
+    {
+      id: "kb-yinjia-pump",
+      name: "银嘉泵水泵资料库",
+      aliases: ["银嘉泵", "银嘉水泵", "水泵", "泵", "CM2", "YINJIA"],
       status: "ready",
     },
   ],
@@ -33,6 +71,20 @@ const state = {
       documentId: "doc-motor",
       sourceRef: "WONDER 高效电机.md :: 系列",
       content: "WONDER 高效电机资料提到 WE/WEA、ZW/ZWEA、SWE/SWEA、SNA/NEMA 等系列。",
+    },
+    {
+      id: "parent-pump-cm2",
+      knowledgeBaseId: "kb-yinjia-pump",
+      documentId: "doc-yinjia-pump",
+      sourceRef: "银嘉泵目录.md :: CM2",
+      content: "银嘉泵水泵资料中，CM2 属于离心泵相关型号，可用于清水输送、增压和一般工业配套场景。",
+    },
+    {
+      id: "parent-pump-models",
+      knowledgeBaseId: "kb-yinjia-pump",
+      documentId: "doc-yinjia-pump",
+      sourceRef: "银嘉泵目录.md :: 型号",
+      content: "银嘉泵资料包含 CM2、VM22、QB60、WZB750 等具体水泵型号，型号参数应以资料表为准。",
     },
   ],
   chunks: [
@@ -62,6 +114,24 @@ const state = {
       sourceRef: "WONDER 高效电机.md :: 系列",
       content: "WONDER 高效电机系列包括 WE/WEA、ZW/ZWEA、SWE/SWEA、SNA/NEMA。",
       searchText: "WONDER 电机 系列 WE WEA ZW ZWEA SWE SNA NEMA",
+    },
+    {
+      id: "chunk-pump-cm2",
+      parentId: "parent-pump-cm2",
+      knowledgeBaseId: "kb-yinjia-pump",
+      documentId: "doc-yinjia-pump",
+      sourceRef: "银嘉泵目录.md :: CM2",
+      content: "CM2 是银嘉泵水泵资料中的型号，可用于清水输送、增压和一般工业配套。",
+      searchText: "银嘉泵 水泵 泵 CM2 相关知识 清水输送 增压 工业配套",
+    },
+    {
+      id: "chunk-pump-models",
+      parentId: "parent-pump-models",
+      knowledgeBaseId: "kb-yinjia-pump",
+      documentId: "doc-yinjia-pump",
+      sourceRef: "银嘉泵目录.md :: 型号",
+      content: "银嘉泵水泵具体型号包括 CM2、VM22、QB60、WZB750，追问型号时应沿用水泵资料库。",
+      searchText: "水泵 具体型号 型号 CM2 VM22 QB60 WZB750 银嘉泵",
     },
   ],
   employees: [
@@ -124,8 +194,26 @@ const cases = [
     needsConfirmation: false,
   },
   {
+    name: "three English pump marketing articles",
+    message: "请帮我生成三篇水泵的宣传文章，500词左右，英文",
+    skill: "generate_marketing_article",
+    needsConfirmation: false,
+  },
+  {
+    name: "English articles with Chinese translation stay marketing",
+    message: "请帮我生成三篇英文文章，同时附带中文翻译",
+    skill: "generate_marketing_article",
+    needsConfirmation: false,
+  },
+  {
     name: "translation zh to en",
     message: "翻译成英文：这是一个电机培训系统",
+    skill: "translate_text",
+    needsConfirmation: false,
+  },
+  {
+    name: "translation pump zh to en",
+    message: "翻译成英文：这是一台水泵",
     skill: "translate_text",
     needsConfirmation: false,
   },
@@ -190,6 +278,29 @@ const cases = [
     needsConfirmation: false,
   },
   {
+    name: "cm2 pump knowledge uses yinjia pump kb",
+    message: "请帮我检索 CM2 的相关知识",
+    skill: "answer_knowledge_question",
+    needsConfirmation: false,
+    knowledgeBaseId: "kb-yinjia-pump",
+  },
+  {
+    name: "pump follow-up model question keeps yinjia pump kb",
+    message: "有具体型号吗",
+    skill: "answer_knowledge_question",
+    needsConfirmation: false,
+    knowledgeBaseId: "kb-yinjia-pump",
+    memoryHint: "上一轮用户正在询问银嘉泵水泵资料库中 CM2 的相关知识。",
+  },
+  {
+    name: "pump correction must not select motor kb",
+    message: "这是水泵，不是电机",
+    skill: "answer_knowledge_question",
+    needsConfirmation: false,
+    knowledgeBaseId: "kb-yinjia-pump",
+    notKnowledgeBaseId: "kb-motor",
+  },
+  {
     name: "training design discussion is chat",
     message: "帮我看看培训应该怎么设计比较合理",
     skill: "answer_general_chat",
@@ -243,10 +354,13 @@ const results = [];
 for (const item of cases) {
   const decision = await classifyTrainingIntent(state, item.message, {
     confirmedSkill: item.confirmedSkill || "",
+    memoryHint: item.memoryHint || "",
   });
   const ok = decision.skill === item.skill
     && decision.needsConfirmation === item.needsConfirmation
-    && (!item.source || decision.source === item.source);
+    && (!item.source || decision.source === item.source)
+    && (!item.knowledgeBaseId || decision.knowledgeBaseId === item.knowledgeBaseId)
+    && (!item.notKnowledgeBaseId || decision.knowledgeBaseId !== item.notKnowledgeBaseId);
   results.push({
     name: item.name,
     ok,
@@ -262,6 +376,8 @@ for (const item of cases) {
       source: decision.source,
       needsConfirmation: decision.needsConfirmation,
       reason: decision.reason,
+      knowledgeBaseId: decision.knowledgeBaseId,
+      knowledgeBaseName: decision.knowledgeBaseName,
     },
   });
 }

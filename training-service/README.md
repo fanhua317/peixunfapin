@@ -80,13 +80,24 @@ OPENAI_API_KEY=...
 
 只有显式设置 `TRAINING_LLM_PROVIDER=openclaw` 时才走 OpenClaw Gateway。详见 [LLM_CONFIG.md](LLM_CONFIG.md)。
 
-没有可用大模型 API 时，普通聊天、翻译和生成类任务会返回明确错误；系统不会用模板假装生成讲义、试题、软文或翻译结果。
+没有可用大模型 API 时，普通聊天、翻译和生成类任务会返回明确错误；系统不会用模板假装生成讲义、试题、软文或翻译结果。意图路由当前以快速 LLM Router 为优先入口；本地规则用于高风险动作确认、Router 不可用兜底和 RAG 证据校验。
+
+## 意图路由、软文和知识库答疑
+
+老板端 `/api/agent/dispatch` 会优先把用户输入交给快速 LLM Router 判定 skill。规则层不再作为业务意图的首选解释器，而是保留三类职责：
+
+- 删除、发布、回滚、恢复、清空记忆等高风险动作必须确认。
+- Router 不可用或低置信时兜底到普通聊天或确认卡片。
+- 知识库答疑和软文生成必须经过知识库选择与 RAG 命中校验，避免“水泵”问题误选电机资料库。
+
+软文请求如“请帮我生成三篇水泵的宣传文章，500词左右，英文”和“请帮我生成三篇英文文章，同时附带中文翻译”都应进入 `generate_marketing_article`；后者的“中文翻译”是文章交付要求，不是 `translate_text`。资料问题如“请帮我检索 CM2 的相关知识”应进入 `answer_knowledge_question` 并选择银嘉泵/水泵知识库；水泵问答后的“有具体型号吗”追问也应沿用同一资料库。
 
 ## 多语言翻译 skill
 
-老板端 Agent 支持把明确翻译请求路由到多语言翻译 skill。常见入口包括：
+老板端 Agent 支持把明确翻译请求路由到多语言翻译 skill。翻译 skill 只处理“把已有文本翻译成目标语言”的请求，不抢“生成文章并附翻译”这类内容生成任务。常见入口包括：
 
 - `翻译成英文：这是一个电机培训系统`
+- `翻译成英文：这是一台水泵`
 - `把 hello 翻译成中文`
 - `translate to Spanish: high efficiency motor`
 - `翻译一下：high efficiency motor`
@@ -152,7 +163,7 @@ npm run eval:import
 -> 将父块上下文交给讲义、答疑、出题或软文生成
 ```
 
-老板端聊天会先识别发布、删除、进度、软文等明确业务操作；剩余普通聊天候选如果命中知识库别名或电机资料领域词，并且 RAG 检索有足够相关的 chunk，会自动走 `answer_knowledge_question`，返回 `knowledge_answer`、知识库名、检索模式、来源和命中片段。用户在确认卡片里选择“当普通聊天”时，前端会向 `/api/chat` 传 `forceGeneralChat: true`，后端跳过自动知识库探测。
+老板端聊天的主路由由快速 LLM Router 先判断是否需要 `answer_knowledge_question`。随后规则层只做知识库别名、会话上下文和 RAG 命中校验：例如 CM2、水泵、银嘉泵应选择银嘉泵/水泵资料库；“这是水泵，不是电机”不能落到电机资料库。通过校验后返回 `knowledge_answer`、知识库名、检索模式、来源和命中片段。用户在确认卡片里选择“当普通聊天”时，前端会向 `/api/chat` 传 `forceGeneralChat: true`，后端跳过自动知识库探测。
 
 本地向量索引推荐命令：
 
@@ -350,7 +361,9 @@ git diff --check
 ```
 
 RAG 评测用例在 `scripts/fixtures/rag-eval-cases.mjs`，当前共 30 条，默认以 retrieval-only 的 Top1/Top3 命中和 hybrid 不低于 BM25 为主要门槛。
-翻译评测会创建临时 `TRAINING_DATA_DIR`，设置 `TRAINING_AUTH_DISABLED=1`，并启动本地 OpenAI-compatible mock 服务覆盖中英日西法、默认目标语言、缺正文追问、上一条老板端正文上下文、正文在前且翻译指令在末尾、长文本不静默截断、LLM API 缺失错误和 boss-chat 写入。
+翻译评测会创建临时 `TRAINING_DATA_DIR`，设置 `TRAINING_AUTH_DISABLED=1`，并启动本地 OpenAI-compatible mock 服务覆盖中英日西法、默认目标语言、缺正文追问、上一条老板端正文上下文、正文在前且翻译指令在末尾、长文本不静默截断、LLM API 缺失错误、`翻译成英文：这是一台水泵` 和 boss-chat 写入；同时断言“生成英文文章，同时附带中文翻译”不会被翻译 parser 抢走。
+
+当前文档和评测流程只维护 Markdown 项目文档和 QA 镜像，本轮不做 Word 导出。
 
 ## 当前限制
 

@@ -47,6 +47,33 @@ function normalizeMarketingSubject(value) {
     .trim();
 }
 
+function kbSearchText(kb = {}) {
+  return `${kb.id || ""} ${kb.name || ""} ${kb.description || ""} ${(kb.aliases || []).join(" ")}`.toLowerCase();
+}
+
+function isPumpKnowledgeBase(kb) {
+  return /(水泵|泵|银嘉|yinjia|pump)/i.test(kbSearchText(kb));
+}
+
+function isMotorKnowledgeBase(kb) {
+  return /(电机|电动机|motor|wonder)/i.test(kbSearchText(kb));
+}
+
+function domainMatchScore(kb, instruction) {
+  const text = String(instruction || "");
+  let score = 0;
+  let matched = false;
+  if (/(水泵|泵|银嘉|YINJIA|pump|centrifugal|peripheral|jet|booster|submersible)/i.test(text) && isPumpKnowledgeBase(kb)) {
+    score += 8;
+    matched = true;
+  }
+  if (/(电机|电动机|motor|WONDER|YE\d|IE\d)/i.test(text) && isMotorKnowledgeBase(kb)) {
+    score += 8;
+    matched = true;
+  }
+  return { score, matched };
+}
+
 async function matchMarketingKnowledgeBase(state, instruction) {
   const text = String(instruction || "").toLowerCase();
   const subject = normalizeMarketingSubject(marketingSubjectText(instruction) || instruction);
@@ -60,6 +87,7 @@ async function matchMarketingKnowledgeBase(state, instruction) {
     ]).filter((item) => item.length >= 2);
     let score = 0;
     let explicitNameMatch = false;
+    let explicitDomainMatch = false;
     for (const name of names) {
       const normalized = name.toLowerCase();
       if (normalized && text.includes(normalized)) {
@@ -67,18 +95,22 @@ async function matchMarketingKnowledgeBase(state, instruction) {
         score += normalized.length >= 4 ? 6 : 3;
       }
     }
+    const domain = domainMatchScore(kb, instruction);
+    score += domain.score;
+    explicitDomainMatch = domain.matched;
     let chunkScore = 0;
     if (subject.length >= 2) {
       const matches = await searchKnowledgeContexts(state, { knowledgeBaseId: kb.id, query: subject, limit: 3 });
       chunkScore = matches.reduce((sum, chunk) => sum + Number(chunk.score || chunk.bm25Score || 0), 0);
       score += chunkScore;
     }
-    scored.push({ kb, score, explicitNameMatch, chunkScore });
+    scored.push({ kb, score, explicitNameMatch, explicitDomainMatch, chunkScore });
   }
   scored.sort((left, right) => right.score - left.score);
   const best = scored[0];
   if (!best) return null;
   if (best.explicitNameMatch) return best.kb;
+  if (best.explicitDomainMatch && best.score >= 8) return best.kb;
   return best.chunkScore >= 0.55 || best.chunkScore >= 4 ? best.kb : null;
 }
 
