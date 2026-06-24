@@ -334,7 +334,7 @@ git diff --check
 
 RAG 评测集当前维护在 `scripts/fixtures/rag-eval-cases.mjs`，覆盖型号参数、结构原理、制造工艺、销售场景、多语言和标准资料。默认先看 retrieval-only 的 Top1、Top3 和 hybrid 不低于 BM25 的情况。备份评测覆盖 SQLite 快照、JSONL/向量索引打包、校验、强制恢复和备份保留策略。
 翻译评测 `npm run eval:translation` 不依赖真实模型质量：脚本使用临时数据目录和本地 OpenAI-compatible mock，覆盖显式目标语言、默认目标语言、无正文追问、老板端上一条正文上下文、正文在前且翻译指令在末尾、长文本不静默截断、LLM API 缺失错误、`翻译成英文：这是一台水泵` 和 boss-chat 持久化，并断言“生成英文文章，同时附带中文翻译”不会被翻译 parser 抢走。
-服务器审计体系补充在 `server-audit:*` 脚本中：生产端口只做只读基线，隔离副本承接写入、合成数据和极限压测；结果统一写入 `training-service/server-audit-output`，再汇总到 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。性能指标包含 RPS、错误率、p50/p95/p99、数据目录规模、功能回归结果、合成数据规模和 bug 风险记录。
+服务器审计体系补充在 `server-audit:*` 脚本中：生产端口只做只读基线，隔离副本承接写入、合成数据导入、业务闭环、备份恢复和极限压测；结果统一写入 `training-service/server-audit-output`，再汇总到 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。本轮在服务器 `127.0.0.1:18787` 隔离副本完成读写压测和业务闭环：读链路 20 并发内 0 错误，50 并发开始超时，100 并发错误率 35.43% 并触发停止条件；写链路 boss-chat create/delete 在 20 并发仍 0 错误；培训发布、员工答疑、考试提交、报表汇总、备份校验和 throwaway 恢复均跑通。当前主要风险是 embedding 后端不可用，新增知识库向量重建失败，系统降级为 BM25 检索；CSV 在 direct 导入模式下不会进入知识库，需要 clean/auto 清洗模式。
 
 本轮项目文档只同步 Markdown 文档和桌面 QA 镜像，不做 Word 导出。
 

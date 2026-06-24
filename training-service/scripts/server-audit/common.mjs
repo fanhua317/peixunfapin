@@ -335,9 +335,10 @@ export async function readLatestArtifacts(outDir = defaultAuditOutDir) {
     const prefix = file.replace(/-\d{8}-\d{6}\.json$/, "");
     const fullPath = path.join(outDir, file);
     try {
+      const raw = await readFile(fullPath, "utf8");
       artifacts[prefix] = {
         path: fullPath,
-        data: JSON.parse(await readFile(fullPath, "utf8")),
+        data: JSON.parse(raw.replace(/^\uFEFF/, "")),
       };
     } catch {
       // ignore broken artifact

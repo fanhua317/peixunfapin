@@ -278,11 +278,11 @@ A：`npm run eval:translation` 会使用临时 `TRAINING_DATA_DIR`、关闭认�
 
 ### Q58-2：服务器性能测试怎么做？
 
-A：新增了 `server-audit:*` 审计脚本。生产端口只做只读基线，例如 `/api/auth/status`、`/api/health`、知识库、任务和 Agent Run 查询；极限压测放到同服务器隔离副本，使用独立 `TRAINING_DATA_DIR` 和端口，避免污染线上数据。压测脚本用 Node 原生 `fetch` 做阶梯并发，记录 RPS、错误率、p50/p95/p99 和资源采样；写入链路必须显式传 `--allow-write`。
+A：新增了 `server-audit:*` 审计脚本。生产端口只做只读基线，例如 `/api/auth/status`、`/api/health`、知识库、任务和 Agent Run 查询；极限压测放到同服务器隔离副本，使用独立 `TRAINING_DATA_DIR`、`TRAINING_SQLITE_PATH` 和端口，避免污染线上数据。压测脚本用 Node 原生 `fetch` 做阶梯并发，记录 RPS、错误率、p50/p95/p99 和资源采样；写入链路必须显式传 `--allow-write`。本轮服务器隔离副本测到读链路 20 并发内 0 错误，50 并发开始超时，100 并发错误率 35.43%；写链路 boss-chat create/delete 到 20 并发仍 0 错误。测试还跑通了培训发布、员工答疑、生成考试、提交答案、报表汇总、备份校验和 throwaway 恢复。
 
 ### Q58-3：怎么把测试结果沉淀成简历材料？
 
-A：审计脚本统一输出 JSON 到 `server-audit-output`，再由 `npm run server-audit:report` 汇总成 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。报告里记录数据规模、功能回归、接口性能、并发稳定性、合成数据、bug 风险和证据文件；简历文档把这些数字改写成业务成果口径，例如“建立服务器级性能与稳定性审计体系，覆盖资料导入、RAG 检索、培训发布、考试提交、报表汇总和备份恢复”。
+A：审计脚本统一输出 JSON 到 `server-audit-output`，再由 `npm run server-audit:report` 汇总成 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。报告里记录数据规模、功能回归、接口性能、并发稳定性、合成数据、bug 风险和证据文件；简历文档把这些数字改写成业务成果口径，例如“建立服务器级性能与稳定性审计体系，覆盖资料导入、RAG 检索、培训发布、考试提交、报表汇总和备份恢复”。本轮可以写的数字包括：隔离副本最大读压测 100 并发、20 并发稳定 0 错误、写链路最高 12.47 RPS、业务闭环全链路通过、备份 4.25 MB 并完成校验和恢复；同时诚实记录 embedding 后端不可用导致向量重建失败、CSV direct 导入不覆盖等问题。
 
 ### Q59：为什么文档也要跟代码一起更新？
 
