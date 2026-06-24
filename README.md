@@ -185,15 +185,22 @@ npm run eval:jobs
 npm run eval:boss-chat
 npm run eval:translation
 npm run eval:kb-versions
+npm run server-audit:inventory -- --base-url http://47.95.194.219:8787
+npm run server-audit:functional -- --profile quick
+npm run server-audit:perf -- --base-url http://127.0.0.1:18787 --duration-ms 60000 --read-levels 1,5,10,20,50,100,200
+npm run server-audit:report
 git diff --check
 ```
 
 文档-only 改动通常至少跑 `npm run check` 和 `git diff --check`。
+服务器性能审计默认写入 `training-service/server-audit-output`，再由 `server-audit:report` 汇总到 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。生产端口只做只读基线，写入和极限压测应打隔离副本。
 
 ## 文档索引
 
 - [training-service/README.md](training-service/README.md)：服务运行、API、导入、检索、部署和验证命令。
 - [docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md)：架构总览、数据流、风险和路线图。
 - [docs/Agent项目面试QA.md](docs/Agent项目面试QA.md)：中文面试问答，按真实项目实现整理。
+- [docs/PERFORMANCE_AUDIT.md](docs/PERFORMANCE_AUDIT.md)：服务器性能、数据规模、回归结果和 bug 排查记录。
+- [docs/RESUME_EVIDENCE.md](docs/RESUME_EVIDENCE.md)：可改写进简历的业务成果和量化证据。
 - [training-service/LLM_CONFIG.md](training-service/LLM_CONFIG.md)：LLM Provider 与 OpenClaw Gateway 兼容说明。
 - [training-plugin/README.md](training-plugin/README.md)：OpenClaw 插件的 8 个 training tool。

@@ -9,6 +9,7 @@ training-service/.playwright-cli/
 
 # Local runtime data
 training-service/.tmp-smoke-data/
+training-service/server-audit-output/
 training-service/data/state.json
 training-service/data/memory.json
 training-service/data/conversation-history.jsonl

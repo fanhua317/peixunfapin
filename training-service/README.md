@@ -392,11 +392,17 @@ npm run eval:jobs
 npm run eval:boss-chat
 npm run eval:translation
 npm run eval:kb-versions
+npm run server-audit:inventory -- --base-url http://47.95.194.219:8787
+npm run server-audit:functional -- --profile quick
+npm run server-audit:synthetic -- --small 100 --medium 1000 --large 5000
+npm run server-audit:perf -- --base-url http://127.0.0.1:18787 --duration-ms 60000 --read-levels 1,5,10,20,50,100,200
+npm run server-audit:report
 git diff --check
 ```
 
 RAG 评测用例在 `scripts/fixtures/rag-eval-cases.mjs`，当前共 30 条，默认以 retrieval-only 的 Top1/Top3 命中和 hybrid 不低于 BM25 为主要门槛。备份评测覆盖 SQLite 快照、JSONL/向量索引打包、校验、强制恢复和保留策略清理。
 翻译评测会创建临时 `TRAINING_DATA_DIR`，设置 `TRAINING_AUTH_DISABLED=1`，并启动本地 OpenAI-compatible mock 服务覆盖中英日西法、默认目标语言、缺正文追问、上一条老板端正文上下文、正文在前且翻译指令在末尾、长文本不静默截断、LLM API 缺失错误、`翻译成英文：这是一台水泵` 和 boss-chat 写入；同时断言“生成英文文章，同时附带中文翻译”不会被翻译 parser 抢走。
+服务器审计脚本统一写入 `server-audit-output`：`server-audit:inventory` 采集服务器环境、API 只读探测、计划任务、磁盘和数据规模；`server-audit:functional` 复用现有回归脚本并输出统一 JSON；`server-audit:synthetic` 生成 100/1000/5000 文件三档合成资料；`server-audit:perf` 使用 Node 原生 fetch 做阶梯压测，记录 RPS、错误率、p50/p95/p99 和资源采样；`server-audit:report` 汇总最新 JSON 并刷新 `docs/PERFORMANCE_AUDIT.md` / `docs/RESUME_EVIDENCE.md`。生产端口只做只读基线；极限压测、合成数据导入和写入链路必须在同服务器隔离副本上执行，隔离副本使用独立 `TRAINING_DATA_DIR` 和端口，例如 `127.0.0.1:18787`。缺少访问密钥时受保护接口会标记为 `auth_required`，不会伪造数据。
 
 当前文档和评测流程只维护 Markdown 项目文档和 QA 镜像，本轮不做 Word 导出。
 

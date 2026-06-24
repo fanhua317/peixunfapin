@@ -325,11 +325,16 @@ npm run eval:jobs
 npm run eval:boss-chat
 npm run eval:translation
 npm run eval:kb-versions
+npm run server-audit:inventory
+npm run server-audit:functional
+npm run server-audit:perf
+npm run server-audit:report
 git diff --check
 ```
 
 RAG 评测集当前维护在 `scripts/fixtures/rag-eval-cases.mjs`，覆盖型号参数、结构原理、制造工艺、销售场景、多语言和标准资料。默认先看 retrieval-only 的 Top1、Top3 和 hybrid 不低于 BM25 的情况。备份评测覆盖 SQLite 快照、JSONL/向量索引打包、校验、强制恢复和备份保留策略。
 翻译评测 `npm run eval:translation` 不依赖真实模型质量：脚本使用临时数据目录和本地 OpenAI-compatible mock，覆盖显式目标语言、默认目标语言、无正文追问、老板端上一条正文上下文、正文在前且翻译指令在末尾、长文本不静默截断、LLM API 缺失错误、`翻译成英文：这是一台水泵` 和 boss-chat 持久化，并断言“生成英文文章，同时附带中文翻译”不会被翻译 parser 抢走。
+服务器审计体系补充在 `server-audit:*` 脚本中：生产端口只做只读基线，隔离副本承接写入、合成数据和极限压测；结果统一写入 `training-service/server-audit-output`，再汇总到 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。性能指标包含 RPS、错误率、p50/p95/p99、数据目录规模、功能回归结果、合成数据规模和 bug 风险记录。
 
 本轮项目文档只同步 Markdown 文档和桌面 QA 镜像，不做 Word 导出。
 
@@ -349,6 +354,7 @@ RAG 评测集当前维护在 `scripts/fixtures/rag-eval-cases.mjs`，覆盖型�
 
 - 完善导入页面的质量说明和批量资料治理体验。
 - 增加备份失败告警、异地副本和恢复演练记录。
+- 在服务器定期复跑 `server-audit:*`，沉淀真实性能趋势和容量上限。
 - 扩展更多业务资料的语义切片规则。
 
 中期：

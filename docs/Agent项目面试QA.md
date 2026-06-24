@@ -276,6 +276,14 @@ A：用真实资料中的业务问题构造，覆盖型号参数、结构原理�
 
 A：`npm run eval:translation` 会使用临时 `TRAINING_DATA_DIR`、关闭认证，并启动本地 OpenAI-compatible mock 服务。评测重点不是译文文学质量，而是路由和接口契约：显式中英日西法目标语言、英文默认翻中文、中文默认翻英文、正文在前且翻译指令在末尾、长文本不静默截断、无正文返回 `translation_request`、有老板端上一条正文时复用上下文、LLM API 缺失时返回清晰错误、`翻译成英文：这是一台水泵` 能走翻译，以及“生成英文文章，同时附带中文翻译”不会被翻译 parser 抢走。
 
+### Q58-2：服务器性能测试怎么做？
+
+A：新增了 `server-audit:*` 审计脚本。生产端口只做只读基线，例如 `/api/auth/status`、`/api/health`、知识库、任务和 Agent Run 查询；极限压测放到同服务器隔离副本，使用独立 `TRAINING_DATA_DIR` 和端口，避免污染线上数据。压测脚本用 Node 原生 `fetch` 做阶梯并发，记录 RPS、错误率、p50/p95/p99 和资源采样；写入链路必须显式传 `--allow-write`。
+
+### Q58-3：怎么把测试结果沉淀成简历材料？
+
+A：审计脚本统一输出 JSON 到 `server-audit-output`，再由 `npm run server-audit:report` 汇总成 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。报告里记录数据规模、功能回归、接口性能、并发稳定性、合成数据、bug 风险和证据文件；简历文档把这些数字改写成业务成果口径，例如“建立服务器级性能与稳定性审计体系，覆盖资料导入、RAG 检索、培训发布、考试提交、报表汇总和备份恢复”。
+
 ### Q59：为什么文档也要跟代码一起更新？
 
 A：这个项目迭代很快，架构、部署、RAG、记忆和服务器策略经常变化。如果文档落后，后续开发和面试表达都会基于错误事实。当前同步的是 Markdown 项目文档和桌面 QA 镜像；本轮不做 Word 导出。
@@ -288,7 +296,7 @@ A：不是单个 API 调用，而是把 RAG 资料质量、Agent 工具选择、
 
 ### Q61：你个人贡献怎么描述？
 
-A：可以说负责从 MVP 到可维护 Agent 架构的重构，包括后端分层、domain 拆分、AI 层拆分、前端模块化、DeepSeek 接入、快速 LLM Router 与安全门禁、WebSocket 流式、RAG 混合检索、Parent-Child、SQLite、记忆、任务中心、Trace/Agent Run、导入版本回滚和评测体系。
+A：可以说负责从 MVP 到可维护 Agent 架构的重构，包括后端分层、domain 拆分、AI 层拆分、前端模块化、DeepSeek 接入、快速 LLM Router 与安全门禁、WebSocket 流式、RAG 混合检索、Parent-Child、SQLite、记忆、任务中心、Trace/Agent Run、导入版本回滚、服务器性能审计和评测体系。
 
 ### Q62：项目当前不足是什么？
 
@@ -296,4 +304,4 @@ A：账号权限还比较简单；OCR/版面解析还不是自动化平台；SQL
 
 ### Q63：如果继续优化，优先做什么？
 
-A：优先补账号权限和公网安全、备份失败告警与异地副本、资料治理自动化、报价/发布等独立 skill、更多轨迹评测和线上质量监控。
+A：优先补账号权限和公网安全、备份失败告警与异地副本、资料治理自动化、报价/发布等独立 skill、更多轨迹评测、服务器性能趋势看板和线上质量监控。
