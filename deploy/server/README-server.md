@@ -55,7 +55,34 @@ schtasks /Create /TN "JuzhouAgentTraining" /SC ONSTART /TR "powershell.exe -NoPr
 schtasks /Run /TN "JuzhouAgentTraining"
 ```
 
-The start script installs production dependencies with `npm ci --omit=dev`, including the native SQLite module.
+After creating the task, edit the task settings so it can run indefinitely and restart on short failures:
+
+```powershell
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+Set-ScheduledTask -TaskName JuzhouAgentTraining -Settings $settings
+```
+
+For self-healing, register `watchdog-server.ps1` as a second task that runs every 5 minutes:
+
+```powershell
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File C:\apps\JuzhouAgentTrainingServer\watchdog-server.ps1"
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew -StartWhenAvailable
+Register-ScheduledTask -TaskName "JuzhouAgentTrainingWatchdog" -Action $action -Trigger $trigger -Settings $settings -User "SYSTEM" -RunLevel Highest -Force
+```
+
+The start script installs production dependencies with `npm ci --omit=dev`, including the native SQLite module. It appends to `logs\server.log` and records the Node path, key environment summary, and exit code instead of overwriting the log. The watchdog checks port `8787`, `/`, and `/api/health`; a `401` from `/api/health` is normal when the access key is required. Watchdog events are written to `logs\watchdog.log`.
+
+Useful checks:
+
+```powershell
+Get-ScheduledTask -TaskName JuzhouAgentTraining,JuzhouAgentTrainingWatchdog | Select TaskName,State
+Export-ScheduledTask -TaskName JuzhouAgentTraining | Select-String ExecutionTimeLimit
+Get-NetTCPConnection -LocalPort 8787 -State Listen
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8787/
+Get-Content .\logs\server.log -Tail 80
+Get-Content .\logs\watchdog.log -Tail 80
+```
 
 ## Data
 

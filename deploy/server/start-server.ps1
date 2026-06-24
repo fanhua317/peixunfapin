@@ -1,6 +1,14 @@
 $ErrorActionPreference = "Stop"
 
 Set-Location $PSScriptRoot
+New-Item -ItemType Directory -Force -Path (Join-Path $PSScriptRoot "logs") | Out-Null
+$logPath = Join-Path $PSScriptRoot "logs\server.log"
+
+function Write-ServiceLog {
+  param([string]$Message)
+  $line = "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message
+  Add-Content -LiteralPath $logPath -Value $line -Encoding UTF8
+}
 
 if (Test-Path -LiteralPath ".env") {
   Get-Content -LiteralPath ".env" | ForEach-Object {
@@ -31,7 +39,10 @@ if (!$env:TRAINING_EMBEDDING_MODEL) { $env:TRAINING_EMBEDDING_MODEL = "bge-m3" }
 if (!$env:TRAINING_RAG_EMBEDDING_TIMEOUT_MS) { $env:TRAINING_RAG_EMBEDDING_TIMEOUT_MS = "8000" }
 
 New-Item -ItemType Directory -Force -Path $env:TRAINING_DATA_DIR | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $PSScriptRoot "logs") | Out-Null
+
+Write-ServiceLog "=== JuzhouAgentTraining start requested ==="
+Write-ServiceLog "WorkingDirectory=$PSScriptRoot"
+Write-ServiceLog "HOST=$env:HOST PORT=$env:PORT TRAINING_DATA_DIR=$env:TRAINING_DATA_DIR TRAINING_STORAGE=$env:TRAINING_STORAGE TRAINING_VECTOR_BACKEND=$env:TRAINING_VECTOR_BACKEND TRAINING_HYBRID_RETRIEVAL=$env:TRAINING_HYBRID_RETRIEVAL"
 
 $serviceDir = Join-Path $PSScriptRoot "training-service"
 if (!(Test-Path -LiteralPath (Join-Path $serviceDir "node_modules\better-sqlite3"))) {
@@ -43,4 +54,11 @@ if (!(Test-Path -LiteralPath (Join-Path $serviceDir "node_modules\better-sqlite3
   }
 }
 
-node .\training-service\src\server.mjs *> .\logs\server.log
+$node = Get-Command node -ErrorAction Stop
+Write-ServiceLog "Node=$($node.Source)"
+Write-ServiceLog "Launching training-service src/server.mjs"
+& $node.Source .\training-service\src\server.mjs *>> $logPath
+$exitCode = $LASTEXITCODE
+Write-ServiceLog "Node process exited with code $exitCode"
+Write-ServiceLog "=== JuzhouAgentTraining script finished ==="
+exit $exitCode

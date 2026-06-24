@@ -270,12 +270,15 @@ Node service + SQLite + local files + optional Ollama
 轻量 Windows Server：
 
 ```text
-training-service
+Scheduled Task: JuzhouAgentTraining
+Scheduled Task: JuzhouAgentTrainingWatchdog
 SQLite
 vector-index-bge-m3.json
 optional Ollama bge-m3 query embedding
 DeepSeek/OpenAI-compatible chat API
 ```
+
+线上 Windows Server 采用“主计划任务 + watchdog”方式保持服务长期在线。`JuzhouAgentTraining` 运行 `start-server.ps1`，`ExecutionTimeLimit=PT0S`，并配置 1 分钟间隔的短失败重启；`JuzhouAgentTrainingWatchdog` 每 5 分钟检查 8787 端口、首页和 `/api/health`，无响应时拉起主任务。服务日志追加到 `logs\server.log`，watchdog 日志写入 `logs\watchdog.log`。未带访问密钥访问 `/api/health` 返回 `401` 是正常鉴权，不算宕机。
 
 Qdrant 是可选部署，不是低并发轻量服务器默认项。使用 Qdrant 时，需要单独备份 volume 或 snapshot。
 

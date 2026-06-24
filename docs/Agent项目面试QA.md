@@ -214,6 +214,10 @@ A：Trace 和 Agent Run 只保存 message preview、hash、意图、skill、acti
 
 A：普通聊天、翻译和生成类任务返回明确错误；操作类意图仍可本地识别，但需要模型生成的讲义、试题、软文或翻译结果不会伪造。
 
+### Q47-1：线上服务怎么保证长期运行？
+
+A：当前 Windows Server 不额外引入 PM2、NSSM 或 Docker 进程管理，而是使用两层计划任务。主任务 `JuzhouAgentTraining` 以 `SYSTEM` 运行 `start-server.ps1`，把 `ExecutionTimeLimit` 改成 `PT0S`，避免 72 小时自动终止，并配置 1 分钟间隔的短失败重启。第二个任务 `JuzhouAgentTrainingWatchdog` 每 5 分钟检查 8787 端口、首页和 `/api/health`，如果端口或 HTTP 不通就停止异常主任务并重新启动。`/api/health` 未带密钥返回 `401` 是正常鉴权。启动脚本追加 `logs/server.log`，watchdog 写 `logs/watchdog.log`，方便判断是正常退出、崩溃还是被系统杀掉。
+
 ## 10. 交互体验
 
 ### Q48：为什么前端曾经显示 `**加粗**`？

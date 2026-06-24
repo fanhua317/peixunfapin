@@ -338,6 +338,34 @@ TRAINING_LLM_MODEL=deepseek-chat
 
 2 核 4GB 服务器不建议长期运行完整聊天大模型。若要启用语义检索，可以只安装 Ollama 和 `bge-m3` 做 query embedding，资料向量索引用本地生成后同步的 `vector-index-bge-m3.json`。
 
+Windows Server 长期运行建议保留计划任务，但要去掉默认运行时长限制：
+
+```powershell
+Export-ScheduledTask -TaskName JuzhouAgentTraining | Out-File .\backups\JuzhouAgentTraining.before.xml
+```
+
+当前线上约定：
+
+- `JuzhouAgentTraining`：以 `SYSTEM` 运行 `start-server.ps1`，`ExecutionTimeLimit=PT0S`，`RestartCount=3`，`RestartInterval=PT1M`，`StartWhenAvailable=true`。
+- `JuzhouAgentTrainingWatchdog`：每 5 分钟运行 `watchdog-server.ps1`，检查 `0.0.0.0:8787`、`http://127.0.0.1:8787/` 和 `/api/health`。线上 `/api/health` 未带密钥返回 `401` 属于正常鉴权，watchdog 视为健康。
+- `start-server.ps1` 不覆盖旧日志，会追加写入 `logs\server.log`，记录启动时间、Node 路径、工作目录、关键环境变量摘要和 Node 退出码。
+- `watchdog-server.ps1` 写入 `logs\watchdog.log`；如果主任务显示 Running 但端口或 HTTP 不通，会先停止主任务再重新启动。
+
+常用排查命令：
+
+```powershell
+Get-ScheduledTask -TaskName JuzhouAgentTraining,JuzhouAgentTrainingWatchdog | Select TaskName,State
+Get-ScheduledTaskInfo -TaskName JuzhouAgentTraining
+Export-ScheduledTask -TaskName JuzhouAgentTraining | Select-String ExecutionTimeLimit
+Get-NetTCPConnection -LocalPort 8787 -State Listen
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8787/
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8787/api/health
+Get-Content .\logs\server.log -Tail 80
+Get-Content .\logs\watchdog.log -Tail 80
+```
+
+回滚方式：导入变更前备份的 `JuzhouAgentTraining` XML，恢复旧 `start-server.ps1`，并删除 `JuzhouAgentTrainingWatchdog` 任务。恢复运行数据前仍应先停服务。
+
 更完整的服务器说明见 [../deploy/server/README-server.md](../deploy/server/README-server.md)。
 
 ## 常用验证

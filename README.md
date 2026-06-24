@@ -154,6 +154,12 @@ cd D:\juzhou-agent\peixun
 powershell -ExecutionPolicy Bypass -File .\scripts\package-server.ps1
 ```
 
+Windows Server 当前推荐用计划任务长期运行：
+
+- 主任务 `JuzhouAgentTraining` 运行 `start-server.ps1`，`ExecutionTimeLimit=PT0S`，避免 72 小时后被任务计划程序终止。
+- 守护任务 `JuzhouAgentTrainingWatchdog` 每 5 分钟检查 `8787`、首页和 `/api/health`；未带访问密钥的 `/api/health` 返回 `401` 仍视为服务存活。
+- 运行日志在部署目录的 `logs\server.log`，守护日志在 `logs\watchdog.log`；`start-server.ps1` 追加日志并记录 Node 路径、关键环境变量摘要和退出码。
+
 更细的部署说明见：
 
 - [training-service/README.md](training-service/README.md)

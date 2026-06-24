@@ -50,6 +50,7 @@ Copy-Item -LiteralPath (Join-Path $serverDeployRoot "docker-compose.yml") -Desti
 Copy-Item -LiteralPath (Join-Path $serverDeployRoot "env.example") -Destination (Join-Path $stageRoot ".env.example") -Force
 Copy-Item -LiteralPath (Join-Path $serverDeployRoot "start-server.sh") -Destination (Join-Path $stageRoot "start-server.sh") -Force
 Copy-Item -LiteralPath (Join-Path $serverDeployRoot "start-server.ps1") -Destination (Join-Path $stageRoot "start-server.ps1") -Force
+Copy-Item -LiteralPath (Join-Path $serverDeployRoot "watchdog-server.ps1") -Destination (Join-Path $stageRoot "watchdog-server.ps1") -Force
 Copy-Item -LiteralPath (Join-Path $serverDeployRoot "README-server.md") -Destination (Join-Path $stageRoot "README-server.md") -Force
 
 if ($IncludeData) {
