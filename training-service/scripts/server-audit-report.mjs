@@ -130,9 +130,13 @@ function auditScopeNotes() {
   ];
   if (hasAuthRequiredProbe()) {
     notes.push("本轮本地环境未配置 `TRAINING_ACCESS_KEY`，生产受保护接口返回 `401 auth_required` 属于预期鉴权拦截；完整业务链路需在服务器本机或带 `--access-key` 复跑。");
+  } else if (inventory?.apiProbes?.length) {
+    notes.push("本轮已使用访问密钥完成生产受保护只读接口探测；写入、合成数据导入和极限压测仍需在隔离副本执行。");
   }
   if (perf?.publicOnly) {
     notes.push("本轮性能数据为生产公开端点只读基线，不包含受保护 RAG、Agent、写入、导入或备份链路。");
+  } else if (perf?.levels?.length) {
+    notes.push("本轮性能数据为生产带鉴权只读接口基线，不包含写入、导入、embedding 或备份任务压测。");
   }
   return notes.map((note) => `- ${note}`).join("\n");
 }
@@ -140,7 +144,15 @@ function auditScopeNotes() {
 function perfEvidenceLine() {
   if (!maxConcurrency()) return "生产公开端点压测待采集。";
   const last = [...(perf?.levels || [])].sort((left, right) => Number(right.concurrency) - Number(left.concurrency))[0];
-  return `完成生产公开端点 ${maxConcurrency()} 并发 60 秒基线压测，最高 ${bestRps()} RPS，最高并发档 p99=${last?.summary?.p99Ms ?? "-"} ms，错误率 ${(last?.summary?.errorRate * 100 || 0).toFixed(2)}%。`;
+  const scope = perf?.publicOnly ? "生产公开端点" : "生产带鉴权只读接口";
+  return `完成${scope} ${maxConcurrency()} 并发 60 秒基线压测，最高 ${bestRps()} RPS，最高并发档 p99=${last?.summary?.p99Ms ?? "-"} ms，错误率 ${(last?.summary?.errorRate * 100 || 0).toFixed(2)}%。`;
+}
+
+function riskList() {
+  if (hasAuthRequiredProbe()) {
+    return "- RISK-AUTH-001 [P2] 本轮未拿到服务器访问密钥，受保护接口、真实服务器数据目录、写入链路和隔离副本极限压测尚未完成。建议：在服务器本机执行 `backup-server.ps1` 后复制数据目录到隔离副本，设置独立 `TRAINING_DATA_DIR` 和端口，并使用 `--access-key` 复跑 `server-audit:*`。";
+  }
+  return "- RISK-WRITE-001 [P2] 本轮已完成生产受保护只读接口探测和压测，但写入链路、合成数据导入、embedding 任务、备份任务和员工闭环仍未在隔离副本极限压测。建议：先运行服务器备份，再复制数据目录到 `127.0.0.1:18787` 隔离副本，使用 `--allow-write` 分档压测。";
 }
 
 const auditMd = `# 钜洲培训 Agent 性能与排障审计报告
@@ -184,7 +196,7 @@ ${perfTable()}
 
 ${bugList()}
 
-- RISK-AUTH-001 [P2] 本轮未拿到服务器访问密钥，受保护接口、真实服务器数据目录、写入链路和隔离副本极限压测尚未完成。建议：在服务器本机执行 \`backup-server.ps1\` 后复制数据目录到隔离副本，设置独立 \`TRAINING_DATA_DIR\` 和端口，并使用 \`--access-key\` 复跑 \`server-audit:*\`。
+${riskList()}
 
 ## 7. 结论
 
@@ -209,7 +221,7 @@ const resumeMd = `# 钜洲培训 Agent 简历证据
 | 功能回归用例 | ${functional?.total ? `${functional.ok}/${functional.total} 通过` : "待采集"} |
 | 合成数据规模 | ${synthetic?.corpora?.length ? synthetic.corpora.map((item) => `${item.name}:${item.count}`).join(", ") : "待采集"} |
 
-> 当前数字来自本地可读数据目录和生产公开端点只读基线；受保护服务器链路需要访问密钥后复跑，不把未验证结果写成已完成成果。
+> 当前数字来自本地可读数据目录和生产只读接口基线；写入、导入、embedding、备份任务和员工闭环仍需在隔离副本复跑，不把未验证结果写成已完成成果。
 
 ## 简历 Bullet 候选
 
@@ -223,7 +235,7 @@ const resumeMd = `# 钜洲培训 Agent 简历证据
 
 ## 面试表达
 
-我不仅实现了培训 Agent 的功能闭环，还补了一套服务器审计体系：先对生产服务做只读健康检查，再在同服务器隔离副本上用真实资料和合成资料做极限压测，记录 p95/p99、RPS、错误率、RAG 命中率、任务耗时和备份恢复结果。本轮已经完成生产公开端点 60 秒阶梯基线、合成资料生成和本地核心回归快测；受保护链路会在服务器本机或带访问密钥后继续复跑。所有数据都会落到 JSON 和 Markdown 报告里，方便复盘 bug，也方便把项目成果量化写进简历。
+我不仅实现了培训 Agent 的功能闭环，还补了一套服务器审计体系：先对生产服务做只读健康检查，再在同服务器隔离副本上用真实资料和合成资料做极限压测，记录 p95/p99、RPS、错误率、RAG 命中率、任务耗时和备份恢复结果。本轮已经完成生产带鉴权只读接口 60 秒阶梯基线、合成资料生成和本地核心回归快测；写入和任务链路会在隔离副本继续复跑。所有数据都会落到 JSON 和 Markdown 报告里，方便复盘 bug，也方便把项目成果量化写进简历。
 `;
 
 await mkdir(docsDir, { recursive: true });

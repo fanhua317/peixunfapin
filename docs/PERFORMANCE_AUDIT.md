@@ -6,9 +6,9 @@
 
 | 项目 | 状态 |
 | --- | --- |
-| 环境与数据盘点 | 已采集：`training-service\server-audit-output\inventory-20260624-230910.json` |
+| 环境与数据盘点 | 已采集：`training-service\server-audit-output\inventory-20260624-232050.json` |
 | 功能回归 | 已采集：`training-service\server-audit-output\functional-20260624-231154.json` |
-| 性能压测 | 已采集：`training-service\server-audit-output\perf-20260624-230750.json` |
+| 性能压测 | 已采集：`training-service\server-audit-output\perf-20260624-232410.json` |
 | 合成数据 | 已采集：`training-service\server-audit-output\synthetic-20260624-230439.json` |
 
 > 生产端口只做只读基线；写入、合成数据和极限压测必须打隔离副本，避免污染线上业务数据。
@@ -16,8 +16,8 @@
 本轮采集边界：
 
 - 数据目录规模来自本次命令可读取的 `D:\juzhou-agent\data\training-index`；如果要采集服务器真实磁盘与计划任务，应在服务器本机执行同一组命令。
-- 本轮本地环境未配置 `TRAINING_ACCESS_KEY`，生产受保护接口返回 `401 auth_required` 属于预期鉴权拦截；完整业务链路需在服务器本机或带 `--access-key` 复跑。
-- 本轮性能数据为生产公开端点只读基线，不包含受保护 RAG、Agent、写入、导入或备份链路。
+- 本轮已使用访问密钥完成生产受保护只读接口探测；写入、合成数据导入和极限压测仍需在隔离副本执行。
+- 本轮性能数据为生产带鉴权只读接口基线，不包含写入、导入、embedding 或备份任务压测。
 
 ## 2. 数据规模
 
@@ -41,11 +41,11 @@
 
 | 接口 | 状态 | 延迟 | 备注 |
 | --- | --- | --- | --- |
-| /api/auth/status | 200 | 98 ms | ok |
-| /api/health | 401 | 67 ms | auth_required |
-| /api/knowledge-bases | 401 | 36 ms | auth_required |
-| /api/jobs | 401 | 33 ms | auth_required |
-| /api/agent-runs?limit=50 | 401 | 37 ms | auth_required |
+| /api/auth/status | 200 | 127 ms | ok |
+| /api/health | 200 | 1334 ms | ok |
+| /api/knowledge-bases | 200 | 131 ms | ok |
+| /api/jobs | 200 | 51 ms | ok |
+| /api/agent-runs?limit=50 | 200 | 94 ms | ok |
 
 ## 4. 功能回归
 
@@ -59,15 +59,15 @@
 
 | 类型 | 并发 | RPS | p95 | p99 | 错误率 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| read | 1 | 31.23 | 34 ms | 50 ms | 0.00% |
-| read | 5 | 160.95 | 35 ms | 37 ms | 0.00% |
-| read | 10 | 324.92 | 35 ms | 36 ms | 0.00% |
+| read | 1 | 8.74 | 282 ms | 690 ms | 0.00% |
+| read | 5 | 14.34 | 829 ms | 1440 ms | 0.00% |
+| read | 10 | 15.18 | 1766 ms | 2109 ms | 0.00% |
 
 ## 6. Bug 与风险记录
 
 - 本轮已采集数据中没有形成明确 bug；继续跑完整服务器极限压测后刷新本节。
 
-- RISK-AUTH-001 [P2] 本轮未拿到服务器访问密钥，受保护接口、真实服务器数据目录、写入链路和隔离副本极限压测尚未完成。建议：在服务器本机执行 `backup-server.ps1` 后复制数据目录到隔离副本，设置独立 `TRAINING_DATA_DIR` 和端口，并使用 `--access-key` 复跑 `server-audit:*`。
+- RISK-WRITE-001 [P2] 本轮已完成生产受保护只读接口探测和压测，但写入链路、合成数据导入、embedding 任务、备份任务和员工闭环仍未在隔离副本极限压测。建议：先运行服务器备份，再复制数据目录到 `127.0.0.1:18787` 隔离副本，使用 `--allow-write` 分档压测。
 
 ## 7. 结论
 
