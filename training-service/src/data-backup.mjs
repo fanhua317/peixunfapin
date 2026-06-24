@@ -33,6 +33,21 @@ function timestampForFile(date = new Date()) {
   return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
 }
 
+function parseNonNegativeInteger(value, label) {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${label} must be a non-negative integer.`);
+  }
+  return parsed;
+}
+
+function normalizeTime(value, label) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) throw new Error(`${label} is not a valid date.`);
+  return date;
+}
+
 function sha256(buffer) {
   return createHash("sha256").update(buffer).digest("hex");
 }
@@ -145,10 +160,11 @@ export async function createDataBackup(options = {}) {
     await copyVectorIndexes(stagingDir);
 
     const stagedFiles = (await collectFiles(stagingDir)).filter((file) => file.path !== "manifest.json");
+    const createdAt = normalizeTime(options.createdAt, "createdAt").toISOString();
     const manifest = {
       kind: BACKUP_KIND,
       version: BACKUP_MANIFEST_VERSION,
-      createdAt: new Date().toISOString(),
+      createdAt,
       project: {
         name: packageInfo.name,
         version: packageInfo.version,
@@ -171,13 +187,22 @@ export async function createDataBackup(options = {}) {
     const zipped = zipSync(zipEntries, { level: 6 });
     await writeFile(backupPath, Buffer.from(zipped));
     const backupStats = await stat(backupPath);
-    return {
+    const summary = {
       ok: true,
       backupPath,
       bytes: backupStats.size,
       fileCount: manifest.files.length,
       manifest,
     };
+    const retention = await pruneDataBackups({
+      dir: path.dirname(backupPath),
+      retentionDays: options.retentionDays,
+      keepLast: options.keepLast,
+      now: options.now,
+      protectPaths: [backupPath],
+    });
+    if (retention.applied) summary.retention = retention;
+    return summary;
   } finally {
     closeTrainingDatabase();
     await rm(stagingDir, { recursive: true, force: true });
@@ -197,6 +222,114 @@ function parseManifest(entries) {
   if (manifest.kind !== BACKUP_KIND) throw new Error(`Unsupported backup kind: ${manifest.kind || ""}`);
   if (manifest.version !== BACKUP_MANIFEST_VERSION) throw new Error(`Unsupported backup manifest version: ${manifest.version}`);
   return manifest;
+}
+
+async function inspectBackupZip(filePath) {
+  const stats = await stat(filePath);
+  if (!stats.isFile() || path.extname(filePath).toLowerCase() !== ".zip") return null;
+  try {
+    const entries = getZipEntries(filePath);
+    const manifest = parseManifest(entries);
+    const createdAtMs = Date.parse(manifest.createdAt || "");
+    return {
+      path: filePath,
+      manifest,
+      createdAtMs: Number.isFinite(createdAtMs) ? createdAtMs : stats.mtimeMs,
+      size: stats.size,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizedPathKey(filePath) {
+  return path.resolve(filePath).toLowerCase();
+}
+
+export async function pruneDataBackups(options = {}) {
+  const retentionDays = parseNonNegativeInteger(options.retentionDays, "retentionDays");
+  const keepLast = parseNonNegativeInteger(options.keepLast, "keepLast");
+  const backupDir = path.resolve(options.dir || options.backupDir || path.join(dataDir, "backups"));
+  const protectPaths = new Set((options.protectPaths || []).map(normalizedPathKey));
+  const now = normalizeTime(options.now, "now");
+
+  if (retentionDays === null && keepLast === null) {
+    return {
+      ok: true,
+      applied: false,
+      backupDir,
+      scanned: 0,
+      deleted: [],
+      kept: [],
+    };
+  }
+
+  const entries = await readdir(backupDir, { withFileTypes: true }).catch((error) => {
+    if (error && error.code === "ENOENT") return [];
+    throw error;
+  });
+  const backups = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const inspected = await inspectBackupZip(path.join(backupDir, entry.name));
+    if (inspected) backups.push(inspected);
+  }
+  backups.sort((left, right) => {
+    if (right.createdAtMs !== left.createdAtMs) return right.createdAtMs - left.createdAtMs;
+    return right.path.localeCompare(left.path);
+  });
+
+  const keepLatest = new Set();
+  if (keepLast !== null) {
+    for (const backup of backups.slice(0, keepLast)) keepLatest.add(normalizedPathKey(backup.path));
+  }
+
+  const cutoffMs = retentionDays === null ? null : now.getTime() - (retentionDays * 24 * 60 * 60 * 1000);
+  const deleted = [];
+  const kept = [];
+  for (const backup of backups) {
+    const key = normalizedPathKey(backup.path);
+    let reason = "";
+    if (protectPaths.has(key)) {
+      reason = "protected";
+    } else if (keepLatest.has(key)) {
+      reason = "keep-last";
+    } else if (cutoffMs !== null && backup.createdAtMs < cutoffMs) {
+      await unlink(backup.path);
+      deleted.push({
+        path: backup.path,
+        createdAt: backup.manifest.createdAt || new Date(backup.createdAtMs).toISOString(),
+        reason: "older-than-retention",
+      });
+      continue;
+    } else if (cutoffMs === null && keepLast !== null && !keepLatest.has(key)) {
+      await unlink(backup.path);
+      deleted.push({
+        path: backup.path,
+        createdAt: backup.manifest.createdAt || new Date(backup.createdAtMs).toISOString(),
+        reason: "over-keep-last",
+      });
+      continue;
+    } else {
+      reason = "within-retention";
+    }
+    kept.push({
+      path: backup.path,
+      createdAt: backup.manifest.createdAt || new Date(backup.createdAtMs).toISOString(),
+      reason,
+    });
+  }
+
+  return {
+    ok: true,
+    applied: true,
+    backupDir,
+    retentionDays,
+    keepLast,
+    scanned: backups.length,
+    deleted,
+    kept,
+  };
 }
 
 async function verifySqliteBytes(data) {

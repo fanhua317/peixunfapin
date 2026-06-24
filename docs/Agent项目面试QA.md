@@ -1,6 +1,6 @@
 # Agent 项目面试 QA
 
-更新时间：2026-06-18
+更新时间：2026-06-24
 
 本文按真实项目实现整理，用于面试时解释钜洲培训 Agent 的技术选型、架构取舍、RAG、Agent 路由、记忆、部署和安全治理。
 
@@ -190,7 +190,7 @@ A：为了兼容旧数据、导出备份和回滚。`state.json meta.version = 1
 
 ### Q42：备份恢复怎么做？
 
-A：`backup:data` 使用 SQLite backup API 生成一致快照，并打包 JSONL、向量索引和 JSON 兼容副本；`restore:data` 必须带 `--force`，恢复前自动备份当前数据。
+A：`backup:data` 使用 SQLite backup API 生成一致快照，并打包 JSONL、向量索引和 JSON 兼容副本；可以传 `--retention-days` 和 `--keep-last` 清理旧备份，但只会删除带钜洲备份 manifest 的 ZIP。`restore:data` 必须带 `--force`，恢复前自动备份当前数据。
 
 ## 9. 安全与可靠性
 
@@ -216,7 +216,7 @@ A：普通聊天、翻译和生成类任务返回明确错误；操作类意图�
 
 ### Q47-1：线上服务怎么保证长期运行？
 
-A：当前 Windows Server 不额外引入 PM2、NSSM 或 Docker 进程管理，而是使用两层计划任务。主任务 `JuzhouAgentTraining` 以 `SYSTEM` 运行 `start-server.ps1`，把 `ExecutionTimeLimit` 改成 `PT0S`，避免 72 小时自动终止，并配置 1 分钟间隔的短失败重启。第二个任务 `JuzhouAgentTrainingWatchdog` 每 5 分钟检查 8787 端口、首页和 `/api/health`，如果端口或 HTTP 不通就停止异常主任务并重新启动。`/api/health` 未带密钥返回 `401` 是正常鉴权。启动脚本追加 `logs/server.log`，watchdog 写 `logs/watchdog.log`，方便判断是正常退出、崩溃还是被系统杀掉。
+A：当前 Windows Server 不额外引入 PM2、NSSM 或 Docker 进程管理，而是使用计划任务。主任务 `JuzhouAgentTraining` 以 `SYSTEM` 运行 `start-server.ps1`，把 `ExecutionTimeLimit` 改成 `PT0S`，避免 72 小时自动终止，并配置 1 分钟间隔的短失败重启。第二个任务 `JuzhouAgentTrainingWatchdog` 每 5 分钟检查 8787 端口、首页和 `/api/health`，如果端口或 HTTP 不通就停止异常主任务并重新启动。第三个任务 `JuzhouAgentTrainingBackup` 可每天运行 `backup-server.ps1`，生成并校验运行数据备份，默认保留 14 天且至少保留最近 10 份。`/api/health` 未带密钥返回 `401` 是正常鉴权。启动脚本追加 `logs/server.log`，watchdog 写 `logs/watchdog.log`，备份写 `logs/backup.log`，方便判断是正常退出、崩溃、被系统杀掉还是备份失败。
 
 ## 10. 交互体验
 
@@ -262,7 +262,7 @@ A：适合作为素材库或视觉检索能力，但不应直接当产品事实�
 
 ### Q56：项目有哪些测试？
 
-A：有语法检查、烟测、RAG 评测、意图评测、记忆评测、Agent 轨迹评测、Trace 评测、SQLite 评测、备份评测、导入评测、任务评测、老板端聊天历史评测、多语言翻译评测和知识库版本评测。
+A：有语法检查、烟测、RAG 评测、意图评测、记忆评测、Agent 轨迹评测、Trace 评测、SQLite 评测、备份/恢复/保留策略评测、导入评测、任务评测、老板端聊天历史评测、多语言翻译评测和知识库版本评测。
 
 ### Q57：轨迹评测和意图评测区别是什么？
 
@@ -296,4 +296,4 @@ A：账号权限还比较简单；OCR/版面解析还不是自动化平台；SQL
 
 ### Q63：如果继续优化，优先做什么？
 
-A：优先补账号权限和公网安全、定时备份、资料治理自动化、报价/发布等独立 skill、更多轨迹评测和线上质量监控。
+A：优先补账号权限和公网安全、备份失败告警与异地副本、资料治理自动化、报价/发布等独立 skill、更多轨迹评测和线上质量监控。

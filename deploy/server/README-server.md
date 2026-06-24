@@ -71,17 +71,27 @@ $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seco
 Register-ScheduledTask -TaskName "JuzhouAgentTrainingWatchdog" -Action $action -Trigger $trigger -Settings $settings -User "SYSTEM" -RunLevel Highest -Force
 ```
 
-The start script installs production dependencies with `npm ci --omit=dev`, including the native SQLite module. It appends to `logs\server.log` and records the Node path, key environment summary, and exit code instead of overwriting the log. The watchdog checks port `8787`, `/`, and `/api/health`; a `401` from `/api/health` is normal when the access key is required. Watchdog events are written to `logs\watchdog.log`.
+For daily local backups with retention, register `backup-server.ps1` as a third task:
+
+```powershell
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File C:\apps\JuzhouAgentTrainingServer\backup-server.ps1"
+$trigger = New-ScheduledTaskTrigger -Daily -At 3:20am
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 2) -MultipleInstances IgnoreNew -StartWhenAvailable
+Register-ScheduledTask -TaskName "JuzhouAgentTrainingBackup" -Action $action -Trigger $trigger -Settings $settings -User "SYSTEM" -RunLevel Highest -Force
+```
+
+The start script installs production dependencies with `npm ci --omit=dev`, including the native SQLite module. It appends to `logs\server.log` and records the Node path, key environment summary, and exit code instead of overwriting the log. The watchdog checks port `8787`, `/`, and `/api/health`; a `401` from `/api/health` is normal when the access key is required. Watchdog events are written to `logs\watchdog.log`. The backup task writes `logs\backup.log`, verifies the new ZIP, and defaults to `TRAINING_BACKUP_RETENTION_DAYS=14` and `TRAINING_BACKUP_KEEP_LAST=10`.
 
 Useful checks:
 
 ```powershell
-Get-ScheduledTask -TaskName JuzhouAgentTraining,JuzhouAgentTrainingWatchdog | Select TaskName,State
+Get-ScheduledTask -TaskName JuzhouAgentTraining,JuzhouAgentTrainingWatchdog,JuzhouAgentTrainingBackup | Select TaskName,State
 Export-ScheduledTask -TaskName JuzhouAgentTraining | Select-String ExecutionTimeLimit
 Get-NetTCPConnection -LocalPort 8787 -State Listen
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8787/
 Get-Content .\logs\server.log -Tail 80
 Get-Content .\logs\watchdog.log -Tail 80
+Get-Content .\logs\backup.log -Tail 80
 ```
 
 ## Data
@@ -108,11 +118,12 @@ Runtime backup commands:
 ```bash
 cd training-service
 npm run backup:data
+npm run backup:data -- --retention-days 14 --keep-last 10
 npm run backup:verify -- --from /path/to/training-backup.zip
 npm run restore:data -- --from /path/to/training-backup.zip --force
 ```
 
-Stop the service before a real restore. The restore command verifies the ZIP and creates a safety backup before overwriting `training.db`.
+Retention only deletes ZIP files that contain a valid Juzhou backup manifest, so unrelated archives in the directory are ignored. Stop the service before a real restore. The restore command verifies the ZIP and creates a safety backup before overwriting `training.db`.
 
 ## LLM
 

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -13,6 +13,16 @@ const { loadState, mutateState } = await import("../src/store.mjs");
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+async function fileExists(filePath) {
+  try {
+    await stat(filePath);
+    return true;
+  } catch (error) {
+    if (error && error.code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 const results = [];
@@ -56,6 +66,28 @@ try {
   const verified = await verifyDataBackup({ from: backup.backupPath });
   assert(verified.ok && verified.verifiedFiles.includes("training.db"), "expected verified sqlite backup");
   results.push({ name: "backup verified", ok: true });
+
+  const retentionDir = path.join(tempDir, "retention-backups");
+  const oldBackup = await createDataBackup({
+    out: retentionDir,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  });
+  const keepBackup = await createDataBackup({
+    out: retentionDir,
+    createdAt: "2026-01-10T00:00:00.000Z",
+  });
+  const retentionBackup = await createDataBackup({
+    out: retentionDir,
+    createdAt: "2026-01-20T00:00:00.000Z",
+    now: "2026-01-20T00:00:00.000Z",
+    retentionDays: 7,
+    keepLast: 2,
+  });
+  assert(retentionBackup.retention?.deleted?.some((item) => item.path === oldBackup.backupPath), "expected old backup to be pruned");
+  assert(!(await fileExists(oldBackup.backupPath)), "old backup should be deleted");
+  assert(await fileExists(keepBackup.backupPath), "keep-last backup should be retained");
+  assert(await fileExists(retentionBackup.backupPath), "new backup should be retained");
+  results.push({ name: "backup retention prunes old files and keeps latest", ok: true });
 
   const dryRestore = await restoreDataBackup({ from: backup.backupPath });
   assert(dryRestore.ok && !dryRestore.restored && dryRestore.requiresForce, "restore without force should only verify");

@@ -132,11 +132,12 @@ render:pdf 渲染页面图片
 ```powershell
 cd D:\juzhou-agent\peixun\training-service
 npm run backup:data
+npm run backup:data -- --retention-days 14 --keep-last 10
 npm run backup:verify -- --from D:\juzhou-agent\data\training-index\backups\training-backup-YYYYMMDD-HHmmss.zip
 npm run restore:data -- --from D:\juzhou-agent\data\training-index\backups\training-backup-YYYYMMDD-HHmmss.zip --force
 ```
 
-恢复前应停止服务。恢复脚本会校验 ZIP，并在覆盖前自动生成当前数据的安全备份。
+保留策略只会清理带有钜洲备份 manifest 的 ZIP，不会删除同目录下其他压缩包。恢复前应停止服务；恢复脚本会校验 ZIP，并在覆盖前自动生成当前数据的安全备份。
 
 ## 打包部署
 
@@ -158,7 +159,8 @@ Windows Server 当前推荐用计划任务长期运行：
 
 - 主任务 `JuzhouAgentTraining` 运行 `start-server.ps1`，`ExecutionTimeLimit=PT0S`，避免 72 小时后被任务计划程序终止。
 - 守护任务 `JuzhouAgentTrainingWatchdog` 每 5 分钟检查 `8787`、首页和 `/api/health`；未带访问密钥的 `/api/health` 返回 `401` 仍视为服务存活。
-- 运行日志在部署目录的 `logs\server.log`，守护日志在 `logs\watchdog.log`；`start-server.ps1` 追加日志并记录 Node 路径、关键环境变量摘要和退出码。
+- 备份任务 `JuzhouAgentTrainingBackup` 可每天运行 `backup-server.ps1`，默认生成备份后校验，并保留 14 天且至少保留最近 10 份。
+- 运行日志在部署目录的 `logs\server.log`，守护日志在 `logs\watchdog.log`，备份日志在 `logs\backup.log`；`start-server.ps1` 追加日志并记录 Node 路径、关键环境变量摘要和退出码。
 
 更细的部署说明见：
 

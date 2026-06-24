@@ -1,6 +1,6 @@
 # 钜洲培训 Agent 项目总览
 
-更新时间：2026-06-17
+更新时间：2026-06-24
 
 ## 1. 项目定位
 
@@ -272,13 +272,14 @@ Node service + SQLite + local files + optional Ollama
 ```text
 Scheduled Task: JuzhouAgentTraining
 Scheduled Task: JuzhouAgentTrainingWatchdog
+Scheduled Task: JuzhouAgentTrainingBackup
 SQLite
 vector-index-bge-m3.json
 optional Ollama bge-m3 query embedding
 DeepSeek/OpenAI-compatible chat API
 ```
 
-线上 Windows Server 采用“主计划任务 + watchdog”方式保持服务长期在线。`JuzhouAgentTraining` 运行 `start-server.ps1`，`ExecutionTimeLimit=PT0S`，并配置 1 分钟间隔的短失败重启；`JuzhouAgentTrainingWatchdog` 每 5 分钟检查 8787 端口、首页和 `/api/health`，无响应时拉起主任务。服务日志追加到 `logs\server.log`，watchdog 日志写入 `logs\watchdog.log`。未带访问密钥访问 `/api/health` 返回 `401` 是正常鉴权，不算宕机。
+线上 Windows Server 采用“主计划任务 + watchdog + 备份任务”方式保持服务长期在线并降低数据丢失风险。`JuzhouAgentTraining` 运行 `start-server.ps1`，`ExecutionTimeLimit=PT0S`，并配置 1 分钟间隔的短失败重启；`JuzhouAgentTrainingWatchdog` 每 5 分钟检查 8787 端口、首页和 `/api/health`，无响应时拉起主任务；`JuzhouAgentTrainingBackup` 建议每天运行 `backup-server.ps1`，生成 ZIP 后立即校验，并按默认 14 天/最近 10 份策略清理旧备份。服务日志追加到 `logs\server.log`，watchdog 日志写入 `logs\watchdog.log`，备份日志写入 `logs\backup.log`。未带访问密钥访问 `/api/health` 返回 `401` 是正常鉴权，不算宕机。
 
 Qdrant 是可选部署，不是低并发轻量服务器默认项。使用 Qdrant 时，需要单独备份 volume 或 snapshot。
 
@@ -301,6 +302,9 @@ Qdrant 是可选部署，不是低并发轻量服务器默认项。使用 Qdrant
 | `OLLAMA_URL` | Ollama 地址 |
 | `PUBLIC_BASE_URL` | 固定邀请链接域名 |
 | `TRAINING_AGENT_TRACE` | 是否写入脱敏 trace |
+| `TRAINING_BACKUP_RETENTION_DAYS` | `backup-server.ps1` 默认保留天数 |
+| `TRAINING_BACKUP_KEEP_LAST` | `backup-server.ps1` 至少保留的最近备份份数 |
+| `TRAINING_BACKUP_OUT` | 备份输出目录或指定 ZIP 路径 |
 
 ## 13. 验证体系
 
@@ -324,7 +328,7 @@ npm run eval:kb-versions
 git diff --check
 ```
 
-RAG 评测集当前维护在 `scripts/fixtures/rag-eval-cases.mjs`，覆盖型号参数、结构原理、制造工艺、销售场景、多语言和标准资料。默认先看 retrieval-only 的 Top1、Top3 和 hybrid 不低于 BM25 的情况。
+RAG 评测集当前维护在 `scripts/fixtures/rag-eval-cases.mjs`，覆盖型号参数、结构原理、制造工艺、销售场景、多语言和标准资料。默认先看 retrieval-only 的 Top1、Top3 和 hybrid 不低于 BM25 的情况。备份评测覆盖 SQLite 快照、JSONL/向量索引打包、校验、强制恢复和备份保留策略。
 翻译评测 `npm run eval:translation` 不依赖真实模型质量：脚本使用临时数据目录和本地 OpenAI-compatible mock，覆盖显式目标语言、默认目标语言、无正文追问、老板端上一条正文上下文、正文在前且翻译指令在末尾、长文本不静默截断、LLM API 缺失错误、`翻译成英文：这是一台水泵` 和 boss-chat 持久化，并断言“生成英文文章，同时附带中文翻译”不会被翻译 parser 抢走。
 
 本轮项目文档只同步 Markdown 文档和桌面 QA 镜像，不做 Word 导出。
@@ -344,7 +348,7 @@ RAG 评测集当前维护在 `scripts/fixtures/rag-eval-cases.mjs`，覆盖型�
 短期：
 
 - 完善导入页面的质量说明和批量资料治理体验。
-- 增加定时备份和备份保留策略。
+- 增加备份失败告警、异地副本和恢复演练记录。
 - 扩展更多业务资料的语义切片规则。
 
 中期：

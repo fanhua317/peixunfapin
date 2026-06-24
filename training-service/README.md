@@ -48,6 +48,8 @@ TRAINING_DATA_DIR=D:\juzhou-agent\data\training-index
 TRAINING_STORAGE=sqlite
 TRAINING_SQLITE_PATH=D:\juzhou-agent\data\training-index\training.db
 TRAINING_ACCESS_KEY=...
+TRAINING_BACKUP_RETENTION_DAYS=14
+TRAINING_BACKUP_KEEP_LAST=10
 ```
 
 SQLite 是默认主存储；JSON 模式只作为兼容和回滚：
@@ -238,11 +240,13 @@ Trace 和 Agent Run 只保存脱敏摘要、消息预览、hash、意图、skill
 
 ```powershell
 npm run backup:data
+npm run backup:data -- --retention-days 14 --keep-last 10
 npm run backup:verify -- --from D:\juzhou-agent\data\training-index\backups\training-backup-YYYYMMDD-HHmmss.zip
 npm run restore:data -- --from D:\juzhou-agent\data\training-index\backups\training-backup-YYYYMMDD-HHmmss.zip --force
 ```
 
 备份包含 `training.db` 快照、JSONL、向量索引和导出的 `state.json` / `memory.json` 兼容副本。第一版不打包原始资料、Ollama 模型目录或 Qdrant volume。
+`backup:data` 的保留策略只识别带钜洲备份 manifest 的 ZIP；`--retention-days` 删除超过天数的旧备份，`--keep-last` 保证至少保留最近 N 份，新生成的备份始终保留。
 
 恢复前应停止服务；恢复命令必须带 `--force`，并会先自动备份当前数据。
 
@@ -348,13 +352,15 @@ Export-ScheduledTask -TaskName JuzhouAgentTraining | Out-File .\backups\JuzhouAg
 
 - `JuzhouAgentTraining`：以 `SYSTEM` 运行 `start-server.ps1`，`ExecutionTimeLimit=PT0S`，`RestartCount=3`，`RestartInterval=PT1M`，`StartWhenAvailable=true`。
 - `JuzhouAgentTrainingWatchdog`：每 5 分钟运行 `watchdog-server.ps1`，检查 `0.0.0.0:8787`、`http://127.0.0.1:8787/` 和 `/api/health`。线上 `/api/health` 未带密钥返回 `401` 属于正常鉴权，watchdog 视为健康。
+- `JuzhouAgentTrainingBackup`：建议每天运行 `backup-server.ps1`，脚本会加载 `.env`，执行 `backup:data`，校验新备份，并按默认 14 天/最近 10 份的策略清理旧备份。
 - `start-server.ps1` 不覆盖旧日志，会追加写入 `logs\server.log`，记录启动时间、Node 路径、工作目录、关键环境变量摘要和 Node 退出码。
 - `watchdog-server.ps1` 写入 `logs\watchdog.log`；如果主任务显示 Running 但端口或 HTTP 不通，会先停止主任务再重新启动。
+- `backup-server.ps1` 写入 `logs\backup.log`；可用 `TRAINING_BACKUP_RETENTION_DAYS`、`TRAINING_BACKUP_KEEP_LAST` 和 `TRAINING_BACKUP_OUT` 覆盖保留天数、最少份数和输出目录。
 
 常用排查命令：
 
 ```powershell
-Get-ScheduledTask -TaskName JuzhouAgentTraining,JuzhouAgentTrainingWatchdog | Select TaskName,State
+Get-ScheduledTask -TaskName JuzhouAgentTraining,JuzhouAgentTrainingWatchdog,JuzhouAgentTrainingBackup | Select TaskName,State
 Get-ScheduledTaskInfo -TaskName JuzhouAgentTraining
 Export-ScheduledTask -TaskName JuzhouAgentTraining | Select-String ExecutionTimeLimit
 Get-NetTCPConnection -LocalPort 8787 -State Listen
@@ -362,9 +368,10 @@ Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8787/
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8787/api/health
 Get-Content .\logs\server.log -Tail 80
 Get-Content .\logs\watchdog.log -Tail 80
+Get-Content .\logs\backup.log -Tail 80
 ```
 
-回滚方式：导入变更前备份的 `JuzhouAgentTraining` XML，恢复旧 `start-server.ps1`，并删除 `JuzhouAgentTrainingWatchdog` 任务。恢复运行数据前仍应先停服务。
+回滚方式：导入变更前备份的 `JuzhouAgentTraining` XML，恢复旧 `start-server.ps1`，并删除 `JuzhouAgentTrainingWatchdog` / `JuzhouAgentTrainingBackup` 任务。恢复运行数据前仍应先停服务。
 
 更完整的服务器说明见 [../deploy/server/README-server.md](../deploy/server/README-server.md)。
 
@@ -388,7 +395,7 @@ npm run eval:kb-versions
 git diff --check
 ```
 
-RAG 评测用例在 `scripts/fixtures/rag-eval-cases.mjs`，当前共 30 条，默认以 retrieval-only 的 Top1/Top3 命中和 hybrid 不低于 BM25 为主要门槛。
+RAG 评测用例在 `scripts/fixtures/rag-eval-cases.mjs`，当前共 30 条，默认以 retrieval-only 的 Top1/Top3 命中和 hybrid 不低于 BM25 为主要门槛。备份评测覆盖 SQLite 快照、JSONL/向量索引打包、校验、强制恢复和保留策略清理。
 翻译评测会创建临时 `TRAINING_DATA_DIR`，设置 `TRAINING_AUTH_DISABLED=1`，并启动本地 OpenAI-compatible mock 服务覆盖中英日西法、默认目标语言、缺正文追问、上一条老板端正文上下文、正文在前且翻译指令在末尾、长文本不静默截断、LLM API 缺失错误、`翻译成英文：这是一台水泵` 和 boss-chat 写入；同时断言“生成英文文章，同时附带中文翻译”不会被翻译 parser 抢走。
 
 当前文档和评测流程只维护 Markdown 项目文档和 QA 镜像，本轮不做 Word 导出。

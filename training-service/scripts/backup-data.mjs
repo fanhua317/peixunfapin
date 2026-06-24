@@ -7,6 +7,16 @@ function parseArgs(argv) {
     if (item === "--out") {
       args.out = argv[index + 1];
       index += 1;
+      continue;
+    }
+    if (item === "--retention-days") {
+      args.retentionDays = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (item === "--keep-last") {
+      args.keepLast = argv[index + 1];
+      index += 1;
     }
   }
   return args;
