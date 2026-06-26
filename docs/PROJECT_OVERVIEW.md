@@ -116,6 +116,8 @@ SQLite + JSONL + local vector index + clean documents
 
 第一版账号口径固定为 `boss-default`，目标是让同一服务和数据目录下的老板端会话跨浏览器/电脑可见。会话列表按最后一条真实消息的 `lastMessageAt` 倒序；服务会按消息记录修复旧的时间污染，`updatedAt` 只表示标题、预览、删除状态等元数据更新时间，不用于列表排序。旧 `localStorage` 记录不直接信任 HTML，只在用户确认后导入为安全文本 transcript。
 
+普通聊天的 WebSocket 流式输出只有收到 `done`、`result` 或 `error` 才进入终态。若连接在 `done` 前关闭，前端保留已收到正文并标记 `streamIncomplete: true`，显示“连接提前中断”并提供重新生成入口；OpenAI-compatible 流会解析 `finish_reason`，当 `finish_reason=length` 时返回 `finishReason: "length"` / `truncated: true`，提示回答可能达到模型输出上限。
+
 ### 多语言翻译
 
 ```text

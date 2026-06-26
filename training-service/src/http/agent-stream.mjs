@@ -237,9 +237,37 @@ async function handleStreamMessage(socket, raw, abortController) {
       return;
     }
 
-    const rawPayload = (decision.skill || decision.intent) === "answer_general_chat"
+    const isGeneralChat = (decision.skill || decision.intent) === "answer_general_chat";
+    const rawPayload = isGeneralChat
       ? await streamChat(socket, run, body, decision, memoryContext, abortController)
       : await executeSkillForStream(socket, run, state, body, decision, memoryContext);
+
+    if (isGeneralChat) {
+      sendWsJson(socket, { type: "done", action: "chat", payload: rawPayload });
+      try {
+        const payload = await recordRunStep(run.id, "memory_write", "apply_memory_after_turn", async () => (
+          await applyMemoryAfterTurn({
+            message: body.message,
+            payload: rawPayload,
+            memoryContext,
+            sessionId: body.sessionId,
+            memoryMode: body.memoryMode,
+          })
+        ), memoryWriteSummary);
+        await persistBossTurn({ body, payload, runId: run.id });
+        await traceAndFinish({ run, startedAt, body, decision, payload, confirmation });
+      } catch (postResponseError) {
+        console.warn("agent stream post-response persistence failed:", postResponseError instanceof Error ? postResponseError.message : String(postResponseError));
+        try {
+          await traceAndFinish({ run, startedAt, body, decision, payload: rawPayload, confirmation, error: postResponseError });
+        } catch (traceError) {
+          console.warn("agent stream post-response trace failed:", traceError instanceof Error ? traceError.message : String(traceError));
+        }
+      }
+      closeWebSocket(socket);
+      return;
+    }
+
     const payload = await recordRunStep(run.id, "memory_write", "apply_memory_after_turn", async () => (
       await applyMemoryAfterTurn({
         message: body.message,
@@ -251,12 +279,8 @@ async function handleStreamMessage(socket, raw, abortController) {
     ), memoryWriteSummary);
     await persistBossTurn({ body, payload, runId: run.id });
 
-    if (payload.action === "chat") {
-      sendWsJson(socket, { type: "done", action: "chat", payload });
-    } else {
-      sendWsJson(socket, { type: "result", payload });
-      sendWsJson(socket, { type: "done", action: payload.action });
-    }
+    sendWsJson(socket, { type: "result", payload });
+    sendWsJson(socket, { type: "done", action: payload.action });
     await traceAndFinish({ run, startedAt, body, decision, payload, confirmation });
     closeWebSocket(socket);
   } catch (error) {

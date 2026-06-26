@@ -14,6 +14,7 @@ import {
   intentDisplayName,
   isDraftConfirmationMessage,
   renderChatAnswer,
+  renderChatResult,
   renderDeleteRecordsResult,
   renderDraftCard,
   renderIntentConfirmResult,
@@ -360,6 +361,12 @@ function appendAgentResult(result, options = {}) {
   if (result.action === "local_transcript") {
     return appendAgentResultMessage(result, renderChatAnswer(result.transcript || result.answer || "已导入旧聊天记录。"), [], options);
   }
+  if (result.action === "chat_answer") {
+    return appendAgentResultMessage(result, renderChatResult(result), [], options);
+  }
+  if (result.action === "chat_error") {
+    return appendAgentResultMessage(result, `<p class="error-text">${escapeHtml(result.answer || result.error || "stream failed")}</p>`, [], options);
+  }
   return appendAgentResultMessage(result, renderChatAnswer(result.answer || result.transcript || "已处理。"), [], options);
 }
 
@@ -447,6 +454,42 @@ function setArticleBubble(article, html) {
   scrollToBottom();
 }
 
+function setArticleActions(article, actions = []) {
+  const bubble = article?.querySelector(".bubble");
+  if (!bubble) return;
+  bubble.querySelector(".message-actions")?.remove();
+  if (!actions.length) return;
+  const actionsWrap = document.createElement("div");
+  actionsWrap.className = "message-actions";
+  actions.forEach((action) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = action.label;
+    button.className = action.variant === "secondary" ? "secondary" : "";
+    button.addEventListener("click", () => action.onClick(button));
+    actionsWrap.append(button);
+  });
+  bubble.append(actionsWrap);
+}
+
+function retryStreamActions(message) {
+  return [{
+    label: "重新生成",
+    variant: "secondary",
+    onClick: async (button) => {
+      disableActionButtons(button);
+      if (button) button.textContent = "重新生成中...";
+      await dispatchUserMessage(message);
+    },
+  }];
+}
+
+function finishStreamArticle(article, result, actions = []) {
+  setArticleBubble(article, renderChatResult(result));
+  setArticleActions(article, actions);
+  recordAssistantResult(article, result);
+}
+
 async function dispatchUserMessageStream(message) {
   if (!("WebSocket" in window)) {
     const error = new Error("WebSocket unavailable");
@@ -516,24 +559,50 @@ async function dispatchUserMessageStream(message) {
         return;
       }
       if (data.type === "done") {
-        if (data.payload?.answer && data.payload.answer !== answer) {
-          answer = data.payload.answer;
+        const payload = data.payload || {};
+        if (payload.answer && payload.answer !== answer) {
+          answer = payload.answer;
         }
-        setArticleBubble(article, renderChatAnswer(answer));
-        recordAssistantResult(article, { action: "chat_answer", answer });
+        finishStreamArticle(article, {
+          action: "chat_answer",
+          answer,
+          finishReason: payload.finishReason || "",
+          truncated: payload.truncated === true || payload.finishReason === "length",
+          provider: payload.provider || "",
+          model: payload.model || "",
+        });
         finish();
         ws.close();
         return;
       }
       if (data.type === "error") {
-        setArticleBubble(article, `<p class="error-text">${escapeHtml(data.error || "stream failed")}</p>`);
-        recordAssistantResult(article, { action: "chat_error", answer: data.error || "stream failed" });
+        if (answer) {
+          finishStreamArticle(article, {
+            action: "chat_answer",
+            answer,
+            streamIncomplete: true,
+            error: data.error || "stream failed",
+          }, retryStreamActions(message));
+        } else {
+          setArticleBubble(article, `<p class="error-text">${escapeHtml(data.error || "stream failed")}</p>`);
+          recordAssistantResult(article, { action: "chat_error", answer: data.error || "stream failed" });
+        }
         finish();
         ws.close();
       }
     });
 
     ws.addEventListener("error", () => {
+      if (!settled && opened && answer) {
+        finishStreamArticle(article, {
+          action: "chat_answer",
+          answer,
+          streamIncomplete: true,
+          error: "WebSocket stream failed",
+        }, retryStreamActions(message));
+        finish();
+        return;
+      }
       const error = new Error(opened ? "WebSocket stream failed" : "WebSocket stream unavailable");
       error.streamUnavailable = !opened;
       fail(error);
@@ -541,8 +610,14 @@ async function dispatchUserMessageStream(message) {
 
     ws.addEventListener("close", () => {
       if (!settled) {
-        if (answer) finish();
-        else {
+        if (answer) {
+          finishStreamArticle(article, {
+            action: "chat_answer",
+            answer,
+            streamIncomplete: true,
+          }, retryStreamActions(message));
+          finish();
+        } else {
           const error = new Error("WebSocket stream closed before response");
           error.streamUnavailable = !opened;
           fail(error);

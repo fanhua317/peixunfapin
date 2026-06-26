@@ -63,6 +63,7 @@ export async function streamGeneralChat(message, { onDelta, signal, memoryContex
   }
   const config = assertGeneralChatConfigured();
   let answer = "";
+  let finishReason = "";
   for await (const event of streamOpenAiCompatibleLLM(text, {
     system: generalChatSystemPrompt(memoryContext),
     thinking: resolveThinking(text),
@@ -70,8 +71,11 @@ export async function streamGeneralChat(message, { onDelta, signal, memoryContex
     timeoutMs: GENERAL_CHAT_TIMEOUT_MS,
     signal,
   })) {
-    answer += event.delta;
-    if (onDelta) onDelta(event.delta, event);
+    if (event.delta) {
+      answer += event.delta;
+      if (onDelta) onDelta(event.delta, event);
+    }
+    if (event.finishReason) finishReason = event.finishReason;
   }
   if (!answer) throw new Error("LLM API returned no assistant content");
   return {
@@ -80,5 +84,6 @@ export async function streamGeneralChat(message, { onDelta, signal, memoryContex
     route: "general_chat",
     provider: "openai-compatible",
     model: config.model,
+    ...(finishReason ? { finishReason, truncated: finishReason === "length" } : {}),
   };
 }

@@ -365,6 +365,22 @@ export function renderChatAnswer(answer) {
   return `<div class="markdown-body">${renderMarkdown(answer || "")}</div>`;
 }
 
+export function renderChatResult(result = {}) {
+  const notices = [];
+  if (result.streamIncomplete) {
+    notices.push(result.error
+      ? `连接提前中断，以下为已收到内容。错误：${result.error}`
+      : "连接提前中断，以下为已收到内容，回答可能不完整。");
+  }
+  if (result.truncated || result.finishReason === "length") {
+    notices.push("达到模型输出上限，回答可能不完整。可以缩小问题范围后重新生成。");
+  }
+  const noticeHtml = notices.length
+    ? `<div class="warning-box">${notices.map((notice) => `<div>${escapeHtml(notice)}</div>`).join("")}</div>`
+    : "";
+  return `${noticeHtml}${renderChatAnswer(result.answer || "")}`;
+}
+
 export function renderStreamingAnswer(answer, stage) {
   return `${renderStageProgress(stage)}${answer ? renderChatAnswer(answer) : ""}`;
 }

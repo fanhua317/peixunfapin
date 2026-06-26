@@ -32,6 +32,30 @@ function isTemperatureOneRequiredError(message) {
   return /invalid temperature/i.test(String(message || "")) && /only\s+1\s+is\s+allowed/i.test(String(message || ""));
 }
 
+function completionFinishReason(choice = {}) {
+  return String(choice.finish_reason || choice.finishReason || "").trim();
+}
+
+function streamEventsFromLine(line, meta = {}) {
+  const trimmed = String(line || "").trim();
+  if (!trimmed || !trimmed.startsWith("data:")) return [];
+  const data = trimmed.slice(5).trim();
+  if (!data) return [];
+  if (data === "[DONE]") return [{ type: "done", ...meta }];
+  const payload = JSON.parse(data);
+  const choice = payload?.choices?.[0] || {};
+  const delta = choice.delta?.content || choice.text || "";
+  const finishReason = completionFinishReason(choice);
+  if (!delta && !finishReason) return [];
+  return [{
+    delta,
+    finishReason,
+    source: "llm-api",
+    provider: "openai-compatible",
+    ...meta,
+  }];
+}
+
 async function postChatCompletion(body, signal) {
   const response = await fetch(chatCompletionsUrl(resolveDirectBaseUrl()), {
     method: "POST",
@@ -121,7 +145,9 @@ export async function askOpenAiCompatibleLLM(message, options = {}) {
         throw error;
       }
     }
-    const answer = payload?.choices?.[0]?.message?.content || payload?.choices?.[0]?.text || "";
+    const choice = payload?.choices?.[0] || {};
+    const finishReason = completionFinishReason(choice);
+    const answer = choice.message?.content || choice.text || "";
     if (!answer) throw new Error("LLM API returned no assistant content");
     return {
       answer,
@@ -130,6 +156,7 @@ export async function askOpenAiCompatibleLLM(message, options = {}) {
       model,
       thinking: options.thinking || options.thinkingLevel,
       usage: payload?.usage,
+      ...(finishReason ? { finishReason, truncated: finishReason === "length" } : {}),
     };
   } finally {
     clearTimeout(timeout);
@@ -174,30 +201,47 @@ export async function* streamOpenAiCompatibleLLM(message, options = {}) {
     }
     const decoder = new TextDecoder();
     let buffer = "";
+    let completed = false;
+    let finishReason = "";
+    const meta = {
+      model,
+      thinking: options.thinking || options.thinkingLevel,
+    };
     for await (const chunk of stream) {
       buffer += decoder.decode(chunk, { stream: true });
       const lines = buffer.split(/\r?\n/);
       buffer = lines.pop() || "";
       for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith("data:")) continue;
-        const data = trimmed.slice(5).trim();
-        if (!data || data === "[DONE]") continue;
-        const payload = JSON.parse(data);
-        const choice = payload?.choices?.[0] || {};
-        const delta = choice.delta?.content || choice.text || "";
-        if (delta) {
-          yield {
-            delta,
-            source: "llm-api",
-            provider: "openai-compatible",
-            model,
-            thinking: options.thinking || options.thinkingLevel,
-          };
+        for (const event of streamEventsFromLine(line, meta)) {
+          if (event.type === "done") {
+            completed = true;
+            continue;
+          }
+          if (event.finishReason) {
+            finishReason = event.finishReason;
+            completed = true;
+          }
+          yield event;
         }
       }
     }
     buffer += decoder.decode();
+    if (buffer.trim()) {
+      for (const event of streamEventsFromLine(buffer, meta)) {
+        if (event.type === "done") {
+          completed = true;
+          continue;
+        }
+        if (event.finishReason) {
+          finishReason = event.finishReason;
+          completed = true;
+        }
+        yield event;
+      }
+    }
+    if (!completed && !finishReason) {
+      throw new Error("LLM API stream ended before completion marker");
+    }
   } finally {
     clearTimeout(timeout);
     if (options.signal) options.signal.removeEventListener("abort", abortFromCaller);

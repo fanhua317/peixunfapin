@@ -20,6 +20,7 @@
     "eval:import": "node scripts/eval-import.mjs",
     "eval:kb-versions": "node scripts/eval-kb-versions.mjs",
     "eval:jobs": "node scripts/eval-jobs.mjs",
+    "eval:streaming": "node scripts/eval-streaming.mjs",
     "eval:boss-chat": "node scripts/eval-boss-chat.mjs",
     "eval:translation": "node scripts/eval-translation.mjs",
     "eval:traces": "node scripts/eval-traces.mjs",
