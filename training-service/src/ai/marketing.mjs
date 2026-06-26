@@ -199,7 +199,7 @@ ${renderContext(chunks)}`;
     const result = await askLlmStructured({ purpose: `marketing:${knowledgeBase.id}:${Date.now()}`, prompt, profile, repairSchema: articleSchema });
     if (!result.data) throw modelRequiredError("营销软文生成", result.error || "大模型未返回结构化软文");
     const data = result.data || {};
-    const article = cleanAnswerText(data.article);
+    const article = cleanAnswerText(data.article, 5200);
     if (!article) throw modelRequiredError("营销软文生成", "大模型没有返回可显示正文");
     const normalizedSourceRefs = normalizeSourceRefs(data.sourceRefs, chunks);
     const modelWarnings = Array.isArray(data.warnings) ? data.warnings : [data.warnings].filter(Boolean);
@@ -209,7 +209,11 @@ ${renderContext(chunks)}`;
       article: compactMultiline(article, 5200),
       sellingPoints: uniqueStrings(data.sellingPoints).map((item) => cleanTrainingText(item)).filter(Boolean).slice(0, 8),
       sourceRefs: normalizedSourceRefs,
-      warnings: uniqueStrings([...warnings, ...modelWarnings]).slice(0, 8),
+      warnings: uniqueStrings([
+        ...warnings,
+        ...modelWarnings,
+        ...(result.truncated || result.finishReason === "length" ? ["model_output_truncated"] : []),
+      ]).slice(0, 8),
       sources: sourceObjects(chunks).filter((source) => normalizedSourceRefs.includes(source.sourceRef)),
       knowledgeBase: {
         id: knowledgeBase.id,
@@ -220,6 +224,8 @@ ${renderContext(chunks)}`;
       model: result.model || profile.model,
       sessionPatch: result.sessionPatch,
       runId: result.runId,
+      finishReason: result.finishReason || "",
+      truncated: result.truncated === true || result.finishReason === "length",
       repaired: result.repaired === true,
       retrievalMode: retrievalModeFromChunks(chunks),
       generatedAt: new Date().toISOString(),

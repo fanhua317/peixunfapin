@@ -21,6 +21,7 @@
     "eval:kb-versions": "node scripts/eval-kb-versions.mjs",
     "eval:jobs": "node scripts/eval-jobs.mjs",
     "eval:streaming": "node scripts/eval-streaming.mjs",
+    "eval:marketing-length": "node scripts/eval-marketing-length.mjs",
     "eval:boss-chat": "node scripts/eval-boss-chat.mjs",
     "eval:translation": "node scripts/eval-translation.mjs",
     "eval:traces": "node scripts/eval-traces.mjs",

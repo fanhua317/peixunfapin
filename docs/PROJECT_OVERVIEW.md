@@ -90,6 +90,7 @@ SQLite + JSONL + local vector index + clean documents
 ```
 
 当前版本不联网搜索。资料不足时返回“资料不足”，不编造产品参数。“请帮我生成三篇水泵的宣传文章，500词左右，英文”和“请帮我生成三篇英文文章，同时附带中文翻译”都属于 `generate_marketing_article`；后者的中文翻译是文章交付格式要求，不是单独的 `translate_text`。
+软文正文不再使用通用答疑清洗层的 1800 字符硬截断；结构化生成会透传 `finishReason` / `truncated`，如果模型达到输出上限，前端显示明确提示，而不是静默留下省略号。
 
 ### 老板端资料答疑
 
@@ -325,6 +326,8 @@ npm run eval:sqlite
 npm run eval:backup
 npm run eval:import
 npm run eval:jobs
+npm run eval:streaming
+npm run eval:marketing-length
 npm run eval:boss-chat
 npm run eval:translation
 npm run eval:kb-versions

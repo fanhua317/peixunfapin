@@ -108,6 +108,7 @@ ${renderContext(chunks)}`;
     if (!answer) warnings.push("empty_answer");
     if (!uniqueStrings(data.sourceRefs).length) warnings.push("model_missing_source_refs");
     if (answer.length > 900) warnings.push("answer_too_long");
+    if (result.truncated || result.finishReason === "length") warnings.push("model_output_truncated");
     return withAnswerMetadata({
       answer,
       keyPoints: uniqueStrings(data.keyPoints).map((item) => cleanTrainingText(item)).filter(Boolean).slice(0, 6),
@@ -120,6 +121,8 @@ ${renderContext(chunks)}`;
       model: result.model || profile.model,
       sessionPatch: result.sessionPatch,
       runId: result.runId,
+      finishReason: result.finishReason || "",
+      truncated: result.truncated === true || result.finishReason === "length",
       repaired: result.repaired === true,
       warnings,
     }, chunks);

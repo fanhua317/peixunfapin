@@ -290,6 +290,7 @@ POST   /api/boss-chat/import-local
 - `/api/chat`、`/api/agent/dispatch`、`/api/agent/draft` 和 `/api/agent/stream` 的老板端 turn 进入当前 `sessionId` 对应会话。
 - `/api/agent/stream` 的普通聊天只有收到 `done` 才视为完整结束；如果 WebSocket 在 `done` 前关闭，前端会保留已收到正文并标记 `streamIncomplete: true`，提示用户重新生成，不再把半截输出静默当成完成。
 - OpenAI-compatible 流式响应会解析 `finish_reason`；当 `finish_reason=length` 时，聊天 payload 带 `finishReason: "length"` 和 `truncated: true`，前端显示“达到模型输出上限，回答可能不完整”。
+- 软文、知识库答疑等结构化 JSON 生成也会透传 `finishReason` / `truncated`。营销软文正文清洗层不再固定裁到 1800 字符；当前按软文链路的正文上限保留，避免后端主动追加 `...` 造成“像没输出完”的错觉。
 - 会话列表按最后一条真实消息的 `lastMessageAt` 倒序；GET 读取会话、PATCH 标题/预览、前端恢复渲染只更新元数据，不应把会话顶到列表前面，只有追加新消息才会刷新排序时间。
 - 翻译 skill 的助手消息以 `action: "translation"` 保存；缺正文时的追问以 `action: "translation_request"` 保存。
 - 会话保留 30 天；过期会话和消息在读取/写入路径中清理或过滤。
@@ -392,6 +393,7 @@ npm run eval:backup
 npm run eval:import
 npm run eval:jobs
 npm run eval:streaming
+npm run eval:marketing-length
 npm run eval:boss-chat
 npm run eval:translation
 npm run eval:kb-versions

@@ -66,13 +66,13 @@ export function stripCodeFence(text) {
   return String(text || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
 }
 
-export function cleanAnswerText(value) {
+export function cleanAnswerText(value, maxLength = 1800) {
   return compactMultiline(String(value || "")
     .replace(/```(?:json)?/gi, "")
     .replace(/^#{1,6}\s*/gm, "")
     .replace(/^\s*[-*]\s*/gm, "")
     .replace(/[*_`>]/g, "")
-    .replace(/\n{3,}/g, "\n\n"), 1800);
+    .replace(/\n{3,}/g, "\n\n"), maxLength);
 }
 
 export function modelRequiredError(feature, error) {

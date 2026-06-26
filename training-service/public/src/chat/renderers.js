@@ -221,10 +221,21 @@ export function renderDeleteRecordsResult(result) {
   `;
 }
 
+function completionWarning(result = {}) {
+  return result.truncated || result.finishReason === "length"
+    ? `<div class="warning-box"><div>${escapeHtml("达到模型输出上限，回答可能不完整。可以缩小问题范围后重新生成。")}</div></div>`
+    : "";
+}
+
+function displayWarning(value) {
+  if (value === "model_output_truncated") return "达到模型输出上限，回答可能不完整。";
+  return String(value || "");
+}
+
 export function renderMarketingArticleResult(result) {
   const article = result.article || result || {};
   const warnings = (article.warnings || [])
-    .map((warning) => `<div>${escapeHtml(warning)}</div>`)
+    .map((warning) => `<div>${escapeHtml(displayWarning(warning))}</div>`)
     .join("");
   const sellingPoints = (article.sellingPoints || [])
     .map((point) => `<li>${escapeHtml(point)}</li>`)
@@ -254,6 +265,7 @@ export function renderMarketingArticleResult(result) {
       <h2>${escapeHtml(article.title || "营销软文")}</h2>
       ${article.summary ? `<p class="article-summary">${escapeHtml(article.summary)}</p>` : ""}
       ${meta ? `<p class="muted">${escapeHtml(meta)}</p>` : ""}
+      ${completionWarning(article)}
       ${warnings ? `<div class="warning-box">${warnings}</div>` : ""}
       ${sellingPoints ? `<div class="task-section-title">核心卖点</div><ul class="compact-list">${sellingPoints}</ul>` : ""}
       <div class="article-body">${body || "<p>未生成正文。</p>"}</div>
@@ -313,6 +325,7 @@ export function renderKnowledgeAnswerResult(result) {
     <div class="knowledge-answer">
       <p class="section-kicker">知识库答疑</p>
       ${meta ? `<p class="muted">${escapeHtml(meta)}</p>` : ""}
+      ${completionWarning(result)}
       <div class="markdown-body">${renderMarkdown(result.answer || "")}</div>
       ${keyPoints ? `<div class="task-section-title">要点</div><ul class="compact-list">${keyPoints}</ul>` : ""}
       ${caveats ? `<div class="task-section-title">注意</div><ul class="compact-list">${caveats}</ul>` : ""}
