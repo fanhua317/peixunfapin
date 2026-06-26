@@ -7,6 +7,7 @@ process.env.TRAINING_LLM_MODEL = "marketing-length-eval-mock";
 process.env.TRAINING_LLM_TIMEOUT_MS = "5000";
 
 let mockServer = null;
+let capturedPrompt = "";
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -25,7 +26,13 @@ async function readBody(req) {
 
 async function startMockServer() {
   mockServer = http.createServer(async (req, res) => {
-    await readBody(req);
+    const rawBody = await readBody(req);
+    try {
+      const body = JSON.parse(rawBody || "{}");
+      capturedPrompt = String(body.messages?.find((message) => message.role === "user")?.content || "");
+    } catch {
+      capturedPrompt = "";
+    }
     if (req.method !== "POST" || !String(req.url || "").endsWith("/chat/completions")) {
       res.writeHead(404, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: { message: "not found" } }));
@@ -97,12 +104,16 @@ try {
     instruction: "write a detailed YINJIA pump customer marketing article",
     memoryContext: { longTerm: [], recentMessages: [] },
   });
+  assert(/不要像通用 AI 模板/.test(capturedPrompt), "prompt should include anti-template AI-style guidance");
+  assert(/避免空泛套话、万能开头、过度排比和口号式结尾/.test(capturedPrompt), "prompt should discourage generic AI-style phrasing");
+  assert(/不得为了自然感新增资料外细节/.test(capturedPrompt), "prompt should preserve factual grounding while improving style");
   assert(result.article.length > 2400, `article should keep long content, got ${result.article.length}`);
   assert(!result.article.trim().endsWith("..."), "article should not be hard-cut with ellipsis");
   assert(result.finishReason === "stop", `finishReason should propagate, got ${result.finishReason}`);
   assert(result.truncated !== true, "stop finishReason should not be marked truncated");
   console.log(JSON.stringify({
     ok: true,
+    promptStyleGuidance: true,
     articleLength: result.article.length,
     finishReason: result.finishReason,
     truncated: result.truncated,

@@ -184,6 +184,9 @@ export async function generateMarketingArticle(state, { instruction, memoryConte
 - ${webSearchDisabled ? "用户提到了联网搜索，但当前系统没有联网搜索能力；文章只能写本地资料已支持的内容。" : "不要引用互联网、行业报告或未给出的市场数据。"}
 - 文章面向客户营销，适合${articleChannel(text, memoryPreferences)}，正文长度${articleLengthInstruction(text, memoryPreferences)}。
 - 语言要有销售转化感，但避免夸大、绝对化承诺和虚假排名。
+- 写法要像工业品业务人员或内容编辑写给真实客户看的文章：表达具体、克制、自然，不要像通用 AI 模板。
+- 避免空泛套话、万能开头、过度排比和口号式结尾，例如“在当今竞争激烈的市场环境下”“凭借卓越性能”“为客户提供优质解决方案”“开启新篇章”等。
+- 句长和段落长度要有变化，可以用贴近销售沟通的具体场景表达，但不得为了自然感新增资料外细节。
 - ${memoryPreferences.lines.length ? `用户长期偏好：${memoryPreferences.lines.join("；")}。当前输入若有明确要求，必须优先按当前输入。` : "没有可用的用户长期偏好。"}
 - sourceRefs 必须从这个列表中选择：${JSON.stringify(sourceRefs)}
 - 只能输出 JSON，不要 Markdown 包裹。
