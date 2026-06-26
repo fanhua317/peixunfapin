@@ -163,6 +163,29 @@ Recommended flow:
    ollama pull bge-m3
    ```
 
+   On Windows Server, keep Ollama running with a dedicated local-only scheduled task:
+
+   ```powershell
+   $serverRoot = "C:\apps\JuzhouAgentTrainingServer"
+   Copy-Item .\start-ollama.cmd $serverRoot -Force
+
+   $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$serverRoot\start-ollama.cmd`"" -WorkingDirectory $serverRoot
+   $trigger = New-ScheduledTaskTrigger -AtStartup
+   $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+   $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew -StartWhenAvailable
+   Register-ScheduledTask -TaskName "JuzhouAgentOllama" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force
+   Start-ScheduledTask -TaskName "JuzhouAgentOllama"
+   ```
+
+   Verify:
+
+   ```powershell
+   Get-ScheduledTask -TaskName JuzhouAgentOllama | Select TaskName,State
+   Get-NetTCPConnection -LocalPort 11434 -State Listen
+   Invoke-WebRequest -UseBasicParsing http://127.0.0.1:11434/api/tags
+   Get-Content .\logs\ollama-system.log -Tail 80
+   ```
+
 5. Use:
 
    ```env
@@ -172,4 +195,4 @@ Recommended flow:
    OLLAMA_URL=http://127.0.0.1:11434
    ```
 
-If Ollama or the vector index is unavailable, retrieval falls back to BM25. Qdrant remains an optional high-resource deployment path; when used, back up its volume or collection snapshot together with the application data.
+If Ollama or the vector index is unavailable, retrieval falls back to BM25. Qdrant remains an optional high-resource deployment path; when used, back up its volume or collection snapshot together with the application data. For local-vector deployments, `qdrantOk=false` in `/api/health` is expected as long as `ollamaOk=true`, `localVectorIndexOk=true`, and `retrievalMode=hybrid`.

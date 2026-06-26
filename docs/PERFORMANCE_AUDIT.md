@@ -1,6 +1,6 @@
 # 钜洲培训 Agent 性能与排障审计报告
 
-更新时间：2026-06-24
+更新时间：2026-06-26
 
 ## 1. 审计状态
 
@@ -12,6 +12,7 @@
 | 隔离副本写压测 | 已采集：`training-service\server-audit-output\perf-write-20260624-234948.json` |
 | 业务闭环 | 已采集：`training-service\server-audit-output\business-flow-20260624-235206.json` |
 | 导入与 embedding | 已采集：`training-service\server-audit-output\import-embed-final-20260624-235944.json` |
+| Embedding 后端恢复 | 已验证：2026-06-26 服务器本机 `JuzhouAgentOllama` 任务运行，`/api/embed` 返回 1024 维，`/api/health` 为 `ollamaOk=true`、`retrievalMode=hybrid` |
 | 备份恢复 | 已采集：`training-service\server-audit-output\backup-restore-20260624-235259.json` |
 | 合成数据 | 已采集：`training-service\server-audit-output\synthetic-20260624-230439.json` |
 
@@ -89,8 +90,19 @@
 | 环节 | 结果 | 指标/证据 |
 | --- | --- | --- |
 | 目录导入 | 通过 | 文件 20，父块 40，子块 40 |
-| embedding 任务 | 失败 | fetch failed |
-| 导入后健康 | 通过 | 知识库 3，文档 40，chunks 634，retrieval=bm25 |
+| embedding 任务 | 审计时失败；后续已恢复后端 | 原失败 `fetch failed`；2026-06-26 已启动 `Ollama/bge-m3`，`/api/embed` 返回 1024 维 |
+| 导入后健康 | 审计时降级；后续恢复 hybrid | 审计时知识库 3，文档 40，chunks 634，retrieval=bm25；2026-06-26 `/api/health` 为 `ollamaOk=true`、`localVectorIndexOk=true`、`retrievalMode=hybrid` |
+
+### 2026-06-26 Embedding 后端恢复验证
+
+| 项目 | 结果 |
+| --- | --- |
+| 后台任务 | `JuzhouAgentOllama` = Running |
+| 监听端口 | `127.0.0.1:11434` Listen |
+| 模型 | `bge-m3:latest`，约 566.70M 参数，F16，embedding length 1024 |
+| Ollama embedding smoke | 1 条输入成功返回 1024 维向量 |
+| 训练服务健康 | `/api/health` 返回 `ollamaOk=true`、`qdrantOk=false`、`localVectorIndexOk=true`、`retrievalMode=hybrid` |
+| 说明 | `qdrantOk=false` 符合当前 local vector backend 策略；Qdrant 是可选高资源后端，不是本轮轻量部署默认项 |
 
 ### 备份恢复
 
@@ -105,7 +117,7 @@
 
 - BUG-PERF-1 [P2] isolated-read read 并发 50 出现超时或触发停止条件。证据：errorRate=0.0145, p99=22570ms, stop=-。建议：排查健康检查内串行外部依赖、Agent Run 查询、SQLite 并发、接口超时和反向代理/隧道排队。先把生产容量口径控制在 20 并发以内。
 - BUG-PERF-2 [P1] isolated-read read 并发 100 出现超时或触发停止条件。证据：errorRate=0.3543, p99=30015ms, stop=error_rate>0.1,p99>30000ms。建议：排查健康检查内串行外部依赖、Agent Run 查询、SQLite 并发、接口超时和反向代理/隧道排队。先把生产容量口径控制在 20 并发以内。
-- BUG-JOB-3 [P1] 隔离副本 embedding 任务失败。证据：embed status=failed, error=fetch failed。建议：服务器 /api/health 显示 ollamaOk=false、retrievalMode=bm25；需要恢复 Ollama/bge-m3 或配置可用向量后端，再重跑 embed:local。
+- BUG-JOB-3 [P1，已缓解] 隔离副本 embedding 任务失败。证据：embed status=failed, error=fetch failed；当时服务器 /api/health 显示 ollamaOk=false、retrievalMode=bm25。原因定位到 Ollama embedding 后端未以持久方式运行。2026-06-26 已用 `JuzhouAgentOllama` 计划任务启动本机 `Ollama/bge-m3`，验证 `/api/embed` 返回 1024 维、生产 `/api/health` 恢复 `retrievalMode=hybrid`。后续如需重跑写入型 embedding 任务，应继续使用隔离副本或维护窗口，避免污染生产数据。
 - BUG-DATA-4 [P2] direct 导入模式未覆盖 CSV 样本。证据：远程样本 30 个文件含 10 个 CSV，direct 导入结果 fileCount=20、tableRowParentCount=0。建议：CSV/XLSX/PDF 使用 clean/auto 清洗模式；报告中不要把 direct 模式写成支持表格导入。
 
 ## 9. 结论
@@ -114,4 +126,5 @@
 - 写入链路 boss-chat create/delete 在 1/3/5/10/20 并发均 0 错误，最高 12.47 RPS，20 并发 p99 约 1853 ms。
 - 员工培训闭环已跑通：发布、邀请、答疑、生成考试、提交答案、报表汇总全部成功。
 - 备份、校验、dry-run restore、throwaway 强制恢复均成功。
-- 当前主要短板是 embedding 后端不可用导致新知识库向量重建失败，系统降级为 BM25 检索；高并发读接口在 50+ 并发出现明显排队和超时。
+- 原审计中的 embedding 后端不可用问题已在 2026-06-26 通过持久化启动 Ollama 缓解，当前生产健康检查恢复为 hybrid 检索；尚未在隔离副本重跑写入型 embedding 压测。
+- 当前主要短板变为高并发读接口在 50+ 并发出现明显排队和超时；CSV direct 导入仍不覆盖表格资料，需要 clean/auto 清洗模式。

@@ -1,6 +1,6 @@
 # 钜洲培训 Agent 项目总览
 
-更新时间：2026-06-24
+更新时间：2026-06-26
 
 ## 1. 项目定位
 
@@ -273,13 +273,14 @@ Node service + SQLite + local files + optional Ollama
 Scheduled Task: JuzhouAgentTraining
 Scheduled Task: JuzhouAgentTrainingWatchdog
 Scheduled Task: JuzhouAgentTrainingBackup
+Scheduled Task: JuzhouAgentOllama
 SQLite
 vector-index-bge-m3.json
 optional Ollama bge-m3 query embedding
 DeepSeek/OpenAI-compatible chat API
 ```
 
-线上 Windows Server 采用“主计划任务 + watchdog + 备份任务”方式保持服务长期在线并降低数据丢失风险。`JuzhouAgentTraining` 运行 `start-server.ps1`，`ExecutionTimeLimit=PT0S`，并配置 1 分钟间隔的短失败重启；`JuzhouAgentTrainingWatchdog` 每 5 分钟检查 8787 端口、首页和 `/api/health`，无响应时拉起主任务；`JuzhouAgentTrainingBackup` 建议每天运行 `backup-server.ps1`，生成 ZIP 后立即校验，并按默认 14 天/最近 10 份策略清理旧备份。服务日志追加到 `logs\server.log`，watchdog 日志写入 `logs\watchdog.log`，备份日志写入 `logs\backup.log`。未带访问密钥访问 `/api/health` 返回 `401` 是正常鉴权，不算宕机。
+线上 Windows Server 采用“主计划任务 + watchdog + 备份任务 + Ollama 任务”方式保持服务长期在线并降低数据丢失风险。`JuzhouAgentTraining` 运行 `start-server.ps1`，`ExecutionTimeLimit=PT0S`，并配置 1 分钟间隔的短失败重启；`JuzhouAgentTrainingWatchdog` 每 5 分钟检查 8787 端口、首页和 `/api/health`，无响应时拉起主任务；`JuzhouAgentTrainingBackup` 建议每天运行 `backup-server.ps1`，生成 ZIP 后立即校验，并按默认 14 天/最近 10 份策略清理旧备份；`JuzhouAgentOllama` 使用 `start-ollama.cmd` 以 SYSTEM 启动本机 `127.0.0.1:11434` 的 `Ollama/bge-m3`，日志写入 `logs\ollama-system.log`。服务日志追加到 `logs\server.log`，watchdog 日志写入 `logs\watchdog.log`，备份日志写入 `logs\backup.log`。未带访问密钥访问 `/api/health` 返回 `401` 是正常鉴权，不算宕机。
 
 Qdrant 是可选部署，不是低并发轻量服务器默认项。使用 Qdrant 时，需要单独备份 volume 或 snapshot。
 
@@ -334,7 +335,7 @@ git diff --check
 
 RAG 评测集当前维护在 `scripts/fixtures/rag-eval-cases.mjs`，覆盖型号参数、结构原理、制造工艺、销售场景、多语言和标准资料。默认先看 retrieval-only 的 Top1、Top3 和 hybrid 不低于 BM25 的情况。备份评测覆盖 SQLite 快照、JSONL/向量索引打包、校验、强制恢复和备份保留策略。
 翻译评测 `npm run eval:translation` 不依赖真实模型质量：脚本使用临时数据目录和本地 OpenAI-compatible mock，覆盖显式目标语言、默认目标语言、无正文追问、老板端上一条正文上下文、正文在前且翻译指令在末尾、长文本不静默截断、LLM API 缺失错误、`翻译成英文：这是一台水泵` 和 boss-chat 持久化，并断言“生成英文文章，同时附带中文翻译”不会被翻译 parser 抢走。
-服务器审计体系补充在 `server-audit:*` 脚本中：生产端口只做只读基线，隔离副本承接写入、合成数据导入、业务闭环、备份恢复和极限压测；结果统一写入 `training-service/server-audit-output`，再汇总到 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。本轮在服务器 `127.0.0.1:18787` 隔离副本完成读写压测和业务闭环：读链路 20 并发内 0 错误，50 并发开始超时，100 并发错误率 35.43% 并触发停止条件；写链路 boss-chat create/delete 在 20 并发仍 0 错误；培训发布、员工答疑、考试提交、报表汇总、备份校验和 throwaway 恢复均跑通。当前主要风险是 embedding 后端不可用，新增知识库向量重建失败，系统降级为 BM25 检索；CSV 在 direct 导入模式下不会进入知识库，需要 clean/auto 清洗模式。
+服务器审计体系补充在 `server-audit:*` 脚本中：生产端口只做只读基线，隔离副本承接写入、合成数据导入、业务闭环、备份恢复和极限压测；结果统一写入 `training-service/server-audit-output`，再汇总到 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。本轮在服务器 `127.0.0.1:18787` 隔离副本完成读写压测和业务闭环：读链路 20 并发内 0 错误，50 并发开始超时，100 并发错误率 35.43% 并触发停止条件；写链路 boss-chat create/delete 在 20 并发仍 0 错误；培训发布、员工答疑、考试提交、报表汇总、备份校验和 throwaway 恢复均跑通。审计时定位到 embedding 后端不可用，导致新增知识库向量重建失败并降级 BM25；2026-06-26 已通过 `JuzhouAgentOllama` 恢复 `Ollama/bge-m3`，生产 `/api/health` 为 `ollamaOk=true`、`localVectorIndexOk=true`、`retrievalMode=hybrid`。当前主要风险转为高并发读接口 50+ 并发排队超时，以及 CSV 在 direct 导入模式下不会进入知识库，需要 clean/auto 清洗模式。
 
 本轮项目文档只同步 Markdown 文档和桌面 QA 镜像，不做 Word 导出。
 

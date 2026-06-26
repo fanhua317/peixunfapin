@@ -1,6 +1,6 @@
 # Agent 项目面试 QA
 
-更新时间：2026-06-24
+更新时间：2026-06-26
 
 本文按真实项目实现整理，用于面试时解释钜洲培训 Agent 的技术选型、架构取舍、RAG、Agent 路由、记忆、部署和安全治理。
 
@@ -216,7 +216,7 @@ A：普通聊天、翻译和生成类任务返回明确错误；操作类意图�
 
 ### Q47-1：线上服务怎么保证长期运行？
 
-A：当前 Windows Server 不额外引入 PM2、NSSM 或 Docker 进程管理，而是使用计划任务。主任务 `JuzhouAgentTraining` 以 `SYSTEM` 运行 `start-server.ps1`，把 `ExecutionTimeLimit` 改成 `PT0S`，避免 72 小时自动终止，并配置 1 分钟间隔的短失败重启。第二个任务 `JuzhouAgentTrainingWatchdog` 每 5 分钟检查 8787 端口、首页和 `/api/health`，如果端口或 HTTP 不通就停止异常主任务并重新启动。第三个任务 `JuzhouAgentTrainingBackup` 可每天运行 `backup-server.ps1`，生成并校验运行数据备份，默认保留 14 天且至少保留最近 10 份。`/api/health` 未带密钥返回 `401` 是正常鉴权。启动脚本追加 `logs/server.log`，watchdog 写 `logs/watchdog.log`，备份写 `logs/backup.log`，方便判断是正常退出、崩溃、被系统杀掉还是备份失败。
+A：当前 Windows Server 不额外引入 PM2、NSSM 或 Docker 进程管理，而是使用计划任务。主任务 `JuzhouAgentTraining` 以 `SYSTEM` 运行 `start-server.ps1`，把 `ExecutionTimeLimit` 改成 `PT0S`，避免 72 小时自动终止，并配置 1 分钟间隔的短失败重启。第二个任务 `JuzhouAgentTrainingWatchdog` 每 5 分钟检查 8787 端口、首页和 `/api/health`，如果端口或 HTTP 不通就停止异常主任务并重新启动。第三个任务 `JuzhouAgentTrainingBackup` 可每天运行 `backup-server.ps1`，生成并校验运行数据备份，默认保留 14 天且至少保留最近 10 份。第四个任务 `JuzhouAgentOllama` 用 `start-ollama.cmd` 以 SYSTEM 启动本机 `127.0.0.1:11434` 的 `Ollama/bge-m3`，只给训练服务做 query embedding，不对公网开放。`/api/health` 未带密钥返回 `401` 是正常鉴权。启动脚本追加 `logs/server.log`，watchdog 写 `logs/watchdog.log`，备份写 `logs/backup.log`，Ollama 写 `logs/ollama-system.log`，方便判断是正常退出、崩溃、被系统杀掉还是备份失败。
 
 ## 10. 交互体验
 
@@ -226,7 +226,7 @@ A：大模型输出 Markdown，前端如果按纯文本渲染就会看到 `**`�
 
 ### Q49：为什么做 WebSocket 流式输出？
 
-A：讲义、软文、普通聊天可能生成较慢。流式输出可以实时更新模型文本，并展示阶段状态，减少“页面卡住”的感觉。
+A：讲义、软文、普通聊天可能生成较慢。流式输出可以实时更新模型文本，并展示阶段状态，减少“页面卡住”的感觉。现在普通聊天只有收到 `done` 才算完整结束；如果 WebSocket 在 `done` 前断开，前端会保留已收到内容并提示“连接提前中断”，不会把半截回答静默当成成功。流式解析还会识别 `finish_reason=length`，提示回答达到模型输出上限、可能不完整。
 
 ### Q50：进度条能显示大模型真实思考进度吗？
 
@@ -262,7 +262,7 @@ A：适合作为素材库或视觉检索能力，但不应直接当产品事实�
 
 ### Q56：项目有哪些测试？
 
-A：有语法检查、烟测、RAG 评测、意图评测、记忆评测、Agent 轨迹评测、Trace 评测、SQLite 评测、备份/恢复/保留策略评测、导入评测、任务评测、老板端聊天历史评测、多语言翻译评测和知识库版本评测。
+A：有语法检查、烟测、RAG 评测、意图评测、记忆评测、Agent 轨迹评测、Trace 评测、SQLite 评测、备份/恢复/保留策略评测、导入评测、任务评测、老板端聊天历史评测、WebSocket 流式输出评测、多语言翻译评测和知识库版本评测。
 
 ### Q57：轨迹评测和意图评测区别是什么？
 
@@ -282,7 +282,11 @@ A：新增了 `server-audit:*` 审计脚本。生产端口只做只读基线，�
 
 ### Q58-3：怎么把测试结果沉淀成简历材料？
 
-A：审计脚本统一输出 JSON 到 `server-audit-output`，再由 `npm run server-audit:report` 汇总成 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。报告里记录数据规模、功能回归、接口性能、并发稳定性、合成数据、bug 风险和证据文件；简历文档把这些数字改写成业务成果口径，例如“建立服务器级性能与稳定性审计体系，覆盖资料导入、RAG 检索、培训发布、考试提交、报表汇总和备份恢复”。本轮可以写的数字包括：隔离副本最大读压测 100 并发、20 并发稳定 0 错误、写链路最高 12.47 RPS、业务闭环全链路通过、备份 4.25 MB 并完成校验和恢复；同时诚实记录 embedding 后端不可用导致向量重建失败、CSV direct 导入不覆盖等问题。
+A：审计脚本统一输出 JSON 到 `server-audit-output`，再由 `npm run server-audit:report` 汇总成 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。报告里记录数据规模、功能回归、接口性能、并发稳定性、合成数据、bug 风险和证据文件；简历文档把这些数字改写成业务成果口径，例如“建立服务器级性能与稳定性审计体系，覆盖资料导入、RAG 检索、培训发布、考试提交、报表汇总和备份恢复”。本轮可以写的数字包括：隔离副本最大读压测 100 并发、20 并发稳定 0 错误、写链路最高 12.47 RPS、业务闭环全链路通过、备份 4.25 MB 并完成校验和恢复；同时诚实记录 embedding 后端不可用导致向量重建失败、CSV direct 导入不覆盖等问题。后续又把 embedding 后端恢复为 `ollamaOk=true`、`retrievalMode=hybrid`，可以在简历里写成“发现、定位并修复线上 RAG 降级问题”。
+
+### Q58-4：embedding 后端为什么不可用，后来怎么恢复？
+
+A：审计时 `/api/health` 显示 `ollamaOk=false`、`retrievalMode=bm25`，隔离副本 embedding 任务报 `fetch failed`。排查后确认不是代码找不到模型，而是服务器上 Ollama 没有持久运行：临时手动启动能监听 `11434`，SSH 会话结束后就消失；旧计划任务也没有把 `OLLAMA_MODELS` 和日志托管好。修复方式是在服务器新增 `JuzhouAgentOllama` 计划任务，用 `start-ollama.cmd` 固定 `OLLAMA_HOST=127.0.0.1:11434` 和 `OLLAMA_MODELS=C:\OllamaModels`，以 SYSTEM 后台运行。验证结果是 `/api/embed` 能返回 1024 维 bge-m3 向量，训练服务 `/api/health` 恢复为 `ollamaOk=true`、`localVectorIndexOk=true`、`retrievalMode=hybrid`。`qdrantOk=false` 在当前 local vector backend 下是正常的，因为 Qdrant 是可选高资源后端。
 
 ### Q59：为什么文档也要跟代码一起更新？
 
