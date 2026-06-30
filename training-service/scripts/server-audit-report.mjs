@@ -22,6 +22,7 @@ const remoteInventory = artifacts["remote-inventory"]?.data;
 const businessFlow = artifacts["business-flow"]?.data;
 const backupRestore = artifacts["backup-restore"]?.data;
 const importEmbed = artifacts["import-embed-final"]?.data || artifacts["import-embed"]?.data;
+const webSearch = artifacts["web-search"]?.data;
 
 function fmtBytes(bytes) {
   const value = Number(bytes) || 0;
@@ -44,8 +45,18 @@ function mdTable(headers, rows) {
   ].join("\n");
 }
 
+function fmtMs(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? `${Math.round(num)} ms` : "-";
+}
+
+function fmtPercent(value, digits = 0) {
+  const num = Number(value);
+  return Number.isFinite(num) ? `${(num * 100).toFixed(digits)}%` : "-";
+}
+
 function stateStats() {
-  const counts = importEmbed?.health?.counts || remoteInventory?.health?.counts || inventory?.data?.state || inventory?.state || {};
+  const counts = webSearch?.production?.health?.counts || importEmbed?.health?.counts || remoteInventory?.health?.counts || inventory?.data?.state || inventory?.state || {};
   const files = remoteInventory?.files || inventory?.data?.files || inventory?.files || {};
   const rows = [
     ["知识库", counts.knowledgeBases],
@@ -131,10 +142,14 @@ function businessTable() {
 function importTable() {
   if (!importEmbed) return "- 导入和 embedding 任务未采集。";
   const summary = importEmbed.importJob?.resultSummary || {};
+  const health = currentHealth();
+  const recovered = health.ollamaOk === true && health.localVectorIndexOk === true;
   return mdTable(["环节", "结果", "指标/证据"], [
     ["目录导入", importEmbed.importJob?.ok ? "通过" : "失败", `文件 ${summary.fileCount ?? "-"}，父块 ${summary.parentCount ?? "-"}，子块 ${summary.chunkCount ?? "-"}`],
-    ["embedding 任务", importEmbed.embedJob?.ok ? "通过" : "失败", importEmbed.embedJob?.error || JSON.stringify(importEmbed.embedJob?.resultSummary || {})],
-    ["导入后健康", importEmbed.health?.ok ? "通过" : "失败", `知识库 ${importEmbed.health?.counts?.knowledgeBases ?? "-"}，文档 ${importEmbed.health?.counts?.documents ?? "-"}，chunks ${importEmbed.health?.counts?.chunks ?? "-"}，retrieval=${importEmbed.health?.retrievalMode ?? "-"}`],
+    ["embedding 任务", importEmbed.embedJob?.ok ? "通过" : (recovered ? "审计时失败；最新生产健康已恢复" : "失败"), importEmbed.embedJob?.error || JSON.stringify(importEmbed.embedJob?.resultSummary || {})],
+    ["导入后健康", recovered ? "审计时降级；最新恢复 hybrid" : (importEmbed.health?.ok ? "通过" : "失败"), recovered
+      ? `审计时 retrieval=${importEmbed.health?.retrievalMode ?? "-"}；最新 /api/health 为 retrieval=${health.retrievalMode ?? "-"}、ollamaOk=${health.ollamaOk}、localVectorIndexOk=${health.localVectorIndexOk}`
+      : `知识库 ${importEmbed.health?.counts?.knowledgeBases ?? "-"}，文档 ${importEmbed.health?.counts?.documents ?? "-"}，chunks ${importEmbed.health?.counts?.chunks ?? "-"}，retrieval=${importEmbed.health?.retrievalMode ?? "-"}`],
   ]);
 }
 
@@ -162,12 +177,16 @@ function bugList() {
     }
   }
   if (importEmbed?.embedJob && !importEmbed.embedJob.ok) {
+    const latestHealth = currentHealth();
+    const recovered = latestHealth.ollamaOk === true && latestHealth.localVectorIndexOk === true;
     bugs.push({
       id: `BUG-JOB-${bugs.length + 1}`,
-      severity: "P1",
-      title: "隔离副本 embedding 任务失败",
+      severity: recovered ? "P3" : "P1",
+      title: recovered ? "历史隔离副本 embedding 任务失败，最新生产健康已恢复" : "隔离副本 embedding 任务失败",
       evidence: `embed status=${importEmbed.embedJob.status}, error=${importEmbed.embedJob.error || "-"}`,
-      suggestion: "服务器 /api/health 显示 ollamaOk=false、retrievalMode=bm25；需要恢复 Ollama/bge-m3 或配置可用向量后端，再重跑 embed:local。",
+      suggestion: recovered
+        ? "保留历史证据并在下次导入/embedding 审计中复测，不再把它视为当前生产检索故障。"
+        : "服务器 /api/health 显示向量后端不可用；需要恢复 Ollama/bge-m3 或配置可用向量后端，再重跑 embed:local。",
     });
   }
   const imported = importEmbed?.importJob?.resultSummary;
@@ -202,6 +221,96 @@ function syntheticLine() {
     : "未采集";
 }
 
+function currentHealth() {
+  return webSearch?.production?.health || importEmbed?.health || remoteInventory?.health || {};
+}
+
+function retrievalConclusionLine() {
+  const health = currentHealth();
+  if (health.ollamaOk === true && health.localVectorIndexOk === true) {
+    return `- 当前生产健康检查显示 retrievalMode=${health.retrievalMode || "-"}、ollamaOk=true、localVectorIndexOk=true，向量检索处于可用状态；历史导入/embedding 单项失败保留为复测风险，不再作为当前线上短板。`;
+  }
+  if (health.ollamaOk === false || health.localVectorIndexOk === false) {
+    return `- 当前主要短板是 embedding/向量后端不可用，/api/health 显示 retrievalMode=${health.retrievalMode || "-"}、ollamaOk=${health.ollamaOk}、localVectorIndexOk=${health.localVectorIndexOk}；高并发读接口在 50+ 并发出现明显排队和超时。`;
+  }
+  return "- 当前向量健康状态未采集完整；需要结合 /api/health 和 RAG retrieval-only 结果复核检索模式。";
+}
+
+function retrievalInterviewLine() {
+  const health = currentHealth();
+  if (health.ollamaOk === true && health.localVectorIndexOk === true) {
+    return `最新服务器健康检查里，检索模式是 ${health.retrievalMode || "hybrid"}，Ollama 和本地向量索引都可用；历史审计里曾发现过 embedding 任务失败，所以我把它保留为复测项，而不是把旧问题说成当前线上故障。`;
+  }
+  return "如果 /api/health 显示 Ollama 或本地向量索引不可用，系统会降级检索，但这会影响新资料库向量重建和语义召回质量，需要优先恢复 embedding 后端。";
+}
+
+function webSearchStatusTable() {
+  if (!webSearch) return mdTable(["指标", "数值"], [["联网答疑专项", "未采集"]]);
+  const s = webSearch.summary || {};
+  const production = webSearch.production?.health || {};
+  const env = webSearch.env?.configPresence || (typeof webSearch.env?.keyPresence === "object" ? webSearch.env.keyPresence : {});
+  const webCredentialConfigured = env.webSearchCredentialConfigured ?? env.webSearchKeyConfigured;
+  const code = webSearch.production?.codeStatus || {};
+  return mdTable(["指标", "数值"], [
+    ["生产健康", production.ok ? `HTTP ${production.status}，retrieval=${production.retrievalMode}，ollamaOk=${production.ollamaOk}，llmConfigured=${production.llmConfigured}` : `失败：${production.error || production.status || "-"}`],
+    ["知识库规模", production.counts ? `${production.counts.knowledgeBases ?? 0} 个知识库 / ${production.counts.documents ?? 0} 文档 / ${production.counts.chunks ?? 0} 子块` : "-"],
+    ["Tavily 配置", webCredentialConfigured === undefined ? "artifact 已脱敏，配置状态不可判定" : (webCredentialConfigured ? `${env.webProvider || "tavily"} 已配置` : "未配置")],
+    ["代码覆盖", `web-search=${Boolean(code.hasWebSearch)}，eval=${Boolean(code.hasEvalWebSearch)}，前端开关=${Boolean(code.hasBossToggle)}`],
+    ["真实联网样本", s.sampleCount ?? 0],
+    ["Tavily 成功率", fmtPercent(s.webSuccessRate)],
+    ["on 平均 / p95", `${fmtMs(s.directOnLatency?.avgMs)} / ${fmtMs(s.directOnLatency?.p95Ms)}`],
+    ["off 平均 / p95", `${fmtMs(s.directOffLatency?.avgMs)} / ${fmtMs(s.directOffLatency?.p95Ms)}`],
+    ["off/on 平均耗时差", fmtMs((Number(s.directOnLatency?.avgMs) || 0) - (Number(s.directOffLatency?.avgMs) || 0))],
+    ["平均知识库来源", s.avgLocalSources ?? 0],
+    ["平均联网来源", s.avgWebSources ?? 0],
+    ["warning 数", s.totalWarnings ?? 0],
+    ["API 透传", `${s.apiOk ?? 0}/${s.apiCases ?? 0} 用例通过，web ok=${s.apiWebOk ?? 0}`],
+    ["异常降级", `${s.degradationOk ?? 0}/${s.degradationCases ?? 0} 用例保留本地 RAG 答复`],
+  ]);
+}
+
+function webSearchCaseTable() {
+  const samples = webSearch?.direct?.samples || [];
+  if (!samples.length) return mdTable(["样本", "知识库", "off 耗时/来源", "on 状态/耗时", "联网来源", "质量"], [["联网样本", "未采集", "-", "-", "-", "-"]]);
+  return mdTable(
+    ["样本", "知识库", "off 耗时/来源", "on 状态/耗时", "联网来源", "质量"],
+    samples.map((sample) => [
+      sample.id,
+      sample.knowledgeBaseId,
+      `${fmtMs(sample.off?.latencyMs)} / ${sample.off?.sourceCount ?? 0}`,
+      `${sample.on?.webSearchStatus || "-"} / ${fmtMs(sample.on?.latencyMs)}`,
+      `${sample.on?.webSourceCount ?? 0}`,
+      `${sample.on?.confidence || "-"} / ${sample.on?.answerQualityStatus || "-"}`,
+    ]),
+  );
+}
+
+function webSearchApiTable() {
+  const cases = webSearch?.apiCoverage || [];
+  if (!cases.length) return mdTable(["接口", "结果", "耗时", "联网状态/来源"], [["API 透传", "未采集", "-", "-"]]);
+  return mdTable(
+    ["接口", "结果", "耗时", "联网状态/来源"],
+    cases.map((item) => [
+      item.endpoint,
+      item.ok ? "通过" : `失败：${item.error || item.status || "-"}`,
+      fmtMs(item.latencyMs),
+      item.payload ? `${item.payload.webSearchStatus || "-"} / 本地 ${item.payload.sourceCount ?? 0} / 联网 ${item.payload.webSourceCount ?? 0}` : "-",
+    ]),
+  );
+}
+
+function webSearchResumeBullet() {
+  if (!webSearch) return "- 联网答疑专项证据待采集。";
+  const s = webSearch.summary || {};
+  return `- 接入 Tavily 可选联网搜索并完成服务器隔离副本端到端验证：${s.sampleCount ?? 0} 个真实联网样本成功率 ${fmtPercent(s.webSuccessRate)}，综合答疑 on p95 ${fmtMs(s.directOnLatency?.p95Ms)}，平均保留 ${s.avgLocalSources ?? 0} 个知识库来源并补充 ${s.avgWebSources ?? 0} 个联网来源；HTTP、Agent dispatch、WebSocket、员工答疑共 ${s.apiOk ?? 0}/${s.apiCases ?? 0} 个 API 用例通过，缺 key/500/空结果等 ${s.degradationOk ?? 0}/${s.degradationCases ?? 0} 个异常场景均未打断本地 RAG。`;
+}
+
+function webSearchInterviewLine() {
+  if (!webSearch) return "联网答疑专项正在采集证据，目标是证明 webSearchMode 默认关闭、开启后补充 Tavily 来源，并且外部搜索失败时不影响本地 RAG。";
+  const s = webSearch.summary || {};
+  return `联网搜索部分我做成显式开关，默认不消耗 Tavily credits；开启后仍以知识库 RAG 为主，把网页标题、URL、摘要作为外部参考交给同一次 LLM。专项测试覆盖 ${s.sampleCount ?? 0} 个真实联网问题，成功率 ${fmtPercent(s.webSuccessRate)}，on p95 ${fmtMs(s.directOnLatency?.p95Ms)}，并验证 HTTP、WebSocket 和员工答疑链路都能透传 webSearchMode；缺 key、Tavily 500、空结果时只返回 warning，本地知识库答案不中断。`;
+}
+
 const auditMd = [
   "# 钜洲培训 Agent 性能与排障审计报告",
   "",
@@ -216,7 +325,9 @@ const auditMd = [
     ["隔离副本写压测", artifactLine("perf-write")],
     ["业务闭环", artifactLine("business-flow")],
     ["导入与 embedding", artifactLine("import-embed-final")],
+    ["生产 RAG 健康状态", webSearch ? `已验证：/api/health retrievalMode=${currentHealth().retrievalMode || "-"}，ollamaOk=${currentHealth().ollamaOk}，localVectorIndexOk=${currentHealth().localVectorIndexOk}` : "未采集"],
     ["备份恢复", artifactLine("backup-restore")],
+    ["Tavily 联网答疑专项", artifactLine("web-search")],
     ["合成数据", artifactLine("synthetic")],
   ]),
   "",
@@ -254,20 +365,33 @@ const auditMd = [
   "",
   backupTable(),
   "",
-  "## 8. Bug 与风险记录",
+  "## 8. Tavily 联网答疑专项",
+  "",
+  webSearchStatusTable(),
+  "",
+  "### 样本明细",
+  "",
+  webSearchCaseTable(),
+  "",
+  "### API 透传",
+  "",
+  webSearchApiTable(),
+  "",
+  "## 9. Bug 与风险记录",
   "",
   bugList(),
   "",
-  "## 9. 结论",
+  "## 10. 结论",
   "",
   `- 隔离副本读接口在 20 并发以内 0 错误；50 并发开始出现 1.45% 超时，100 并发错误率升至 35.43% 并触发停止条件。`,
   `- 写入链路 boss-chat create/delete 在 1/3/5/10/20 并发均 0 错误，最高 ${bestWriteRps()} RPS，20 并发 p99 约 1853 ms。`,
   "- 员工培训闭环已跑通：发布、邀请、答疑、生成考试、提交答案、报表汇总全部成功。",
+  webSearch ? `- Tavily 联网答疑专项已完成：${webSearch.summary?.sampleCount ?? 0} 个真实样本成功率 ${fmtPercent(webSearch.summary?.webSuccessRate)}，平均联网来源 ${webSearch.summary?.avgWebSources ?? 0}，异常降级 ${webSearch.summary?.degradationOk ?? 0}/${webSearch.summary?.degradationCases ?? 0} 通过。` : "- Tavily 联网答疑专项未采集。",
   "- 备份、校验、dry-run restore、throwaway 强制恢复均成功。",
-  "- 当前主要短板是 embedding 后端不可用导致新知识库向量重建失败，系统降级为 BM25 检索；高并发读接口在 50+ 并发出现明显排队和超时。",
+  retrievalConclusionLine(),
 ].join("\n");
 
-const counts = importEmbed?.health?.counts || remoteInventory?.health?.counts || {};
+const counts = webSearch?.production?.health?.counts || importEmbed?.health?.counts || remoteInventory?.health?.counts || {};
 const resumeMd = [
   "# 钜洲培训 Agent 简历证据",
   "",
@@ -279,6 +403,13 @@ const resumeMd = [
     ["知识库", counts.knowledgeBases ?? "待采集"],
     ["文档", counts.documents ?? "待采集"],
     ["RAG 子块", counts.chunks ?? "待采集"],
+    ["生产 RAG 健康状态", webSearch ? `ollamaOk=${currentHealth().ollamaOk}，localVectorIndexOk=${currentHealth().localVectorIndexOk}，retrievalMode=${currentHealth().retrievalMode || "-"}` : "待采集"],
+    ["联网答疑样本", webSearch?.summary?.sampleCount ?? "待采集"],
+    ["Tavily 成功率", webSearch ? fmtPercent(webSearch.summary?.webSuccessRate) : "待采集"],
+    ["联网答疑 on p95", webSearch ? fmtMs(webSearch.summary?.directOnLatency?.p95Ms) : "待采集"],
+    ["平均联网来源", webSearch?.summary?.avgWebSources ?? "待采集"],
+    ["联网 API 透传", webSearch ? `${webSearch.summary?.apiOk ?? 0}/${webSearch.summary?.apiCases ?? 0} 通过` : "待采集"],
+    ["联网异常降级", webSearch ? `${webSearch.summary?.degradationOk ?? 0}/${webSearch.summary?.degradationCases ?? 0} 通过` : "待采集"],
     ["最大读压测并发", maxConcurrency() || "待采集"],
     ["读链路稳定并发", "20 并发 0 错误"],
     ["读链路最高 RPS", bestReadRps() || "待采集"],
@@ -294,13 +425,16 @@ const resumeMd = [
   `- 为企业培训 Agent 建立服务器级性能与稳定性审计体系，在隔离副本完成读写压测、RAG/Agent 体验验证、培训发布、员工答题、报表汇总和备份恢复演练。`,
   `- 服务器隔离副本读接口压测覆盖 1/5/10/20/50/100 并发，定位到 20 并发内 0 错误、50 并发开始超时、100 并发触发错误率和 p99 停止条件的容量边界。`,
   `- 写入链路 boss-chat create/delete 覆盖 1/3/5/10/20 并发，全部 0 错误，最高 ${bestWriteRps()} RPS，并记录 p95/p99 延迟退化趋势。`,
+  webSearchResumeBullet(),
   "- 跑通培训业务闭环：发布 1 个隔离培训任务、生成邀请、员工答疑命中 8 个资料来源、生成 2 道考试题、提交后 100 分通过并进入报表。",
   `- 完成运行数据备份、ZIP 校验、dry-run restore 和 throwaway 强制恢复，备份 ${fmtBytes(backupRestore?.backup?.bytes)}，恢复后可读回 ${backupRestore?.forceRestore?.counts?.tasks ?? "-"} 个任务。`,
-  "- 发现并记录 embedding 后端不可用、CSV direct 导入不覆盖、读链路高并发超时等问题，形成可复跑 JSON 证据和 Markdown 审计报告。",
+  "- 发现并记录历史 embedding 任务失败、CSV direct 导入不覆盖、读链路高并发超时等问题，形成可复跑 JSON 证据和 Markdown 审计报告，并用最新生产 health 区分已恢复项和当前风险。",
   "",
   "## 面试表达",
   "",
-  "这次不是只做接口 smoke，而是在服务器上先备份生产数据，再复制到 127.0.0.1:18787 隔离副本做极限压测和业务闭环验证。读链路测到 20 并发稳定、50 并发开始超时、100 并发触发停止条件；写链路 20 并发仍 0 错误；培训发布、员工答疑、考试提交、报表和备份恢复都跑通。同时定位到 embedding 后端不可用导致新资料库向量重建失败，系统当前降级为 BM25 检索。",
+  `这次不是只做接口 smoke，而是在服务器上先备份生产数据，再复制到隔离副本做极限压测和业务闭环验证。读链路测到 20 并发稳定、50 并发开始超时、100 并发触发停止条件；写链路 20 并发仍 0 错误；培训发布、员工答疑、考试提交、报表和备份恢复都跑通。${retrievalInterviewLine()}`,
+  "",
+  webSearchInterviewLine(),
 ].join("\n");
 
 await mkdir(docsDir, { recursive: true });

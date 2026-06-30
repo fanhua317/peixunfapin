@@ -343,13 +343,14 @@ npm run eval:kb-versions
 npm run server-audit:inventory
 npm run server-audit:functional
 npm run server-audit:perf
+npm run server-audit:web-search
 npm run server-audit:report
 git diff --check
 ```
 
 RAG 评测集当前维护在 `scripts/fixtures/rag-eval-cases.mjs`，覆盖型号参数、结构原理、制造工艺、销售场景、多语言和标准资料。默认先看 retrieval-only 的 Top1、Top3 和 hybrid 不低于 BM25 的情况。备份评测覆盖 SQLite 快照、JSONL/向量索引打包、校验、强制恢复和备份保留策略。
 翻译评测 `npm run eval:translation` 不依赖真实模型质量：脚本使用临时数据目录和本地 OpenAI-compatible mock，覆盖显式目标语言、默认目标语言、无正文追问、老板端上一条正文上下文、正文在前且翻译指令在末尾、长文本不静默截断、LLM API 缺失错误、`翻译成英文：这是一台水泵` 和 boss-chat 持久化，并断言“生成英文文章，同时附带中文翻译”不会被翻译 parser 抢走。
-服务器审计体系补充在 `server-audit:*` 脚本中：生产端口只做只读基线，隔离副本承接写入、合成数据导入、业务闭环、备份恢复和极限压测；结果统一写入 `training-service/server-audit-output`，再汇总到 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。本轮在服务器 `127.0.0.1:18787` 隔离副本完成读写压测和业务闭环：读链路 20 并发内 0 错误，50 并发开始超时，100 并发错误率 35.43% 并触发停止条件；写链路 boss-chat create/delete 在 20 并发仍 0 错误；培训发布、员工答疑、考试提交、报表汇总、备份校验和 throwaway 恢复均跑通。审计时定位到 embedding 后端不可用，导致新增知识库向量重建失败并降级 BM25；2026-06-26 已通过 `JuzhouAgentOllama` 恢复 `Ollama/bge-m3`，生产 `/api/health` 为 `ollamaOk=true`、`localVectorIndexOk=true`、`retrievalMode=hybrid`。当前主要风险转为高并发读接口 50+ 并发排队超时，以及 CSV 在 direct 导入模式下不会进入知识库，需要 clean/auto 清洗模式。
+服务器审计体系补充在 `server-audit:*` 脚本中：生产端口只做只读基线，隔离副本承接写入、合成数据导入、业务闭环、备份恢复、极限压测和 Tavily 联网答疑专项；结果统一写入 `training-service/server-audit-output`，再汇总到 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。2026-06-30 生产只读基线显示 `/api/health` HTTP 200，线上有 2 个知识库、20 个文档、594 个 chunks，`ollamaOk=true`、`localVectorIndexOk=true`、`retrievalMode=hybrid`，Tavily provider 和 credential 已配置但 artifact 不落密钥。Tavily 专项在服务器隔离副本跑 5 个真实联网样本，成功率 100%，`webSearchMode:on` 平均 6538 ms、p95 8470 ms，平均保留 3.8 个知识库来源并补充 4 个联网来源；`/api/chat`、`/api/agent/dispatch`、WebSocket `/api/agent/stream`、员工 `/api/answer` 共 5/5 个 API 用例通过，缺 key、Tavily 500、超时、空结果 4/4 个异常场景均保留本地 RAG 答复。历史读写压测仍作为容量边界：读链路 20 并发内 0 错误，50 并发开始超时，100 并发错误率 35.43% 并触发停止条件；写链路 boss-chat create/delete 在 20 并发仍 0 错误。当前主要风险是高并发读接口 50+ 并发排队超时，以及 CSV 在 direct 导入模式下不会进入知识库，需要 clean/auto 清洗模式。
 
 本轮项目文档只同步 Markdown 文档和桌面 QA 镜像，不做 Word 导出。
 

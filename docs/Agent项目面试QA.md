@@ -94,7 +94,7 @@ A：先由快速 LLM Router 判断是不是资料答疑，再由规则层做知�
 
 ### Q19-2：知识库答疑为什么要做可选联网搜索？
 
-A：本地知识库适合回答企业内部资料、产品参数、培训内容等确定事实，但有些问题需要补充公开资料或最新背景。现在老板端和员工端答疑都可以显式开启 `webSearchMode: "on"`，后端才调用 Tavily Search API，把联网结果作为第二类参考资料放进 prompt。设计上本地 RAG 仍然优先，Tavily 结果不写入知识库、不做 embedding、不改变 RAG 评测口径；如果网页内容和本地资料冲突，回答要在 `caveats` 说明，不能直接覆盖企业资料。未配置 key、超时或搜索失败时，系统只追加 warning，继续用本地知识库回答。
+A：本地知识库适合回答企业内部资料、产品参数、培训内容等确定事实，但有些问题需要补充公开资料或最新背景。现在老板端和员工端答疑都可以显式开启 `webSearchMode: "on"`，后端才调用 Tavily Search API，把联网结果作为第二类参考资料放进 prompt。设计上本地 RAG 仍然优先，Tavily 结果不写入知识库、不做 embedding、不改变 RAG 评测口径；如果网页内容和本地资料冲突，回答要在 `caveats` 说明，不能直接覆盖企业资料。未配置 key、超时或搜索失败时，系统只追加 warning，继续用本地知识库回答。服务器专项验证里 5 个真实联网样本成功率 100%，平均保留 3.8 个知识库来源并补充 4 个联网来源，说明它是“本地证据优先 + 外部资料补充”，不是把企业知识库替换成网页搜索。
 
 ### Q20：为什么要 BM25 + 向量混合检索？
 
@@ -286,9 +286,13 @@ A：新增了 `server-audit:*` 审计脚本。生产端口只做只读基线，�
 
 ### Q58-3：怎么把测试结果沉淀成简历材料？
 
-A：审计脚本统一输出 JSON 到 `server-audit-output`，再由 `npm run server-audit:report` 汇总成 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。报告里记录数据规模、功能回归、接口性能、并发稳定性、合成数据、bug 风险和证据文件；简历文档把这些数字改写成业务成果口径，例如“建立服务器级性能与稳定性审计体系，覆盖资料导入、RAG 检索、培训发布、考试提交、报表汇总和备份恢复”。本轮可以写的数字包括：隔离副本最大读压测 100 并发、20 并发稳定 0 错误、写链路最高 12.47 RPS、业务闭环全链路通过、备份 4.25 MB 并完成校验和恢复；同时诚实记录 embedding 后端不可用导致向量重建失败、CSV direct 导入不覆盖等问题。后续又把 embedding 后端恢复为 `ollamaOk=true`、`retrievalMode=hybrid`，可以在简历里写成“发现、定位并修复线上 RAG 降级问题”。
+A：审计脚本统一输出 JSON 到 `server-audit-output`，再由 `npm run server-audit:report` 汇总成 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。报告里记录数据规模、功能回归、接口性能、并发稳定性、合成数据、bug 风险和证据文件；简历文档把这些数字改写成业务成果口径，例如“建立服务器级性能与稳定性审计体系，覆盖资料导入、RAG 检索、培训发布、考试提交、报表汇总和备份恢复”。本轮可以写的数字包括：隔离副本最大读压测 100 并发、20 并发稳定 0 错误、写链路最高 12.47 RPS、业务闭环全链路通过、备份 4.25 MB 并完成校验和恢复；Tavily 联网答疑专项 5 个真实样本成功率 100%，on p95 8470 ms，平均 3.8 个知识库来源 + 4 个联网来源，5/5 个 API 透传用例通过，4/4 个异常降级场景保留本地 RAG。历史 embedding 失败和 CSV direct 导入不覆盖继续作为风险记录，最新生产健康检查是 `ollamaOk=true`、`localVectorIndexOk=true`、`retrievalMode=hybrid`。
 
-### Q58-4：embedding 后端为什么不可用，后来怎么恢复？
+### Q58-4：Tavily 联网答疑专项怎么测？
+
+A：不是只测 Tavily 直连接口，而是走“生产只读基线 + 服务器隔离副本端到端”。生产只读先确认 `/api/health`、部署代码、Tavily 配置存在性和知识库规模；隔离副本使用独立 `TRAINING_DATA_DIR`、端口和临时 access key，避免污染生产数据。测试覆盖 `webSearchMode:off` 不调用 Tavily、`on` 返回 `webSearchStatus=ok` 和 `webSources/webSourceRefs`，并跑通 `/api/chat`、`/api/agent/dispatch`、WebSocket `/api/agent/stream`、员工 `/api/answer`。异常场景覆盖缺 key、Tavily 500、超时和空结果，标准是接口不崩、本地 `sourceRefs` 还在、只追加 warning。2026-06-30 的结果是 5 个真实联网样本成功率 100%，on 平均 6538 ms、p95 8470 ms，API 5/5 通过，异常降级 4/4 通过。
+
+### Q58-5：embedding 后端为什么不可用，后来怎么恢复？
 
 A：审计时 `/api/health` 显示 `ollamaOk=false`、`retrievalMode=bm25`，隔离副本 embedding 任务报 `fetch failed`。排查后确认不是代码找不到模型，而是服务器上 Ollama 没有持久运行：临时手动启动能监听 `11434`，SSH 会话结束后就消失；旧计划任务也没有把 `OLLAMA_MODELS` 和日志托管好。修复方式是在服务器新增 `JuzhouAgentOllama` 计划任务，用 `start-ollama.cmd` 固定 `OLLAMA_HOST=127.0.0.1:11434` 和 `OLLAMA_MODELS=C:\OllamaModels`，以 SYSTEM 后台运行。验证结果是 `/api/embed` 能返回 1024 维 bge-m3 向量，训练服务 `/api/health` 恢复为 `ollamaOk=true`、`localVectorIndexOk=true`、`retrievalMode=hybrid`。`qdrantOk=false` 在当前 local vector backend 下是正常的，因为 Qdrant 是可选高资源后端。
 

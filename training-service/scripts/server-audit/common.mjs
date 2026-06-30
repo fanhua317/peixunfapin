@@ -63,7 +63,8 @@ export function accessKeyFromArgs(args = {}) {
 export function redact(value) {
   return String(value || "")
     .replace(/sk-[A-Za-z0-9_-]{8,}/g, "sk-[redacted]")
-    .replace(/(TRAINING_LLM_API_KEY|DEEPSEEK_API_KEY|OPENAI_API_KEY|TRAINING_ACCESS_KEY)=([^\s]+)/g, "$1=[redacted]");
+    .replace(/tvly-[A-Za-z0-9_-]{8,}/g, "tvly-[redacted]")
+    .replace(/(TRAINING_LLM_API_KEY|DEEPSEEK_API_KEY|OPENAI_API_KEY|TRAINING_ACCESS_KEY|TRAINING_WEB_SEARCH_API_KEY|TAVILY_API_KEY)=([^\s]+)/g, "$1=[redacted]");
 }
 
 export function safeJson(value) {

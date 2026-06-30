@@ -34,6 +34,7 @@
     "server-audit:functional": "node scripts/server-audit-functional.mjs",
     "server-audit:perf": "node scripts/server-audit-perf.mjs",
     "server-audit:synthetic": "node scripts/server-audit-synthetic.mjs",
+    "server-audit:web-search": "node scripts/server-audit-web-search.mjs",
     "server-audit:report": "node scripts/server-audit-report.mjs",
     "qdrant:snapshot": "node scripts/qdrant-snapshot.mjs",
     "render:pdf": "node scripts/render-pdf-pages.mjs",
