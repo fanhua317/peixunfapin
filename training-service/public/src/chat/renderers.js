@@ -298,6 +298,25 @@ export function renderKnowledgeAnswerResult(result) {
       `;
     })
     .join("");
+  const webItems = (result.webSources || [])
+    .slice(0, 6)
+    .map((source) => {
+      const preview = source.contentPreview || "";
+      const meta = [
+        source.sourceRef || "",
+        source.publishedDate ? `发布：${source.publishedDate}` : "",
+        source.retrieval ? `检索 ${source.retrieval}` : "",
+      ].filter(Boolean).join(" ｜ ");
+      return `
+        <li>
+          <strong>${escapeHtml(source.title || source.url || "联网来源")}</strong>
+          ${source.url ? `<a class="source-url" href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(source.url)}</a>` : ""}
+          ${meta ? `<div class="source-meta">${escapeHtml(meta)}</div>` : ""}
+          ${preview ? `<div class="source-snippet">${escapeHtml(preview)}</div>` : ""}
+        </li>
+      `;
+    })
+    .join("");
   const caveats = (result.caveats || [])
     .map((item) => `<li>${escapeHtml(item)}</li>`)
     .join("");
@@ -307,6 +326,7 @@ export function renderKnowledgeAnswerResult(result) {
   const meta = [
     result.knowledgeBase?.name ? `资料：${result.knowledgeBase.name}` : "",
     result.retrievalMode ? `检索：${result.retrievalMode}` : "",
+    result.webSearchMode === "on" ? `联网：${result.webSearchStatus || "-"}` : "",
     result.confidence ? `置信度：${result.confidence}` : "",
     result.model ? `模型：${result.model}` : "",
   ].filter(Boolean).join(" ｜ ");
@@ -329,7 +349,8 @@ export function renderKnowledgeAnswerResult(result) {
       <div class="markdown-body">${renderMarkdown(result.answer || "")}</div>
       ${keyPoints ? `<div class="task-section-title">要点</div><ul class="compact-list">${keyPoints}</ul>` : ""}
       ${caveats ? `<div class="task-section-title">注意</div><ul class="compact-list">${caveats}</ul>` : ""}
-      ${sourceItems ? `<div class="task-section-title">来源片段</div><ul class="compact-list source-list">${sourceItems}</ul>` : ""}
+      ${sourceItems ? `<div class="task-section-title">知识库来源</div><ul class="compact-list source-list">${sourceItems}</ul>` : ""}
+      ${webItems ? `<div class="task-section-title">联网来源</div><ul class="compact-list source-list web-source-list">${webItems}</ul>` : ""}
     </div>
   `;
 }

@@ -84,6 +84,22 @@ OPENAI_API_KEY=...
 
 没有可用大模型 API 时，普通聊天、翻译和生成类任务会返回明确错误；系统不会用模板假装生成讲义、试题、软文或翻译结果。意图路由当前以快速 LLM Router 为优先入口；本地规则用于高风险动作确认、Router 不可用兜底和 RAG 证据校验。
 
+## Tavily 联网搜索配置
+
+知识库答疑支持可选联网搜索，默认关闭。只有老板端或员工端请求显式传 `webSearchMode: "on"` 时，后端才会调用 Tavily Search API；联网结果只作为外部参考资料，不写入知识库、不做 embedding，也不改变 RAG 评测口径。本地知识库资料优先，联网资料与本地资料冲突时应在回答的 `caveats` 中说明。
+
+```env
+TRAINING_WEB_SEARCH_PROVIDER=tavily
+TRAINING_WEB_SEARCH_BASE_URL=https://api.tavily.com
+TRAINING_WEB_SEARCH_API_KEY=...
+# 也可使用 TAVILY_API_KEY=...
+TRAINING_WEB_SEARCH_MAX_RESULTS=5
+TRAINING_WEB_SEARCH_TIMEOUT_MS=8000
+TRAINING_WEB_SEARCH_SEARCH_DEPTH=basic
+```
+
+答疑响应会在现有 `sourceRefs` / `usedSources` 之外补充 `webSearchStatus`、`webSources` 和 `webSourceRefs`。未配置 key、搜索超时、Tavily 返回错误或无结果时，系统只追加 warning，并继续使用本地知识库回答。
+
 ## 意图路由、软文和知识库答疑
 
 老板端 `/api/agent/dispatch` 会优先把用户输入交给快速 LLM Router 判定 skill。规则层不再作为业务意图的首选解释器，而是保留三类职责：
@@ -267,7 +283,7 @@ GET  /api/health
 POST /api/agent/draft
 POST /api/agent/dispatch
 GET  /api/agent/stream
-POST /api/chat                 # 可传 forceGeneralChat=true 跳过自动知识库答疑
+POST /api/chat                 # 可传 forceGeneralChat=true 跳过自动知识库答疑；可传 webSearchMode=on 为知识库答疑启用 Tavily 联网搜索
 GET  /api/tools/registry
 GET  /api/agent-runs
 GET  /api/agent-runs/:runId
@@ -320,7 +336,7 @@ GET    /api/tasks/:taskId
 DELETE /api/tasks
 DELETE /api/tasks/:taskId
 GET    /api/invites/:token
-POST   /api/answer
+POST   /api/answer             # 可传 webSearchMode=on 为员工端资料答疑启用 Tavily 联网搜索
 POST   /api/quiz/generate
 POST   /api/quiz/submit
 ```
@@ -400,6 +416,7 @@ npm run eval:backup
 npm run eval:import
 npm run eval:jobs
 npm run eval:streaming
+npm run eval:web-search
 npm run eval:marketing-length
 npm run eval:boss-chat
 npm run eval:translation

@@ -1,4 +1,5 @@
 import { classifyTrainingIntent } from "../ai/index.mjs";
+import { normalizeWebSearchMode } from "../ai/web-search.mjs";
 import {
   appendRunStep,
   recordRunStep,
@@ -57,6 +58,7 @@ function parseClientPayload(raw) {
     message: String(payload.message || payload.instruction || "").trim(),
     sessionId: normalizeSessionId(payload.sessionId),
     memoryMode: normalizeMemoryMode(payload.memoryMode),
+    webSearchMode: normalizeWebSearchMode(payload.webSearchMode),
     confirmedSkill: String(payload.confirmedSkill || "").trim(),
     confirmationToken: String(payload.confirmationToken || "").trim(),
   };
@@ -96,11 +98,12 @@ async function executeSkillForStream(socket, run, state, body, decision, memoryC
       decision,
       source: "knowledge-base",
       route: "knowledge_answer",
+      webSearchMode: body.webSearchMode,
     });
   }
   const payload = await recordRunStep(run.id, "tool_execute", skill, async () => (
-    await executeWebSkill(skill, { state, message: body.message, decision, memoryContext, sessionId: body.sessionId })
-  ), toolExecutionSummary(skill, summarizeToolInput(skill, { state, message: body.message, decision, memoryContext, sessionId: body.sessionId })));
+    await executeWebSkill(skill, { state, message: body.message, decision, memoryContext, sessionId: body.sessionId, webSearchMode: body.webSearchMode })
+  ), toolExecutionSummary(skill, summarizeToolInput(skill, { state, message: body.message, decision, memoryContext, sessionId: body.sessionId, webSearchMode: body.webSearchMode })));
   return payload;
 }
 

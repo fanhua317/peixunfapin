@@ -1484,6 +1484,10 @@ button:disabled {
   color: var(--muted);
 }
 
+.web-search-toggle {
+  font-size: 12px;
+}
+
 .trace-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -1582,6 +1586,14 @@ button:disabled {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.source-url {
+  display: block;
+  margin-top: 4px;
+  color: #175cd3;
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .source-snippet {

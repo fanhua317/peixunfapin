@@ -1,5 +1,6 @@
 import { searchEmployees } from "../../domain/index.mjs";
 import { classifyTrainingIntent, detectKnowledgeAnswerIntent } from "../../ai/index.mjs";
+import { normalizeWebSearchMode } from "../../ai/web-search.mjs";
 import { recordRunStep, startRun } from "../../agent-runs/store.mjs";
 import { intentConfirmPayload, validateConfirmedSkill } from "../../agent/confirmation.mjs";
 import { finalizeAgentRun } from "../../agent/run-lifecycle.mjs";
@@ -56,10 +57,11 @@ async function buildDecisionResult(state, message, decision, options = {}) {
       decision,
       memoryContext: options.memoryContext,
       sessionId: options.sessionId,
+      webSearchMode: options.webSearchMode,
     })
   ), toolExecutionSummary(
     skill,
-    summarizeToolInput(skill, { state, message, decision, memoryContext: options.memoryContext, sessionId: options.sessionId }),
+    summarizeToolInput(skill, { state, message, decision, memoryContext: options.memoryContext, sessionId: options.sessionId, webSearchMode: options.webSearchMode }),
   ));
   const status = payload.action === "chat" && payload.error ? 503 : 200;
   return { status, payload, toolSummary: summarizeToolResult(skill, payload) };
@@ -97,6 +99,7 @@ export async function handleAgent(req, res, url) {
     const displayMessage = body.displayMessage || message;
     const sessionId = normalizeSessionId(body.sessionId);
     const memoryMode = normalizeMemoryMode(body.memoryMode);
+    const webSearchMode = normalizeWebSearchMode(body.webSearchMode);
     const confirmedSkill = String(body.confirmedSkill || "").trim();
     const confirmationToken = String(body.confirmationToken || "").trim();
     const run = await startRun({
@@ -170,7 +173,7 @@ export async function handleAgent(req, res, url) {
     ), decisionSummary);
 
     try {
-      const { status, payload: rawPayload } = await buildDecisionResult(state, message, decision, { memoryContext, runId: run.id, sessionId });
+      const { status, payload: rawPayload } = await buildDecisionResult(state, message, decision, { memoryContext, runId: run.id, sessionId, webSearchMode });
       const payload = await recordRunStep(run.id, "memory_write", "apply_memory_after_turn", async () => (
         await applyMemoryAfterTurn({ message, payload: rawPayload, memoryContext, sessionId, memoryMode })
       ), memoryWriteSummary);
@@ -211,6 +214,7 @@ export async function handleAgent(req, res, url) {
     const body = await readBody(req);
     const sessionId = normalizeSessionId(body.sessionId);
     const memoryMode = normalizeMemoryMode(body.memoryMode);
+    const webSearchMode = normalizeWebSearchMode(body.webSearchMode);
     const message = body.message || "";
     const displayMessage = body.displayMessage || message;
     const forceGeneralChat = body.forceGeneralChat === true || ["1", "true", "yes", "on"].includes(String(body.forceGeneralChat || "").toLowerCase());
@@ -235,7 +239,7 @@ export async function handleAgent(req, res, url) {
       }
       const skill = decision.skill || decision.intent || "answer_general_chat";
       const payload = await recordRunStep(run.id, "tool_execute", skill, async () => (
-        await executeWebSkill(skill, { message, decision, memoryContext, state, sessionId })
+        await executeWebSkill(skill, { message, decision, memoryContext, state, sessionId, webSearchMode })
       ), (result) => ({
         skill,
         result: summarizeToolResult(skill, result),

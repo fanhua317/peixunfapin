@@ -66,7 +66,10 @@ function summarizeKnowledgeAnswer(payload) {
     action: payload.action,
     knowledgeBaseId: payload.knowledgeBase?.id || "",
     sourceCount: payload.sourceRefs?.length || payload.sources?.length || payload.usedSources?.length || 0,
+    webSourceCount: payload.webSourceRefs?.length || payload.webSources?.length || 0,
     retrievalMode: payload.retrievalMode || "",
+    webSearchMode: payload.webSearchMode || "off",
+    webSearchStatus: payload.webSearchStatus || "",
     confidence: payload.confidence || "",
     insufficient: payload.insufficient === true || payload.answerQuality?.status === "insufficient",
     hasAnswer: Boolean(payload.answer),
@@ -113,6 +116,10 @@ function insufficientKnowledgeAnswer(message, { decision, knowledgeBase, error }
     route: "knowledge_answer",
     knowledgeBase: knowledgeBase ? { id: knowledgeBase.id, name: knowledgeBase.name } : null,
     retrievalMode: "none",
+    webSearchMode: "off",
+    webSearchStatus: "disabled",
+    webSources: [],
+    webSourceRefs: [],
     insufficient: true,
     errorMessage: error || "",
     answerQuality: {
@@ -212,12 +219,13 @@ const webSkills = [
     requiresConfirmation: false,
     idempotent: true,
     timeoutMs: 60000,
-    inputSummary: ({ message, decision }) => ({
+    inputSummary: ({ message, decision, webSearchMode }) => ({
       questionPreview: compact(message),
       knowledgeBaseId: decision?.knowledgeBaseId || "",
+      webSearchMode: webSearchMode || "off",
     }),
     summarizeResult: summarizeKnowledgeAnswer,
-    async execute({ state, message, decision }) {
+    async execute({ state, message, decision, webSearchMode }) {
       const knowledgeBase = resolveKnowledgeBaseForAnswer(state, message, decision);
       if (!knowledgeBase) {
         return insufficientKnowledgeAnswer("当前没有匹配到可用于答疑的知识库，请先导入或明确资料库名称。", { decision });
@@ -226,6 +234,7 @@ const webSkills = [
         const answer = await generateKnowledgeAnswer(state, {
           knowledgeBaseId: knowledgeBase.id,
           question: message,
+          webSearchMode,
         });
         const sources = answer.usedSources?.length ? answer.usedSources : answer.sources || [];
         return {

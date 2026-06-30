@@ -101,11 +101,14 @@ SQLite + JSONL + local vector index + clean documents
 -> 安全规则过滤高风险操作
 -> 知识库别名、会话上下文和 RAG 命中校验
 -> hybrid RAG 获取 chunk 和 parent context
+-> 用户开启联网搜索时调用 Tavily Search API 获取外部参考资料
 -> answer_knowledge_question 生成有来源回答
--> 前端展示答案、来源和命中片段
+-> 前端展示答案、知识库来源、联网来源和命中片段
 ```
 
 例如“请帮我检索 CM2 的相关知识”应选择银嘉泵/水泵知识库；水泵答疑后的“有具体型号吗”追问应沿用上一轮水泵资料库；“这是水泵，不是电机”不能选择电机资料库。如果用户明确选择“当普通聊天”，`/api/chat` 会带 `forceGeneralChat: true`，后端跳过知识库答疑探测。
+
+联网搜索默认关闭。老板端聊天和员工端 `/api/answer` 可显式传 `webSearchMode: "on"`，后端才调用 Tavily；Tavily 结果只作为外部参考资料进入 prompt，不写入知识库、不生成 embedding、不改变 RAG 评测口径。回答仍优先依据本地知识库，若本地资料与网页资料冲突，应在 `caveats` 里说明；如果本地知识库未命中但联网搜索有结果，回答按低置信度返回，并标注“本地知识库未命中，仅参考联网资料”。
 
 ### 老板端聊天历史
 
@@ -301,6 +304,10 @@ Qdrant 是可选部署，不是低并发轻量服务器默认项。使用 Qdrant
 | `TRAINING_LLM_BASE_URL` | OpenAI-compatible API 地址 |
 | `TRAINING_LLM_MODEL` | 生成模型名 |
 | `TRAINING_LLM_API_KEY` | 生成模型 API key |
+| `TRAINING_WEB_SEARCH_PROVIDER` | 联网搜索 provider，当前为 `tavily` |
+| `TRAINING_WEB_SEARCH_API_KEY` / `TAVILY_API_KEY` | Tavily Search API key |
+| `TRAINING_WEB_SEARCH_MAX_RESULTS` | 单次联网搜索返回数量，默认 5 |
+| `TRAINING_WEB_SEARCH_SEARCH_DEPTH` | Tavily 搜索深度，默认 `basic` |
 | `TRAINING_HYBRID_RETRIEVAL` | 是否启用 hybrid 检索 |
 | `TRAINING_VECTOR_BACKEND` | `auto`、`local` 或 `qdrant` |
 | `TRAINING_EMBEDDING_MODEL` | embedding 模型名 |
@@ -328,6 +335,7 @@ npm run eval:backup
 npm run eval:import
 npm run eval:jobs
 npm run eval:streaming
+npm run eval:web-search
 npm run eval:marketing-length
 npm run eval:boss-chat
 npm run eval:translation

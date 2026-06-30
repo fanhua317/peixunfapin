@@ -48,6 +48,10 @@ function focusComposer() {
   if (input) input.focus();
 }
 
+function currentWebSearchMode() {
+  return document.querySelector("#webSearchToggle")?.checked ? "on" : "off";
+}
+
 function disableActionButtons(button) {
   const actions = button?.closest(".message-actions");
   actions?.querySelectorAll("button").forEach((item) => {
@@ -416,6 +420,7 @@ async function confirmIntentAction(result, button) {
         message,
         confirmedSkill: skill,
         confirmationToken: result.confirmation?.token || "",
+        webSearchMode: currentWebSearchMode(),
       }),
     });
     removeMessage(progress);
@@ -527,7 +532,7 @@ async function dispatchUserMessageStream(message) {
         detail: "已连接，正在交给模型处理",
         progress: 22,
       }));
-      ws.send(agentBody({ message }));
+      ws.send(agentBody({ message, webSearchMode: currentWebSearchMode() }));
     });
 
     ws.addEventListener("message", (event) => {
@@ -716,7 +721,7 @@ async function dispatchUserMessageHttp(message, options = {}) {
   try {
     const result = await api("/api/agent/dispatch", {
       method: "POST",
-      body: agentBody({ message, displayMessage: options.displayMessage || "" }),
+      body: agentBody({ message, displayMessage: options.displayMessage || "", webSearchMode: currentWebSearchMode() }),
     });
     removeMessage(typing);
     appendAgentResult(result);

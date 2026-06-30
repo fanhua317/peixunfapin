@@ -98,7 +98,10 @@ function renderInvite(result) {
       <strong>向资料提问</strong>
       <p class="muted">学习过程中可以随时向资料库提问，系统会返回答案和引用来源。</p>
       <textarea id="question" rows="3" placeholder="例如：电机主要应用领域有哪些？"></textarea>
-      <div class="actions"><button id="askBtn">提问</button></div>
+      <div class="actions">
+        <label class="inline-check web-search-toggle"><input id="answerWebSearchToggle" type="checkbox" /> 联网搜索</label>
+        <button id="askBtn">提问</button>
+      </div>
       <div id="answerOutput" class="answer-output">等待提问...</div>
     </section>
     <section class="task">
@@ -148,16 +151,22 @@ async function askQuestion() {
   try {
     result = await api("/api/answer", {
       method: "POST",
-      body: JSON.stringify({ token: currentInvite.invite.token, question }),
+      body: JSON.stringify({
+        token: currentInvite.invite.token,
+        question,
+        webSearchMode: document.querySelector("#answerWebSearchToggle")?.checked ? "on" : "off",
+      }),
     });
   } finally {
     clearTimeout(timer);
   }
   const sourceRefs = result.sourceRefs?.length ? result.sourceRefs : (result.sources || []).map((source) => source.sourceRef);
   const sources = [...new Set(sourceRefs || [])].map((source) => `<li>${escapeHtml(source)}</li>`).join("");
+  const webSources = (result.webSources || []).map((source) => `<li><strong>${escapeHtml(source.title || source.url || "联网来源")}</strong>${source.url ? `<a class="source-url" href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(source.url)}</a>` : ""}${source.contentPreview ? `<div class="source-snippet">${escapeHtml(source.contentPreview)}</div>` : ""}</li>`).join("");
   output.innerHTML = `<div class="answer-card">
     ${renderAnswerContent(result)}
-    <details ${sources ? "" : "open"}><summary>引用来源</summary>${sources ? `<ul>${sources}</ul>` : "<p>无</p>"}</details>
+    <details ${sources ? "" : "open"}><summary>知识库来源</summary>${sources ? `<ul>${sources}</ul>` : "<p>无</p>"}</details>
+    ${result.webSearchMode === "on" ? `<details ${webSources ? "" : "open"}><summary>联网来源（${escapeHtml(result.webSearchStatus || "-")}）</summary>${webSources ? `<ul>${webSources}</ul>` : "<p>无</p>"}</details>` : ""}
   </div>`;
 }
 
