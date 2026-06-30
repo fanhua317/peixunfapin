@@ -37,10 +37,10 @@ SQLite + JSONL + local vector index + clean documents
 主要模块：
 
 - `src/http`：请求解析、响应、认证、静态文件和路由基础能力。
-- `src/controllers`：HTTP API 适配层。
-- `src/agent-runtime`、`src/tools`、`src/agent-runs`：Agent 运行治理、Tool Registry、Run/Step 记录。
+- `src/http/controllers`：HTTP API 适配层。
+- `src/agent`、`src/tools`、`src/agent-runs`：Agent 运行治理、Tool Registry、Run/Step 记录。
 - `src/domain`：培训、员工、邀请、考试、报表等业务逻辑。
-- `src/rag`：BM25、向量检索、parent-child 展开和上下文渲染。
+- `src/rag.mjs`：BM25、向量检索、parent-child 展开和上下文渲染。
 - `src/ai`、`src/chat`：意图识别、普通聊天、多语言翻译、讲义、答疑、出题、软文和 LLM 调用。
 - `src/import`：资料清洗、语义切片、导入写入和质量统计。
 - `src/jobs`：异步任务队列，覆盖导入、embedding 和知识库回滚。
@@ -91,7 +91,7 @@ SQLite + JSONL + local vector index + clean documents
 
 当前版本不联网搜索。资料不足时返回“资料不足”，不编造产品参数。“请帮我生成三篇水泵的宣传文章，500词左右，英文”和“请帮我生成三篇英文文章，同时附带中文翻译”都属于 `generate_marketing_article`；后者的中文翻译是文章交付格式要求，不是单独的 `translate_text`。
 软文 prompt 直接约束首轮输出减少“AI 味”：文章要像工业品业务人员或内容编辑写给真实客户看的内容，避免空泛套话、万能开头、过度排比和口号式结尾；但自然化表达不能新增资料外细节。
-软文正文不再使用通用答疑清洗层的 1800 字符硬截断；结构化生成会透传 `finishReason` / `truncated`，如果模型达到输出上限，前端显示明确提示，而不是静默留下省略号。
+软文正文不再使用通用答疑清洗层的 1800 字符硬截断；当前实现按软文链路约 5200 字符上限清洗正文，超出上限时末尾可能保留省略号。结构化生成会透传 `finishReason` / `truncated`，如果模型达到输出上限，前端显示明确提示。
 
 ### 老板端资料答疑
 
@@ -302,7 +302,7 @@ Qdrant 是可选部署，不是低并发轻量服务器默认项。使用 Qdrant
 | `TRAINING_LLM_MODEL` | 生成模型名 |
 | `TRAINING_LLM_API_KEY` | 生成模型 API key |
 | `TRAINING_HYBRID_RETRIEVAL` | 是否启用 hybrid 检索 |
-| `TRAINING_VECTOR_BACKEND` | `local` 或 `qdrant` |
+| `TRAINING_VECTOR_BACKEND` | `auto`、`local` 或 `qdrant` |
 | `TRAINING_EMBEDDING_MODEL` | embedding 模型名 |
 | `OLLAMA_URL` | Ollama 地址 |
 | `PUBLIC_BASE_URL` | 固定邀请链接域名 |
