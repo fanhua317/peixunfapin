@@ -2,13 +2,13 @@ import { appendEvent, isoNow, makeId } from "../store.mjs";
 import { generateQuizQuestions } from "../ai/index.mjs";
 import { markInviteExpired } from "./common.mjs";
 
-export async function generateQuiz(state, taskId) {
+export async function generateQuiz(state, taskId, { webSearchMode = "off" } = {}) {
   const task = state.tasks.find((entry) => entry.id === taskId);
   if (!task) throw new Error("task not found");
   const existing = state.quizzes.find((quiz) => quiz.taskId === taskId);
   if (existing) return existing;
 
-  const aiQuiz = await generateQuizQuestions(state, task);
+  const aiQuiz = await generateQuizQuestions(state, task, { webSearchMode });
   const questions = (aiQuiz.questions || []).map((question) => ({
     id: makeId("question"),
     ...question,
@@ -25,6 +25,11 @@ export async function generateQuiz(state, taskId) {
     model: aiQuiz.model,
     sessionPatch: aiQuiz.sessionPatch,
     runId: aiQuiz.runId,
+    webSearchMode: aiQuiz.webSearchMode || webSearchMode,
+    webSearchStatus: aiQuiz.webSearchStatus || "disabled",
+    webSources: aiQuiz.webSources || [],
+    webSourceRefs: aiQuiz.webSourceRefs || [],
+    warnings: aiQuiz.warnings || [],
     createdAt: isoNow(),
   };
   state.quizzes.push(quiz);

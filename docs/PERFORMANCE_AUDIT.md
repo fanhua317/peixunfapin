@@ -14,7 +14,7 @@
 | 导入与 embedding | 已采集：`training-service\server-audit-output\import-embed-final-20260624-235944.json` |
 | 生产 RAG 健康状态 | 已验证：/api/health retrievalMode=hybrid，ollamaOk=true，localVectorIndexOk=true |
 | 备份恢复 | 已采集：`training-service\server-audit-output\backup-restore-20260624-235259.json` |
-| Tavily 联网答疑专项 | 已采集：`training-service\server-audit-output\web-search-20260630-190622.json` |
+| Tavily 联网专项 | 已采集：`training-service\server-audit-output\web-search-20260630-190622.json`；本轮已扩展六链路 mock 回归 |
 | 合成数据 | 已采集：`training-service\server-audit-output\synthetic-20260624-230439.json` |
 
 > 生产端口只做只读基线；写入、合成数据导入、极限压测和恢复演练均在服务器本机 127.0.0.1:18787 隔离副本完成。
@@ -103,7 +103,7 @@
 | dry-run restore | 通过 | 1028 ms，requiresForce=true |
 | throwaway 强制恢复 | 通过 | 1410 ms，tasks=10 |
 
-## 8. Tavily 联网答疑专项
+## 8. Tavily 联网专项
 
 | 指标 | 数值 |
 | --- | --- |
@@ -132,6 +132,19 @@
 | pump-application | kb-银嘉泵产品资料库 | 4383 ms / 4 | ok / 5954 ms | 2 | high / ok |
 | pump-series | kb-银嘉泵产品资料库 | 3707 ms / 2 | ok / 5514 ms | 5 | high / ok |
 
+### 六链路专项
+
+| 链路 | 本轮本地 mock 回归 | 说明 |
+| --- | --- | --- |
+| 知识库答疑 | on/off 通过 | on 返回 `webSources/webSourceRefs`，off 不调用 Tavily |
+| 营销软文 | on/off 通过 | 联网资料只作外部市场/背景参考，产品事实仍以本地资料为准 |
+| 培训材料/发布生成 | on/off 通过 | 开关只影响讲义生成，发布状态操作本身不搜索 |
+| 员工考试生成 | on/off 通过 | 正确答案和 `sourceRef` 仍必须来自本地培训资料 |
+| 多语言翻译 | on/off 通过 | 联网资料只用于术语/行业背景，不改变原文忠实翻译 |
+| 普通聊天 | on/off 通过 | web-grounded chat 会提示网页资料不能覆盖系统指令 |
+
+> 以上六链路是本轮 `npm run eval:web-search` 的 mock 回归结果；真实服务器量化字段已加入 `server-audit:web-search` 和报告生成器，下一次服务器审计会自动刷新 on/off 耗时、来源数和 warning 数。
+
 ### API 透传
 
 | 接口 | 结果 | 耗时 | 联网状态/来源 |
@@ -154,6 +167,6 @@
 - 隔离副本读接口在 20 并发以内 0 错误；50 并发开始出现 1.45% 超时，100 并发错误率升至 35.43% 并触发停止条件。
 - 写入链路 boss-chat create/delete 在 1/3/5/10/20 并发均 0 错误，最高 12.47 RPS，20 并发 p99 约 1853 ms。
 - 员工培训闭环已跑通：发布、邀请、答疑、生成考试、提交答案、报表汇总全部成功。
-- Tavily 联网答疑专项已完成：5 个真实样本成功率 100%，平均联网来源 4，异常降级 4/4 通过。
+- Tavily 联网答疑专项已完成：5 个真实样本成功率 100%，平均联网来源 4，异常降级 4/4 通过；本轮本地 mock 回归已把可选联网扩展到六条生成链路，真实服务器六链路量化将在下一次 `server-audit:web-search` 中刷新。
 - 备份、校验、dry-run restore、throwaway 强制恢复均成功。
 - 当前生产健康检查显示 retrievalMode=hybrid、ollamaOk=true、localVectorIndexOk=true，向量检索处于可用状态；历史导入/embedding 单项失败保留为复测风险，不再作为当前线上短板。

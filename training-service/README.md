@@ -86,7 +86,7 @@ OPENAI_API_KEY=...
 
 ## Tavily 联网搜索配置
 
-知识库答疑支持可选联网搜索，默认关闭。只有老板端或员工端请求显式传 `webSearchMode: "on"` 时，后端才会调用 Tavily Search API；联网结果只作为外部参考资料，不写入知识库、不做 embedding，也不改变 RAG 评测口径。本地知识库资料优先，联网资料与本地资料冲突时应在回答的 `caveats` 中说明。
+六条 LLM 生成链路支持可选联网搜索，默认关闭：知识库答疑、营销软文、培训讲义/发布生成、员工考试生成、多语言翻译和普通聊天。只有老板端或员工端请求显式传 `webSearchMode: "on"` 时，后端才会调用 Tavily Search API；联网结果只作为外部参考资料，不写入知识库、不做 embedding，也不改变 RAG 评测口径。本地知识库资料或用户原文优先，联网资料与本地资料冲突时应说明，不强行合并。
 
 ```env
 TRAINING_WEB_SEARCH_PROVIDER=tavily
@@ -98,7 +98,7 @@ TRAINING_WEB_SEARCH_TIMEOUT_MS=8000
 TRAINING_WEB_SEARCH_SEARCH_DEPTH=basic
 ```
 
-答疑响应会在现有 `sourceRefs` / `usedSources` 之外补充 `webSearchStatus`、`webSources` 和 `webSourceRefs`。未配置 key、搜索超时、Tavily 返回错误或无结果时，系统只追加 warning，并继续使用本地知识库回答。
+生成响应会在现有本地来源字段之外补充 `webSearchMode`、`webSearchStatus`、`webSources` 和 `webSourceRefs`。未配置 key、搜索超时、Tavily 返回错误或无结果时，系统只追加 warning，并继续使用本地知识库或用户原文完成原链路。
 
 ## 意图路由、软文和知识库答疑
 
@@ -283,7 +283,7 @@ GET  /api/health
 POST /api/agent/draft
 POST /api/agent/dispatch
 GET  /api/agent/stream
-POST /api/chat                 # 可传 forceGeneralChat=true 跳过自动知识库答疑；可传 webSearchMode=on 为知识库答疑启用 Tavily 联网搜索
+POST /api/chat                 # 可传 forceGeneralChat=true 跳过自动知识库答疑；可传 webSearchMode=on 为答疑/软文/翻译/普通聊天启用 Tavily 外部参考
 GET  /api/tools/registry
 GET  /api/agent-runs
 GET  /api/agent-runs/:runId
@@ -330,14 +330,14 @@ POST /api/imports/upload
 ```text
 GET    /api/employees
 GET    /api/reports/overview
-POST   /api/tasks/publish
+POST   /api/tasks/publish      # 可传 webSearchMode=on，只影响发布时的培训讲义生成
 GET    /api/tasks
 GET    /api/tasks/:taskId
 DELETE /api/tasks
 DELETE /api/tasks/:taskId
 GET    /api/invites/:token
-POST   /api/answer             # 可传 webSearchMode=on 为员工端资料答疑启用 Tavily 联网搜索
-POST   /api/quiz/generate
+POST   /api/answer             # 可传 webSearchMode=on 为员工端资料答疑启用 Tavily 外部参考
+POST   /api/quiz/generate      # 可传 webSearchMode=on 为考试生成补充联网背景；正确答案仍以本地资料为准
 POST   /api/quiz/submit
 ```
 
@@ -431,6 +431,7 @@ git diff --check
 
 RAG 评测用例在 `scripts/fixtures/rag-eval-cases.mjs`，当前共 30 条，默认以 retrieval-only 的 Top1/Top3 命中和 hybrid 不低于 BM25 为主要门槛。备份评测覆盖 SQLite 快照、JSONL/向量索引打包、校验、强制恢复和保留策略清理。
 翻译评测会创建临时 `TRAINING_DATA_DIR`，设置 `TRAINING_AUTH_DISABLED=1`，并启动本地 OpenAI-compatible mock 服务覆盖中英日西法、默认目标语言、缺正文追问、上一条老板端正文上下文、正文在前且翻译指令在末尾、长文本不静默截断、LLM API 缺失错误、`翻译成英文：这是一台水泵` 和 boss-chat 写入；同时断言“生成英文文章，同时附带中文翻译”不会被翻译 parser 抢走。
+联网搜索评测 `npm run eval:web-search` 使用 mock Tavily 和 mock OpenAI-compatible LLM，覆盖知识库答疑、营销软文、培训讲义、考试生成、翻译、普通聊天六条生成链路：`off` 不调用 Tavily，`on` 返回 `webSources/webSourceRefs`，缺 key、500、超时、空结果都不打断原生成链路，并检查 prompt 已区分本地资料/联网资料且不会执行网页指令。
 服务器审计脚本统一写入 `server-audit-output`：`server-audit:inventory` 采集服务器环境、API 只读探测、计划任务、磁盘和数据规模；`server-audit:functional` 复用现有回归脚本并输出统一 JSON；`server-audit:synthetic` 生成 100/1000/5000 文件三档合成资料；`server-audit:perf` 使用 Node 原生 fetch 做阶梯压测，记录 RPS、错误率、p50/p95/p99 和资源采样；`server-audit:report` 汇总最新 JSON 并刷新 `docs/PERFORMANCE_AUDIT.md` / `docs/RESUME_EVIDENCE.md`。生产端口只做只读基线；极限压测、合成数据导入和写入链路必须在同服务器隔离副本上执行，隔离副本使用独立 `TRAINING_DATA_DIR` 和端口，例如 `127.0.0.1:18787`。缺少访问密钥时受保护接口会标记为 `auth_required`，不会伪造数据。
 
 当前文档和评测流程只维护 Markdown 项目文档和 QA 镜像，本轮不做 Word 导出。

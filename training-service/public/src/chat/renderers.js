@@ -95,7 +95,12 @@ export function renderTranslationResult(result) {
           <div class="translation-output markdown-body">${renderMarkdown(result.translatedText || "")}</div>
         </div>
       </div>
-      ${result.model ? `<p class="muted">模型：${escapeHtml(result.model)}</p>` : ""}
+      ${result.model || result.webSearchMode === "on" ? `<p class="muted">${escapeHtml([
+        result.model ? `模型：${result.model}` : "",
+        result.webSearchMode === "on" ? `联网：${result.webSearchStatus || "-"}` : "",
+      ].filter(Boolean).join(" ｜ "))}</p>` : ""}
+      ${renderWarningBox(result.warnings || [])}
+      ${renderWebSourcesSection(result)}
     </div>
   `;
 }
@@ -145,6 +150,7 @@ export function renderIntentConfirmResult(result) {
 
 export function renderPublishResult(result) {
   const inviteLinks = Array.isArray(result.inviteLinks) ? result.inviteLinks : result.invites || [];
+  const material = result.task?.trainingMaterial || {};
   const links = inviteLinks
     .map((link) => {
       const url = link.url || link.inviteUrl || link.link || "";
@@ -157,6 +163,7 @@ export function renderPublishResult(result) {
     <p>任务：${escapeHtml(result.task?.title || result.title || "培训任务")}</p>
     <p>请将以下员工专属链接转发给对应人员：</p>
     ${links ? `<ul class="link-list">${links}</ul>` : `<p class="muted">暂无学习链接。</p>`}
+    ${material.webSearchMode === "on" ? `<div class="task-section-title">讲义联网状态</div><p class="muted">联网：${escapeHtml(material.webSearchStatus || "-")}</p>${renderWarningBox(material.warnings || [])}${renderWebSourcesSection(material)}` : ""}
   `;
 }
 
@@ -229,14 +236,56 @@ function completionWarning(result = {}) {
 
 function displayWarning(value) {
   if (value === "model_output_truncated") return "达到模型输出上限，回答可能不完整。";
+  if (value === "web_search_requested_but_disabled") return "用户提到了联网搜索，但本次未开启联网搜索。";
+  if (value === "web_search_unconfigured") return "联网搜索未配置，已继续使用本地/原始资料生成。";
+  if (value === "web_search_failed") return "联网搜索失败，已继续使用本地/原始资料生成。";
+  if (value === "web_search_empty") return "联网搜索未返回可用资料。";
+  if (value === "web_search_empty_query") return "联网搜索查询为空，已跳过联网资料。";
   return String(value || "");
+}
+
+function renderWarningBox(warnings = []) {
+  const items = (warnings || []).filter(Boolean)
+    .map((warning) => `<div>${escapeHtml(displayWarning(warning))}</div>`)
+    .join("");
+  return items ? `<div class="warning-box">${items}</div>` : "";
+}
+
+function renderWebSourceItems(webSources = []) {
+  return (webSources || [])
+    .slice(0, 6)
+    .map((source) => {
+      const preview = source.contentPreview || "";
+      const meta = [
+        source.sourceRef || "",
+        source.publishedDate ? `发布：${source.publishedDate}` : "",
+        source.retrieval ? `检索：${source.retrieval}` : "",
+      ].filter(Boolean).join(" ｜ ");
+      return `
+        <li>
+          <strong>${escapeHtml(source.title || source.url || "联网来源")}</strong>
+          ${source.url ? `<a class="source-url" href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(source.url)}</a>` : ""}
+          ${meta ? `<div class="source-meta">${escapeHtml(meta)}</div>` : ""}
+          ${preview ? `<div class="source-snippet">${escapeHtml(preview)}</div>` : ""}
+        </li>
+      `;
+    })
+    .join("");
+}
+
+function renderWebSourcesSection(result = {}) {
+  if (result.webSearchMode !== "on") return "";
+  const items = renderWebSourceItems(result.webSources || []);
+  const status = result.webSearchStatus || "-";
+  return `
+    <div class="task-section-title">联网来源（${escapeHtml(status)}）</div>
+    ${items ? `<ul class="compact-list source-list web-source-list">${items}</ul>` : `<p class="muted">本次未返回可展示的联网来源。</p>`}
+  `;
 }
 
 export function renderMarketingArticleResult(result) {
   const article = result.article || result || {};
-  const warnings = (article.warnings || [])
-    .map((warning) => `<div>${escapeHtml(displayWarning(warning))}</div>`)
-    .join("");
+  const warnings = renderWarningBox(article.warnings || []);
   const sellingPoints = (article.sellingPoints || [])
     .map((point) => `<li>${escapeHtml(point)}</li>`)
     .join("");
@@ -247,6 +296,7 @@ export function renderMarketingArticleResult(result) {
   const meta = [
     article.knowledgeBase?.name ? `资料：${article.knowledgeBase.name}` : "",
     article.retrievalMode ? `检索：${article.retrievalMode}` : "",
+    article.webSearchMode === "on" ? `联网：${article.webSearchStatus || "-"}` : "",
     article.model ? `模型：${article.model}` : "",
   ].filter(Boolean).join(" ｜ ");
   if (article.insufficient) {
@@ -255,7 +305,8 @@ export function renderMarketingArticleResult(result) {
         <p class="section-kicker">营销软文</p>
         <h2>${escapeHtml(article.title || "资料不足，无法生成软文")}</h2>
         <p class="error-text">${escapeHtml(article.summary || article.article || "资料不足，无法生成软文。")}</p>
-        ${warnings ? `<div class="warning-box">${warnings}</div>` : ""}
+        ${warnings}
+        ${renderWebSourcesSection(article)}
       </div>
     `;
   }
@@ -266,10 +317,11 @@ export function renderMarketingArticleResult(result) {
       ${article.summary ? `<p class="article-summary">${escapeHtml(article.summary)}</p>` : ""}
       ${meta ? `<p class="muted">${escapeHtml(meta)}</p>` : ""}
       ${completionWarning(article)}
-      ${warnings ? `<div class="warning-box">${warnings}</div>` : ""}
+      ${warnings}
       ${sellingPoints ? `<div class="task-section-title">核心卖点</div><ul class="compact-list">${sellingPoints}</ul>` : ""}
       <div class="article-body">${body || "<p>未生成正文。</p>"}</div>
       ${sourceRefs ? `<div class="task-section-title">资料来源</div><ul class="compact-list">${sourceRefs}</ul>` : ""}
+      ${renderWebSourcesSection(article)}
     </div>
   `;
 }
@@ -412,7 +464,7 @@ export function renderChatResult(result = {}) {
   const noticeHtml = notices.length
     ? `<div class="warning-box">${notices.map((notice) => `<div>${escapeHtml(notice)}</div>`).join("")}</div>`
     : "";
-  return `${noticeHtml}${renderChatAnswer(result.answer || "")}`;
+  return `${noticeHtml}${renderWarningBox(result.warnings || [])}${renderChatAnswer(result.answer || "")}${renderWebSourcesSection(result)}`;
 }
 
 export function renderStreamingAnswer(answer, stage) {

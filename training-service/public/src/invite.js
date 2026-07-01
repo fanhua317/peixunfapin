@@ -33,6 +33,14 @@ function materialGeneratedByLabel(material) {
   return source ? source : "AI 生成";
 }
 
+function renderWebSourcesDetails(result = {}) {
+  if (result.webSearchMode !== "on") return "";
+  const items = (result.webSources || []).slice(0, 6)
+    .map((source) => `<li><strong>${escapeHtml(source.title || source.url || "联网来源")}</strong>${source.url ? `<a class="source-url" href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(source.url)}</a>` : ""}${source.contentPreview ? `<div class="source-snippet">${escapeHtml(source.contentPreview)}</div>` : ""}</li>`)
+    .join("");
+  return `<details class="source-details"><summary>联网来源（${escapeHtml(result.webSearchStatus || "-")}）</summary>${items ? `<ul>${items}</ul>` : "<p>无</p>"}</details>`;
+}
+
 function renderTrainingMaterial(material, summary) {
   if (!material) {
     return `<section class="task learning-card">
@@ -76,6 +84,7 @@ function renderTrainingMaterial(material, summary) {
     ${studyGuide}
     ${tips ? `<div class="badges">${tips}</div>` : ""}
     ${sources ? `<details class="source-details"><summary>查看资料来源</summary><ul>${sources}</ul></details>` : ""}
+    ${renderWebSourcesDetails(material)}
   </section>`;
 }
 
@@ -112,7 +121,10 @@ function renderInvite(result) {
         </div>
         <span class="badge">${escapeHtml(result.task.quizCount)} 题 / ${escapeHtml(result.task.passScore)} 分通过</span>
       </div>
-      <div class="actions"><button id="startQuizBtn">生成并开始测试</button></div>
+      <div class="actions">
+        <label class="inline-check web-search-toggle"><input id="quizWebSearchToggle" type="checkbox" /> 联网搜索</label>
+        <button id="startQuizBtn">生成并开始测试</button>
+      </div>
       <form id="quizForm" class="quiz"></form>
       <div id="quizOutput" class="quiz-output">还未开始测试。</div>
     </section>`;
@@ -193,7 +205,10 @@ async function startQuiz() {
   try {
     result = await api("/api/quiz/generate", {
       method: "POST",
-      body: JSON.stringify({ taskId: currentInvite.task.id }),
+      body: JSON.stringify({
+        taskId: currentInvite.task.id,
+        webSearchMode: document.querySelector("#quizWebSearchToggle")?.checked ? "on" : "off",
+      }),
     });
   } finally {
     clearTimeout(timer);
@@ -213,7 +228,7 @@ async function startQuiz() {
     event.preventDefault();
     submitQuiz().catch((error) => { output.textContent = error.message; });
   }, { once: true });
-  output.innerHTML = `<p class="muted">请完成题目后提交。</p>`;
+  output.innerHTML = `<p class="muted">请完成题目后提交。</p>${renderWebSourcesDetails(currentQuiz)}`;
   if (startBtn) startBtn.textContent = "题目已生成";
 }
 

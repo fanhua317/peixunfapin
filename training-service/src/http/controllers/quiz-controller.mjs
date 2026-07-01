@@ -1,4 +1,5 @@
 import { answerQuestion, generateQuiz, submitQuiz } from "../../domain/index.mjs";
+import { normalizeWebSearchMode } from "../../ai/web-search.mjs";
 import { loadState, mutateState } from "../../store.mjs";
 import { readBody } from "../request.mjs";
 import { sendJson } from "../response.mjs";
@@ -14,7 +15,7 @@ export async function handleAnswer(req, res, url) {
 export async function handleQuiz(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/quiz/generate") {
     const body = await readBody(req);
-    const quiz = await mutateState((state) => generateQuiz(state, body.taskId));
+    const quiz = await mutateState((state) => generateQuiz(state, body.taskId, { webSearchMode: normalizeWebSearchMode(body.webSearchMode) }));
     sendJson(res, 200, { quiz });
     return true;
   }

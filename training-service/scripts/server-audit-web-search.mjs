@@ -251,6 +251,31 @@ function summarizeAnswer(result, latencyMs, extra = {}) {
   };
 }
 
+function summarizeGenerationResult(result, latencyMs, extra = {}) {
+  const article = result?.article && typeof result.article === "object" ? result.article : null;
+  const sourceRefs = result?.sourceRefs || article?.sourceRefs || [];
+  const webSources = result?.webSources || article?.webSources || [];
+  const webSourceRefs = result?.webSourceRefs || article?.webSourceRefs || [];
+  const warnings = result?.warnings || article?.warnings || [];
+  const text = result?.answer || article?.article || result?.article || result?.studyGuide || result?.translatedText || "";
+  return {
+    ok: !result?.error && result?.insufficient !== true && article?.insufficient !== true,
+    latencyMs,
+    action: result?.action || extra.action || "",
+    webSearchMode: result?.webSearchMode || article?.webSearchMode || "",
+    webSearchStatus: result?.webSearchStatus || article?.webSearchStatus || "",
+    sourceCount: sourceRefs.length || result?.sources?.length || result?.usedSources?.length || 0,
+    webSourceCount: webSources.length || webSourceRefs.length || 0,
+    warningCount: warnings.length || result?.answerQuality?.warnings?.length || 0,
+    hasAnswer: Boolean(text || result?.questions?.length),
+    questionCount: result?.questions?.length || 0,
+    answerChars: String(text || "").length,
+    error: result?.error || result?.errorMessage || "",
+    firstWebSourceUrl: webSources?.[0]?.url || "",
+    ...extra,
+  };
+}
+
 async function timed(fn) {
   const startedAt = Date.now();
   try {
@@ -294,6 +319,76 @@ async function runDirectSamples({ isolatedDataDir }) {
     });
   }
   return { samples, stateCounts: countState(state) };
+}
+
+async function runChainCoverage({ isolatedDataDir }) {
+  process.env.TRAINING_DATA_DIR = isolatedDataDir;
+  process.env.TRAINING_SQLITE_PATH = path.join(isolatedDataDir, "training.db");
+  process.env.TRAINING_STORAGE = process.env.TRAINING_STORAGE || "sqlite";
+  const { loadState } = await import("../src/store.mjs");
+  const {
+    generateKnowledgeAnswer,
+    generateMarketingArticle,
+    generateQuizQuestions,
+    generateTrainingMaterial,
+  } = await import("../src/ai/index.mjs");
+  const { translateText } = await import("../src/chat/translation.mjs");
+  const { answerGeneralChat } = await import("../src/chat/general-chat.mjs");
+  const state = await loadState();
+  const kb = chooseKnowledgeBase(state, "motor");
+  const task = (state.tasks || []).find((item) => item.knowledgeBaseId === kb?.id) || {
+    id: "audit-chain-task",
+    title: "电机应用培训",
+    instruction: "学习电机应用场景和选型关注点",
+    knowledgeBaseId: kb?.id,
+    quizCount: 2,
+    quizType: "single_choice",
+  };
+  const question = "IE3 电机的能效等级和应用场景是什么？";
+  const chains = [
+    {
+      id: "knowledge_answer",
+      run: (mode) => generateKnowledgeAnswer(state, { knowledgeBaseId: kb.id, question, webSearchMode: mode }),
+    },
+    {
+      id: "marketing_article",
+      run: (mode) => generateMarketingArticle(state, { instruction: `${kb.name || "电机"} 应用场景营销软文`, webSearchMode: mode }),
+    },
+    {
+      id: "training_material",
+      run: (mode) => generateTrainingMaterial(state, task, { webSearchMode: mode }),
+    },
+    {
+      id: "quiz_generation",
+      run: (mode) => generateQuizQuestions(state, task, { webSearchMode: mode }),
+    },
+    {
+      id: "translation",
+      run: (mode) => translateText("翻译成英文：高效电机适用于水泵、风机和输送设备。", { webSearchMode: mode }),
+    },
+    {
+      id: "general_chat",
+      run: (mode) => answerGeneralChat("工业电机有哪些典型应用场景？", { webSearchMode: mode }),
+    },
+  ];
+  const results = [];
+  for (const chain of chains) {
+    const off = await timed(() => chain.run("off"));
+    const on = await timed(() => chain.run("on"));
+    results.push({
+      id: chain.id,
+      off: off.ok
+        ? summarizeGenerationResult(off.value, off.latencyMs, { action: chain.id })
+        : { ok: false, latencyMs: off.latencyMs, action: chain.id, error: off.error },
+      on: on.ok
+        ? summarizeGenerationResult(on.value, on.latencyMs, { action: chain.id })
+        : { ok: false, latencyMs: on.latencyMs, action: chain.id, error: on.error },
+    });
+  }
+  return {
+    chains: results,
+    stateCounts: countState(state),
+  };
 }
 
 function countState(state) {
@@ -410,7 +505,12 @@ async function runApiCase(baseUrlValue, endpoint, body, accessKeyValue) {
     ok: result.ok,
     status: result.status,
     latencyMs: result.latencyMs,
-    payload: summarizeAnswer(result.payload, result.latencyMs),
+    taskId: result.payload?.task?.id || result.payload?.quiz?.taskId || "",
+    payload: summarizeGenerationResult(
+      result.payload?.task?.trainingMaterial || result.payload?.quiz || result.payload,
+      result.latencyMs,
+      { action: result.payload?.action || endpoint },
+    ),
   };
 }
 
@@ -524,7 +624,7 @@ async function runWsCase(baseUrlValue, body, accessKeyValue) {
           ok: !messages.some((item) => item.type === "error"),
           latencyMs: Date.now() - startedAt,
           events: messages.map((item) => item.type),
-          payload: summarizeAnswer(resultPayload, Date.now() - startedAt),
+          payload: summarizeGenerationResult(resultPayload, Date.now() - startedAt, { action: resultPayload?.action || "ws" }),
         });
       }
     });
@@ -543,12 +643,18 @@ async function findInviteForAnswer(dataDir) {
   const kb = chooseKnowledgeBase(state, "motor");
   const task = (state.tasks || []).find((item) => item.knowledgeBaseId === kb?.id) || state.tasks?.[0];
   const invite = (state.invites || []).find((item) => item.taskId === task?.id) || state.invites?.[0];
-  return { token: invite?.token || "", taskId: task?.id || "", knowledgeBaseId: kb?.id || "" };
+  return {
+    token: invite?.token || "",
+    taskId: task?.id || "",
+    knowledgeBaseId: kb?.id || "",
+    knowledgeBaseName: kb?.name || "",
+  };
 }
 
 async function runApiCoverage({ isolatedUrl, isolatedDataDir, accessKeyValue }) {
   const question = "IE3 电机的能效等级和应用场景是什么？";
   const cases = [];
+  const invite = await findInviteForAnswer(isolatedDataDir);
   cases.push(await runApiCase(isolatedUrl, "/api/chat", {
     sessionId: `audit-web-off-${Date.now()}`,
     message: question,
@@ -559,12 +665,51 @@ async function runApiCoverage({ isolatedUrl, isolatedDataDir, accessKeyValue }) 
     message: question,
     webSearchMode: "on",
   }, accessKeyValue));
+  cases.push(await runApiCase(isolatedUrl, "/api/chat", {
+    sessionId: `audit-marketing-web-${Date.now()}`,
+    message: "写一篇 motor 应用场景营销软文",
+    webSearchMode: "on",
+  }, accessKeyValue));
+  cases.push(await runApiCase(isolatedUrl, "/api/chat", {
+    sessionId: `audit-translation-web-${Date.now()}`,
+    message: "翻译成英文：高效电机适用于水泵和风机。",
+    webSearchMode: "on",
+  }, accessKeyValue));
+  cases.push(await runApiCase(isolatedUrl, "/api/chat", {
+    sessionId: `audit-general-web-${Date.now()}`,
+    message: "工业电机有哪些典型应用？",
+    forceGeneralChat: true,
+    webSearchMode: "on",
+  }, accessKeyValue));
   cases.push(await runApiCase(isolatedUrl, "/api/agent/dispatch", {
     sessionId: `audit-dispatch-web-${Date.now()}`,
     message: question,
     webSearchMode: "on",
   }, accessKeyValue));
-  const invite = await findInviteForAnswer(isolatedDataDir);
+  if (invite.knowledgeBaseId) {
+    const publish = await runApiCase(isolatedUrl, "/api/tasks/publish", {
+      webSearchMode: "on",
+      draft: {
+        id: `audit-draft-${Date.now()}`,
+        title: "电机应用培训审计",
+        instruction: question,
+        knowledgeBase: { id: invite.knowledgeBaseId, name: invite.knowledgeBaseName || "电机资料库" },
+        employees: [],
+        unmatchedEmployees: [{ name: "审计临时员工" }],
+        deadline: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString(),
+        quizCount: 2,
+        passScore: 80,
+        quizType: "single_choice",
+      },
+    }, accessKeyValue);
+    cases.push(publish);
+    if (publish.taskId) {
+      cases.push(await runApiCase(isolatedUrl, "/api/quiz/generate", {
+        taskId: publish.taskId,
+        webSearchMode: "on",
+      }, accessKeyValue));
+    }
+  }
   if (invite.token) {
     cases.push(await runApiCase(isolatedUrl, "/api/answer", {
       token: invite.token,
@@ -583,12 +728,17 @@ async function runApiCoverage({ isolatedUrl, isolatedDataDir, accessKeyValue }) 
   return cases;
 }
 
-function summarizeAll({ directSamples, failureModes, apiCoverage }) {
+function summarizeAll({ directSamples, chainCoverage, failureModes, apiCoverage }) {
   const onSamples = directSamples.map((item) => item.on).filter(Boolean);
   const offSamples = directSamples.map((item) => item.off).filter(Boolean);
+  const chainSamples = chainCoverage?.chains || [];
+  const chainOnSamples = chainSamples.map((item) => item.on).filter(Boolean);
+  const chainOffSamples = chainSamples.map((item) => item.off).filter(Boolean);
   const webOk = onSamples.filter((item) => item.webSearchStatus === "ok").length;
   const directLatencies = onSamples.map((item) => item.latencyMs);
   const offLatencies = offSamples.map((item) => item.latencyMs);
+  const chainOnLatencies = chainOnSamples.map((item) => item.latencyMs);
+  const chainOffLatencies = chainOffSamples.map((item) => item.latencyMs);
   const apiWebCases = apiCoverage.filter((item) => item.payload?.webSearchMode === "on" || /ws:|agent|answer|chat/.test(item.endpoint));
   const degradationOk = failureModes.filter((item) => item.result?.ok && item.result?.sourceCount > 0).length;
   return {
@@ -607,6 +757,22 @@ function summarizeAll({ directSamples, failureModes, apiCoverage }) {
     avgLocalSources: average(onSamples.map((item) => item.sourceCount)),
     avgWebSources: average(onSamples.map((item) => item.webSourceCount)),
     totalWarnings: onSamples.reduce((sum, item) => sum + (item.warningCount || 0), 0),
+    chainCases: chainSamples.length,
+    chainOk: chainOnSamples.filter((item) => item.ok && item.webSearchStatus === "ok" && item.webSourceCount > 0).length,
+    chainOffNoWeb: chainOffSamples.filter((item) => item.webSearchStatus === "disabled" && item.webSourceCount === 0).length,
+    chainOnLatency: {
+      avgMs: average(chainOnLatencies),
+      p50Ms: percentile(chainOnLatencies, 50),
+      p95Ms: percentile(chainOnLatencies, 95),
+    },
+    chainOffLatency: {
+      avgMs: average(chainOffLatencies),
+      p50Ms: percentile(chainOffLatencies, 50),
+      p95Ms: percentile(chainOffLatencies, 95),
+    },
+    chainAvgLocalSources: average(chainOnSamples.map((item) => item.sourceCount)),
+    chainAvgWebSources: average(chainOnSamples.map((item) => item.webSourceCount)),
+    chainWarnings: chainOnSamples.reduce((sum, item) => sum + (item.warningCount || 0), 0),
     apiCases: apiCoverage.length,
     apiOk: apiCoverage.filter((item) => item.ok).length,
     apiWebOk: apiWebCases.filter((item) => item.payload?.webSearchStatus === "ok").length,
@@ -631,6 +797,7 @@ const isolatedRoot = path.join(os.tmpdir(), `juzhou-web-search-audit-${Date.now(
 const isolatedDataDir = path.join(isolatedRoot, "training-index");
 let isolatedServer = null;
 let direct = null;
+let chainCoverage = null;
 let failureModes = [];
 let apiCoverage = [];
 let isolated = null;
@@ -641,6 +808,7 @@ try {
   await copyDataDir(dataDir, isolatedDataDir);
   const copiedStats = await fileStats(isolatedDataDir);
   direct = await runDirectSamples({ isolatedDataDir });
+  chainCoverage = await runChainCoverage({ isolatedDataDir });
   failureModes = await runFailureModes({ isolatedDataDir });
 
   if (includeIsolated) {
@@ -671,6 +839,7 @@ try {
 
   const summary = summarizeAll({
     directSamples: direct.samples,
+    chainCoverage,
     failureModes,
     apiCoverage,
   });
@@ -703,6 +872,7 @@ try {
       copiedBytes: copiedStats.bytes,
     },
     direct,
+    chainCoverage,
     failureModes,
     isolated,
     apiCoverage,

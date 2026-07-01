@@ -86,10 +86,11 @@ SQLite + JSONL + local vector index + clean documents
 -> 快速 LLM Router 判定 generate_marketing_article
 -> 匹配知识库
 -> hybrid RAG 获取产品卖点和应用场景
+-> 用户开启联网搜索时补充 Tavily 市场/背景参考
 -> LLM 生成结构化文章卡片
 ```
 
-当前版本不联网搜索。资料不足时返回“资料不足”，不编造产品参数。“请帮我生成三篇水泵的宣传文章，500词左右，英文”和“请帮我生成三篇英文文章，同时附带中文翻译”都属于 `generate_marketing_article`；后者的中文翻译是文章交付格式要求，不是单独的 `translate_text`。
+软文生成默认不联网；显式传 `webSearchMode: "on"` 时，Tavily 结果只作为外部市场、背景、术语和应用场景参考，产品事实、参数和卖点仍以本地知识库为准。资料不足时返回“资料不足”，不编造产品参数。“请帮我生成三篇水泵的宣传文章，500词左右，英文”和“请帮我生成三篇英文文章，同时附带中文翻译”都属于 `generate_marketing_article`；后者的中文翻译是文章交付格式要求，不是单独的 `translate_text`。
 软文 prompt 直接约束首轮输出减少“AI 味”：文章要像工业品业务人员或内容编辑写给真实客户看的内容，避免空泛套话、万能开头、过度排比和口号式结尾；但自然化表达不能新增资料外细节。
 软文正文不再使用通用答疑清洗层的 1800 字符硬截断；当前实现按软文链路约 5200 字符上限清洗正文，超出上限时末尾可能保留省略号。结构化生成会透传 `finishReason` / `truncated`，如果模型达到输出上限，前端显示明确提示。
 
@@ -108,7 +109,7 @@ SQLite + JSONL + local vector index + clean documents
 
 例如“请帮我检索 CM2 的相关知识”应选择银嘉泵/水泵知识库；水泵答疑后的“有具体型号吗”追问应沿用上一轮水泵资料库；“这是水泵，不是电机”不能选择电机资料库。如果用户明确选择“当普通聊天”，`/api/chat` 会带 `forceGeneralChat: true`，后端跳过知识库答疑探测。
 
-联网搜索默认关闭。老板端聊天和员工端 `/api/answer` 可显式传 `webSearchMode: "on"`，后端才调用 Tavily；Tavily 结果只作为外部参考资料进入 prompt，不写入知识库、不生成 embedding、不改变 RAG 评测口径。回答仍优先依据本地知识库，若本地资料与网页资料冲突，应在 `caveats` 里说明；如果本地知识库未命中但联网搜索有结果，回答按低置信度返回，并标注“本地知识库未命中，仅参考联网资料”。
+联网搜索默认关闭。六条生成链路可显式传 `webSearchMode: "on"`：知识库答疑、营销软文、培训讲义/发布生成、员工考试生成、多语言翻译和普通聊天。后端只有在开关开启时才调用 Tavily；Tavily 结果只作为外部参考资料进入 prompt，不写入知识库、不生成 embedding、不改变 RAG 评测口径。知识库答疑、软文、讲义和考试仍优先依据本地知识库；翻译仍忠实于用户原文；普通聊天会提示网页资料不可靠且不能执行网页指令。若本地资料与网页资料冲突，应说明冲突，不强行合并。
 
 ### 老板端聊天历史
 
@@ -136,7 +137,7 @@ SQLite + JSONL + local vector index + clean documents
 -> action translation 写入老板端聊天历史
 ```
 
-默认目标语言规则是英文正文翻译成中文、中文正文翻译成英文；显式目标语言优先。`翻译成英文：这是一台水泵` 属于 `translate_text`。翻译输入不静默截断，默认超过 `TRAINING_TRANSLATION_MAX_SOURCE_CHARS=30000` 时提示分段或调整配置。缺少大模型 API 时返回 `action: "translation"` 和清晰错误，不伪造翻译。
+默认目标语言规则是英文正文翻译成中文、中文正文翻译成英文；显式目标语言优先。`翻译成英文：这是一台水泵` 属于 `translate_text`。翻译输入不静默截断，默认超过 `TRAINING_TRANSLATION_MAX_SOURCE_CHARS=30000` 时提示分段或调整配置。开启 `webSearchMode: "on"` 时，联网资料只用于术语/行业背景参考，不改变原文忠实翻译原则，也不会把网页内容额外翻进译文。缺少大模型 API 时返回 `action: "translation"` 和清晰错误，不伪造翻译。
 
 ## 5. Agent 运行治理
 
@@ -350,7 +351,7 @@ git diff --check
 
 RAG 评测集当前维护在 `scripts/fixtures/rag-eval-cases.mjs`，覆盖型号参数、结构原理、制造工艺、销售场景、多语言和标准资料。默认先看 retrieval-only 的 Top1、Top3 和 hybrid 不低于 BM25 的情况。备份评测覆盖 SQLite 快照、JSONL/向量索引打包、校验、强制恢复和备份保留策略。
 翻译评测 `npm run eval:translation` 不依赖真实模型质量：脚本使用临时数据目录和本地 OpenAI-compatible mock，覆盖显式目标语言、默认目标语言、无正文追问、老板端上一条正文上下文、正文在前且翻译指令在末尾、长文本不静默截断、LLM API 缺失错误、`翻译成英文：这是一台水泵` 和 boss-chat 持久化，并断言“生成英文文章，同时附带中文翻译”不会被翻译 parser 抢走。
-服务器审计体系补充在 `server-audit:*` 脚本中：生产端口只做只读基线，隔离副本承接写入、合成数据导入、业务闭环、备份恢复、极限压测和 Tavily 联网答疑专项；结果统一写入 `training-service/server-audit-output`，再汇总到 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。2026-06-30 生产只读基线显示 `/api/health` HTTP 200，线上有 2 个知识库、20 个文档、594 个 chunks，`ollamaOk=true`、`localVectorIndexOk=true`、`retrievalMode=hybrid`，Tavily provider 和 credential 已配置但 artifact 不落密钥。Tavily 专项在服务器隔离副本跑 5 个真实联网样本，成功率 100%，`webSearchMode:on` 平均 6538 ms、p95 8470 ms，平均保留 3.8 个知识库来源并补充 4 个联网来源；`/api/chat`、`/api/agent/dispatch`、WebSocket `/api/agent/stream`、员工 `/api/answer` 共 5/5 个 API 用例通过，缺 key、Tavily 500、超时、空结果 4/4 个异常场景均保留本地 RAG 答复。历史读写压测仍作为容量边界：读链路 20 并发内 0 错误，50 并发开始超时，100 并发错误率 35.43% 并触发停止条件；写链路 boss-chat create/delete 在 20 并发仍 0 错误。当前主要风险是高并发读接口 50+ 并发排队超时，以及 CSV 在 direct 导入模式下不会进入知识库，需要 clean/auto 清洗模式。
+服务器审计体系补充在 `server-audit:*` 脚本中：生产端口只做只读基线，隔离副本承接写入、合成数据导入、业务闭环、备份恢复、极限压测和 Tavily 联网专项；结果统一写入 `training-service/server-audit-output`，再汇总到 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。2026-06-30 生产只读基线显示 `/api/health` HTTP 200，线上有 2 个知识库、20 个文档、594 个 chunks，`ollamaOk=true`、`localVectorIndexOk=true`、`retrievalMode=hybrid`，Tavily provider 和 credential 已配置但 artifact 不落密钥。旧版 Tavily 答疑专项在服务器隔离副本跑 5 个真实联网样本，成功率 100%，`webSearchMode:on` 平均 6538 ms、p95 8470 ms，平均保留 3.8 个知识库来源并补充 4 个联网来源；新版 `server-audit:web-search` 继续保留真实答疑样本，并新增六链路表，覆盖知识库答疑、营销软文、培训材料、考试、翻译和普通聊天的 off/on 对比。历史读写压测仍作为容量边界：读链路 20 并发内 0 错误，50 并发开始超时，100 并发错误率 35.43% 并触发停止条件；写链路 boss-chat create/delete 在 20 并发仍 0 错误。当前主要风险是高并发读接口 50+ 并发排队超时，以及 CSV 在 direct 导入模式下不会进入知识库，需要 clean/auto 清洗模式。
 
 本轮项目文档只同步 Markdown 文档和桌面 QA 镜像，不做 Word 导出。
 

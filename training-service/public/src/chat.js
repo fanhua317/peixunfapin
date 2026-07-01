@@ -669,6 +669,7 @@ async function publishCurrentDraft(button, options = {}, expectedDraft = null, u
       body: JSON.stringify({
         sessionId: chatSessionId,
         userMessage,
+        webSearchMode: currentWebSearchMode(),
         draft: { ...draft, ...options },
       }),
     });

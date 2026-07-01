@@ -89,6 +89,7 @@ async function executeSkillForStream(socket, run, state, body, decision, memoryC
       decision,
       source: "llm-api",
       route: "marketing_article",
+      webSearchMode: body.webSearchMode,
     });
   }
   if (skill === "answer_knowledge_question") {
@@ -114,12 +115,14 @@ async function streamChat(socket, run, body, decision, memoryContext, abortContr
     decision,
     source: "llm-api",
     route: "general_chat",
+    webSearchMode: body.webSearchMode,
   });
   const startedAt = new Date().toISOString();
   const startedMs = Date.now();
   try {
     const result = await streamGeneralChat(body.message, {
       memoryContext,
+      webSearchMode: body.webSearchMode,
       signal: abortController.signal,
       onDelta: (delta) => sendWsJson(socket, { type: "delta", delta }),
     });

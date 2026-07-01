@@ -36,7 +36,7 @@ function shouldDeleteAllTrainingRecords(query) {
   return remainder.length === 0;
 }
 
-export async function publishTask(state, draft) {
+export async function publishTask(state, draft, { webSearchMode = "off" } = {}) {
   if (!draft || !draft.knowledgeBase?.id) {
     throw new Error("draft.knowledgeBase.id required");
   }
@@ -71,7 +71,7 @@ export async function publishTask(state, draft) {
     createdBy: "boss",
     createdAt: isoNow(),
   };
-  task.trainingMaterial = await generateTrainingMaterial(state, task);
+  task.trainingMaterial = await generateTrainingMaterial(state, task, { webSearchMode });
   state.tasks.push(task);
 
   const invites = publishEmployees.map((employee) => {

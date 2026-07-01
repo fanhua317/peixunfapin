@@ -264,6 +264,9 @@ function webSearchStatusTable() {
     ["平均知识库来源", s.avgLocalSources ?? 0],
     ["平均联网来源", s.avgWebSources ?? 0],
     ["warning 数", s.totalWarnings ?? 0],
+    ["六链路覆盖", `${s.chainOk ?? 0}/${s.chainCases ?? 0} on 通过，off 不调用 ${s.chainOffNoWeb ?? 0}/${s.chainCases ?? 0}`],
+    ["六链路 on 平均 / p95", `${fmtMs(s.chainOnLatency?.avgMs)} / ${fmtMs(s.chainOnLatency?.p95Ms)}`],
+    ["六链路平均来源", `本地 ${s.chainAvgLocalSources ?? 0} / 联网 ${s.chainAvgWebSources ?? 0}`],
     ["API 透传", `${s.apiOk ?? 0}/${s.apiCases ?? 0} 用例通过，web ok=${s.apiWebOk ?? 0}`],
     ["异常降级", `${s.degradationOk ?? 0}/${s.degradationCases ?? 0} 用例保留本地 RAG 答复`],
   ]);
@@ -285,6 +288,22 @@ function webSearchCaseTable() {
   );
 }
 
+function webSearchChainTable() {
+  const chains = webSearch?.chainCoverage?.chains || [];
+  if (!chains.length) return mdTable(["链路", "off 状态/耗时", "on 状态/耗时", "本地来源", "联网来源", "warning"], [["六链路专项", "未采集", "-", "-", "-", "-"]]);
+  return mdTable(
+    ["链路", "off 状态/耗时", "on 状态/耗时", "本地来源", "联网来源", "warning"],
+    chains.map((item) => [
+      item.id,
+      `${item.off?.webSearchStatus || "-"} / ${fmtMs(item.off?.latencyMs)}`,
+      `${item.on?.webSearchStatus || "-"} / ${fmtMs(item.on?.latencyMs)}`,
+      `${item.on?.sourceCount ?? 0}`,
+      `${item.on?.webSourceCount ?? 0}`,
+      `${item.on?.warningCount ?? 0}`,
+    ]),
+  );
+}
+
 function webSearchApiTable() {
   const cases = webSearch?.apiCoverage || [];
   if (!cases.length) return mdTable(["接口", "结果", "耗时", "联网状态/来源"], [["API 透传", "未采集", "-", "-"]]);
@@ -302,13 +321,13 @@ function webSearchApiTable() {
 function webSearchResumeBullet() {
   if (!webSearch) return "- 联网答疑专项证据待采集。";
   const s = webSearch.summary || {};
-  return `- 接入 Tavily 可选联网搜索并完成服务器隔离副本端到端验证：${s.sampleCount ?? 0} 个真实联网样本成功率 ${fmtPercent(s.webSuccessRate)}，综合答疑 on p95 ${fmtMs(s.directOnLatency?.p95Ms)}，平均保留 ${s.avgLocalSources ?? 0} 个知识库来源并补充 ${s.avgWebSources ?? 0} 个联网来源；HTTP、Agent dispatch、WebSocket、员工答疑共 ${s.apiOk ?? 0}/${s.apiCases ?? 0} 个 API 用例通过，缺 key/500/空结果等 ${s.degradationOk ?? 0}/${s.degradationCases ?? 0} 个异常场景均未打断本地 RAG。`;
+  return `- 接入 Tavily 可选联网搜索并完成服务器隔离副本端到端验证：${s.sampleCount ?? 0} 个真实联网答疑样本成功率 ${fmtPercent(s.webSuccessRate)}，综合答疑 on p95 ${fmtMs(s.directOnLatency?.p95Ms)}；六条生成链路（知识库答疑、营销软文、培训材料、考试、翻译、普通聊天）${s.chainOk ?? 0}/${s.chainCases ?? 0} 个 on 用例返回联网来源，off 不调用 ${s.chainOffNoWeb ?? 0}/${s.chainCases ?? 0} 个通过；HTTP、Agent dispatch、WebSocket、员工答疑/考试/发布共 ${s.apiOk ?? 0}/${s.apiCases ?? 0} 个 API 用例通过，缺 key/500/空结果等 ${s.degradationOk ?? 0}/${s.degradationCases ?? 0} 个异常场景均未打断本地 RAG。`;
 }
 
 function webSearchInterviewLine() {
-  if (!webSearch) return "联网答疑专项正在采集证据，目标是证明 webSearchMode 默认关闭、开启后补充 Tavily 来源，并且外部搜索失败时不影响本地 RAG。";
+  if (!webSearch) return "联网专项正在采集证据，目标是证明 webSearchMode 默认关闭、开启后补充 Tavily 来源，并且外部搜索失败时不影响原生成链路。";
   const s = webSearch.summary || {};
-  return `联网搜索部分我做成显式开关，默认不消耗 Tavily credits；开启后仍以知识库 RAG 为主，把网页标题、URL、摘要作为外部参考交给同一次 LLM。专项测试覆盖 ${s.sampleCount ?? 0} 个真实联网问题，成功率 ${fmtPercent(s.webSuccessRate)}，on p95 ${fmtMs(s.directOnLatency?.p95Ms)}，并验证 HTTP、WebSocket 和员工答疑链路都能透传 webSearchMode；缺 key、Tavily 500、空结果时只返回 warning，本地知识库答案不中断。`;
+  return `联网搜索部分我做成显式开关，默认不消耗 Tavily credits；开启后仍以知识库 RAG 或用户原文为主，把网页标题、URL、摘要作为外部参考交给同一次 LLM。专项测试覆盖 ${s.sampleCount ?? 0} 个真实联网答疑问题，成功率 ${fmtPercent(s.webSuccessRate)}，on p95 ${fmtMs(s.directOnLatency?.p95Ms)}；六条生成链路 ${s.chainOk ?? 0}/${s.chainCases ?? 0} 个 on 用例返回联网来源、${s.chainOffNoWeb ?? 0}/${s.chainCases ?? 0} 个 off 用例不调用 Tavily，并验证 HTTP、WebSocket、员工答疑、发布和考试生成都能透传 webSearchMode。缺 key、Tavily 500、超时、空结果时只返回 warning，本地生成不中断。`;
 }
 
 const auditMd = [
@@ -373,6 +392,10 @@ const auditMd = [
   "",
   webSearchCaseTable(),
   "",
+  "### 六链路专项",
+  "",
+  webSearchChainTable(),
+  "",
   "### API 透传",
   "",
   webSearchApiTable(),
@@ -408,6 +431,10 @@ const resumeMd = [
     ["Tavily 成功率", webSearch ? fmtPercent(webSearch.summary?.webSuccessRate) : "待采集"],
     ["联网答疑 on p95", webSearch ? fmtMs(webSearch.summary?.directOnLatency?.p95Ms) : "待采集"],
     ["平均联网来源", webSearch?.summary?.avgWebSources ?? "待采集"],
+    ["六链路联网覆盖", webSearch ? `${webSearch.summary?.chainOk ?? 0}/${webSearch.summary?.chainCases ?? 0} on 通过` : "待采集"],
+    ["六链路 off 不调用", webSearch ? `${webSearch.summary?.chainOffNoWeb ?? 0}/${webSearch.summary?.chainCases ?? 0} 通过` : "待采集"],
+    ["六链路 on p95", webSearch ? fmtMs(webSearch.summary?.chainOnLatency?.p95Ms) : "待采集"],
+    ["六链路平均来源", webSearch ? `本地 ${webSearch.summary?.chainAvgLocalSources ?? 0} / 联网 ${webSearch.summary?.chainAvgWebSources ?? 0}` : "待采集"],
     ["联网 API 透传", webSearch ? `${webSearch.summary?.apiOk ?? 0}/${webSearch.summary?.apiCases ?? 0} 通过` : "待采集"],
     ["联网异常降级", webSearch ? `${webSearch.summary?.degradationOk ?? 0}/${webSearch.summary?.degradationCases ?? 0} 通过` : "待采集"],
     ["最大读压测并发", maxConcurrency() || "待采集"],

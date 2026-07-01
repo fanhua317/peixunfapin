@@ -70,6 +70,19 @@ export function buildKnowledgeWebSearchQuery({ question, knowledgeBase } = {}) {
   return query || clipText(question, QUERY_LIMIT);
 }
 
+export function buildLlmReferenceWebSearchQuery({ query, purpose, knowledgeBase } = {}) {
+  const kbHints = uniqueStrings([
+    knowledgeBase?.name,
+    knowledgeBase?.description,
+    ...(knowledgeBase?.aliases || []),
+  ])
+    .filter(Boolean)
+    .join(" ");
+  const purposeHint = String(purpose || "").replace(/[_:-]+/g, " ");
+  const text = clipText(`${query || ""} ${kbHints} ${purposeHint}`, QUERY_LIMIT);
+  return text || clipText(query, QUERY_LIMIT);
+}
+
 function normalizeTavilyResults(results = []) {
   const seen = new Set();
   const sources = [];
@@ -115,6 +128,18 @@ export function renderWebSearchContext(webSources = []) {
     .join("\n\n---\n\n");
 }
 
+export function webSearchResultFields(webSearch = {}, rawRefs = []) {
+  const sources = Array.isArray(webSearch.sources) ? webSearch.sources : [];
+  const refs = normalizeWebSourceRefs(rawRefs?.length ? rawRefs : webSearch.sourceRefs || [], sources);
+  return {
+    webSearchMode: webSearch.mode || "off",
+    webSearchStatus: webSearch.status || "disabled",
+    webSources: sources.filter((source) => refs.includes(source.sourceRef)),
+    webSourceRefs: refs,
+    warnings: uniqueStrings(webSearch.warnings || []),
+  };
+}
+
 async function callTavilySearch({ query, config, signal }) {
   const response = await fetch(searchEndpoint(config.baseUrl), {
     method: "POST",
@@ -146,7 +171,7 @@ async function callTavilySearch({ query, config, signal }) {
   return payload || {};
 }
 
-export async function searchWebForKnowledgeAnswer({ question, knowledgeBase, webSearchMode } = {}) {
+export async function searchWebForLlmReference({ query, webSearchMode, purpose = "llm_reference", knowledgeBase } = {}) {
   const mode = normalizeWebSearchMode(webSearchMode);
   if (mode !== "on") {
     return {
@@ -181,8 +206,8 @@ export async function searchWebForKnowledgeAnswer({ question, knowledgeBase, web
     };
   }
 
-  const query = buildKnowledgeWebSearchQuery({ question, knowledgeBase });
-  if (!query) {
+  const searchQuery = buildLlmReferenceWebSearchQuery({ query, purpose, knowledgeBase });
+  if (!searchQuery) {
     return {
       mode,
       status: "empty",
@@ -197,14 +222,14 @@ export async function searchWebForKnowledgeAnswer({ question, knowledgeBase, web
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
   try {
-    const payload = await callTavilySearch({ query, config, signal: controller.signal });
+    const payload = await callTavilySearch({ query: searchQuery, config, signal: controller.signal });
     const sources = normalizeTavilyResults(payload.results);
     const sourceRefs = normalizeWebSourceRefs([], sources);
     return {
       mode,
       status: sources.length ? "ok" : "empty",
       provider: "tavily",
-      query,
+      query: searchQuery,
       sources,
       sourceRefs,
       warnings: sources.length ? [] : ["web_search_empty"],
@@ -217,7 +242,7 @@ export async function searchWebForKnowledgeAnswer({ question, knowledgeBase, web
       mode,
       status: "failed",
       provider: "tavily",
-      query,
+      query: searchQuery,
       sources: [],
       sourceRefs: [],
       warnings: ["web_search_failed"],
@@ -227,4 +252,13 @@ export async function searchWebForKnowledgeAnswer({ question, knowledgeBase, web
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function searchWebForKnowledgeAnswer({ question, knowledgeBase, webSearchMode } = {}) {
+  return await searchWebForLlmReference({
+    query: buildKnowledgeWebSearchQuery({ question, knowledgeBase }),
+    knowledgeBase,
+    webSearchMode,
+    purpose: "knowledge_answer",
+  });
 }

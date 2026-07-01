@@ -1,4 +1,5 @@
 import { deleteTrainingRecords, getReportsOverview, getTaskStatus, publishTask } from "../../domain/index.mjs";
+import { normalizeWebSearchMode } from "../../ai/web-search.mjs";
 import { appendBossChatTurn } from "../../boss-chat/store.mjs";
 import { normalizeSessionId } from "../../memory/index.mjs";
 import { loadState, mutateState } from "../../store.mjs";
@@ -25,11 +26,13 @@ export async function handleReports(req, res, url) {
 export async function handleTasks(req, res, url, context) {
   if (req.method === "POST" && url.pathname === "/api/tasks/publish") {
     const body = await readBody(req);
-    const result = await mutateState((state) => publishTask(state, body.draft));
+    const webSearchMode = normalizeWebSearchMode(body.webSearchMode);
+    const result = await mutateState((state) => publishTask(state, body.draft, { webSearchMode }));
     const base = publicBaseUrl(req, context);
     const payload = {
       action: "publish",
       draftId: body.draft?.id || "",
+      webSearchMode,
       ...result,
       inviteLinks: inviteLinks(result.invites, base),
     };

@@ -55,6 +55,9 @@ function summarizeArticle(payload) {
     action: payload.action,
     insufficient: payload.article?.insufficient === true,
     sourceCount: payload.article?.sourceRefs?.length || 0,
+    webSourceCount: payload.article?.webSourceRefs?.length || payload.article?.webSources?.length || 0,
+    webSearchMode: payload.article?.webSearchMode || "off",
+    webSearchStatus: payload.article?.webSearchStatus || "",
     warningCount: payload.article?.warnings?.length || 0,
     retrievalMode: payload.article?.retrievalMode || "",
     model: payload.article?.model || "",
@@ -84,6 +87,9 @@ function summarizeChat(payload) {
     route: payload.route || "",
     hasAnswer: Boolean(payload.answer),
     answerPreview: compact(payload.answer, 160),
+    webSearchMode: payload.webSearchMode || "off",
+    webSearchStatus: payload.webSearchStatus || "",
+    webSourceCount: payload.webSourceRefs?.length || payload.webSources?.length || 0,
   };
 }
 
@@ -200,13 +206,13 @@ const webSkills = [
     requiresConfirmation: false,
     idempotent: true,
     timeoutMs: 60000,
-    inputSummary: ({ message }) => ({ instructionPreview: compact(message) }),
+    inputSummary: ({ message, webSearchMode }) => ({ instructionPreview: compact(message), webSearchMode: webSearchMode || "off" }),
     summarizeResult: summarizeArticle,
-    async execute({ state, message, decision, memoryContext }) {
+    async execute({ state, message, decision, memoryContext, webSearchMode }) {
       return {
         action: "marketing_article",
         decision,
-        article: await generateMarketingArticle(state, { instruction: message, memoryContext }),
+        article: await generateMarketingArticle(state, { instruction: message, memoryContext, webSearchMode }),
       };
     },
   },
@@ -269,11 +275,11 @@ const webSkills = [
     requiresConfirmation: false,
     idempotent: true,
     timeoutMs: 60000,
-    inputSummary: ({ message }) => ({ messagePreview: compact(message) }),
+    inputSummary: ({ message, webSearchMode }) => ({ messagePreview: compact(message), webSearchMode: webSearchMode || "off" }),
     summarizeResult: summarizeTranslation,
-    async execute({ message, sessionId }) {
+    async execute({ message, sessionId, webSearchMode }) {
       try {
-        return await translateText(message, { sessionId });
+        return await translateText(message, { sessionId, webSearchMode });
       } catch (error) {
         return {
           action: "translation",
@@ -281,6 +287,10 @@ const webSkills = [
           source: "llm-api",
           route: "translation",
           llmConfigured: false,
+          webSearchMode: webSearchMode || "off",
+          webSearchStatus: "disabled",
+          webSources: [],
+          webSourceRefs: [],
         };
       }
     },
@@ -294,14 +304,14 @@ const webSkills = [
     requiresConfirmation: false,
     idempotent: true,
     timeoutMs: 60000,
-    inputSummary: ({ message }) => ({ messagePreview: compact(message) }),
+    inputSummary: ({ message, webSearchMode }) => ({ messagePreview: compact(message), webSearchMode: webSearchMode || "off" }),
     summarizeResult: summarizeChat,
-    async execute({ message, decision, memoryContext }) {
+    async execute({ message, decision, memoryContext, webSearchMode }) {
       try {
         return {
           action: "chat",
           decision,
-          ...(await answerGeneralChat(message, { memoryContext })),
+          ...(await answerGeneralChat(message, { memoryContext, webSearchMode })),
         };
       } catch (error) {
         return {
@@ -311,6 +321,10 @@ const webSkills = [
           source: "llm-api",
           route: "general_chat",
           llmConfigured: false,
+          webSearchMode: webSearchMode || "off",
+          webSearchStatus: "disabled",
+          webSources: [],
+          webSourceRefs: [],
         };
       }
     },
