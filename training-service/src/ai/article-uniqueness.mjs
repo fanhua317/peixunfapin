@@ -1,3 +1,5 @@
+import { aiWritingStyleThresholds, analyzeMarketingArticleStyle } from "./ai-writing-style.mjs";
+
 const DEFAULT_THRESHOLDS = {
   internalRepeatMax: Number(process.env.TRAINING_MARKETING_INTERNAL_REPEAT_MAX || 0.18),
   batchSimilarityMax: Number(process.env.TRAINING_MARKETING_BATCH_SIMILARITY_MAX || 0.42),
@@ -28,12 +30,15 @@ function numberValue(value, fallback) {
 }
 
 export function marketingUniquenessThresholds(overrides = {}) {
+  const aiStyle = aiWritingStyleThresholds(overrides);
   return {
     internalRepeatMax: numberValue(overrides.internalRepeatMax, DEFAULT_THRESHOLDS.internalRepeatMax),
     batchSimilarityMax: numberValue(overrides.batchSimilarityMax, DEFAULT_THRESHOLDS.batchSimilarityMax),
     historySimilarityMax: numberValue(overrides.historySimilarityMax, DEFAULT_THRESHOLDS.historySimilarityMax),
     titleSimilarityMax: numberValue(overrides.titleSimilarityMax, DEFAULT_THRESHOLDS.titleSimilarityMax),
     templatePhraseHitsMax: numberValue(overrides.templatePhraseHitsMax, DEFAULT_THRESHOLDS.templatePhraseHitsMax),
+    aiWritingScoreMax: aiStyle.aiWritingScoreMax,
+    aiWritingTopIssues: aiStyle.aiWritingTopIssues,
   };
 }
 
@@ -193,9 +198,11 @@ function maxHistorySimilarity(articles, historyArticles = []) {
 function articleMetrics(article, index, thresholds) {
   const templateHits = templatePhraseHits(article);
   const repeatRatio = internalRepeatRatio(article);
+  const aiStyle = analyzeMarketingArticleStyle(article, thresholds);
   const issues = [];
   if (repeatRatio > thresholds.internalRepeatMax) issues.push("internal_repeat");
   if (templateHits.length > thresholds.templatePhraseHitsMax) issues.push("template_phrases");
+  if (aiStyle.status === "needs_rewrite") issues.push("ai_writing_style");
   return {
     index,
     title: article.title || "",
@@ -203,6 +210,15 @@ function articleMetrics(article, index, thresholds) {
     internalRepeatRatio: repeatRatio,
     templatePhraseHits: templateHits.length,
     templatePhrases: templateHits.slice(0, 6),
+    aiWritingScore: aiStyle.aiWritingScore,
+    aiWritingScoreMax: aiStyle.aiWritingScoreMax,
+    aiWritingStatus: aiStyle.status,
+    aiWritingLabel: aiStyle.label,
+    aiWritingClassification: aiStyle.classification,
+    aiWritingConfidence: aiStyle.confidence,
+    aiWritingIssueCount: aiStyle.issueCount,
+    aiWritingTopIssues: aiStyle.topIssues,
+    aiWritingWarning: aiStyle.warning,
     status: issues.length ? "needs_rewrite" : "ok",
     issues,
   };
@@ -215,8 +231,33 @@ function riskScore(metrics, thresholds) {
     metrics.historyMaxSimilarity / Math.max(thresholds.historySimilarityMax, 0.01),
     metrics.titleSimilarity / Math.max(thresholds.titleSimilarityMax, 0.01),
     metrics.templatePhraseHits / Math.max(thresholds.templatePhraseHitsMax, 1),
+    metrics.aiWritingScoreMax / Math.max(thresholds.aiWritingScoreMax, 1),
   ];
   return parts.reduce((sum, value) => sum + Math.max(0, value), 0);
+}
+
+function aggregateAiWritingIssues(articleScores, limit = 8) {
+  const grouped = new Map();
+  for (const article of articleScores) {
+    for (const issue of article.aiWritingTopIssues || []) {
+      const current = grouped.get(issue.type) || {
+        type: issue.type,
+        label: issue.label,
+        severity: issue.severity,
+        severityLabel: issue.severityLabel,
+        count: 0,
+        samples: [],
+      };
+      current.count += Number(issue.count) || 0;
+      for (const sample of issue.samples || []) {
+        if (sample && current.samples.length < 3 && !current.samples.includes(sample)) current.samples.push(sample);
+      }
+      grouped.set(issue.type, current);
+    }
+  }
+  return [...grouped.values()]
+    .sort((left, right) => right.count - left.count)
+    .slice(0, Math.max(1, Number(limit) || 8));
 }
 
 export function evaluateMarketingUniqueness(articlesInput = [], { historyArticles = [], thresholds: thresholdOverrides = {} } = {}) {
@@ -228,12 +269,16 @@ export function evaluateMarketingUniqueness(articlesInput = [], { historyArticle
   const history = maxHistorySimilarity(articles, Array.isArray(historyArticles) ? historyArticles : []);
   const maxInternalRepeat = articleScores.reduce((max, item) => Math.max(max, item.internalRepeatRatio), 0);
   const maxTemplateHits = articleScores.reduce((max, item) => Math.max(max, item.templatePhraseHits), 0);
+  const maxAiWritingArticle = articleScores.reduce((best, item) => (item.aiWritingScore > (best?.aiWritingScore ?? -1) ? item : best), null);
+  const maxAiWritingScore = maxAiWritingArticle?.aiWritingScore || 0;
+  const aiWritingWarnings = articleScores.map((item) => item.aiWritingWarning).filter(Boolean);
   const issues = [
     ...(maxInternalRepeat > thresholds.internalRepeatMax ? ["internal_repeat"] : []),
     ...(batch.value > thresholds.batchSimilarityMax ? ["batch_similarity"] : []),
     ...(history.value > thresholds.historySimilarityMax ? ["history_similarity"] : []),
     ...(title.value > thresholds.titleSimilarityMax ? ["title_similarity"] : []),
     ...(maxTemplateHits > thresholds.templatePhraseHitsMax ? ["template_phrases"] : []),
+    ...(maxAiWritingScore > thresholds.aiWritingScoreMax ? ["ai_writing_style"] : []),
   ];
   const metrics = {
     internalRepeatRatio: clampRatio(maxInternalRepeat),
@@ -241,6 +286,11 @@ export function evaluateMarketingUniqueness(articlesInput = [], { historyArticle
     historyMaxSimilarity: clampRatio(history.value),
     templatePhraseHits: maxTemplateHits,
     titleSimilarity: clampRatio(title.value),
+    aiWritingScoreMax: maxAiWritingScore,
+    aiWritingStatus: maxAiWritingScore > thresholds.aiWritingScoreMax ? "needs_rewrite" : "ok",
+    aiWritingLabel: maxAiWritingArticle?.aiWritingLabel || "",
+    aiWritingIssueCount: articleScores.reduce((sum, item) => sum + (Number(item.aiWritingIssueCount) || 0), 0),
+    aiWritingTopIssues: aggregateAiWritingIssues(articleScores, thresholds.aiWritingTopIssues),
   };
   return {
     enabled: true,
@@ -257,6 +307,7 @@ export function evaluateMarketingUniqueness(articlesInput = [], { historyArticle
       sessionId: history.matchedSessionId,
     },
     articles: articleScores,
+    warnings: aiWritingWarnings,
     riskScore: riskScore(metrics, thresholds),
   };
 }
@@ -274,5 +325,6 @@ export function summarizeUniquenessIssues(uniqueness = {}) {
   if (issues.includes("history_similarity")) parts.push(`history similarity ${(uniqueness.historyMaxSimilarity * 100).toFixed(1)}%`);
   if (issues.includes("title_similarity")) parts.push(`title similarity ${(uniqueness.titleSimilarity * 100).toFixed(1)}%`);
   if (issues.includes("template_phrases")) parts.push(`template phrase hits ${uniqueness.templatePhraseHits}`);
+  if (issues.includes("ai_writing_style")) parts.push(`AI writing score ${uniqueness.aiWritingScoreMax}/${uniqueness.thresholds?.aiWritingScoreMax || 35}`);
   return parts.join("; ");
 }

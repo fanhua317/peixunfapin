@@ -17,6 +17,7 @@ import {
   summarizeUniquenessIssues,
   uniquenessDisabled,
 } from "./article-uniqueness.mjs";
+import { aiWritingStylePromptGuidance } from "./ai-writing-style.mjs";
 import {
   cleanAnswerText,
   cleanTrainingText,
@@ -274,6 +275,7 @@ Hard rules:
 - ${languageInstruction({ instruction: text, targetLanguage, bilingual })}
 - Channel: ${articleChannel(text, memoryPreferences)}. Length target per article: ${articleLengthInstruction(text, memoryPreferences)}.
 - Avoid generic AI templates, empty slogans, repeated openings, repeated paragraph structures, and overused endings.
+- Avoid-AI-writing style guardrail: ${aiWritingStylePromptGuidance()}
 - For multiple articles, each article must use a distinct angle from this list: ${JSON.stringify(angles)}.
 - Multiple articles must not reuse the same opening sentence, same heading order, same paragraph skeleton, or same closing sentence.
 - User long-term preferences: ${memoryPreferences.lines?.length ? memoryPreferences.lines.join("; ") : "none"}.
@@ -314,6 +316,7 @@ Rules:
 - Preserve valid sourceRefs and webSourceRefs. Use only the source lists provided below.
 - Change article angles, opening sentences, paragraph order, transitions, and closing style.
 - If multiple articles are requested, make them clearly different in structure and sales angle.
+- Fix avoid-AI-writing issues without adding facts: remove broad AI-style openers, filler transitions, hollow intensifiers, chatbot artifacts, and generic conclusions.
 - ${languageInstruction({ instruction: text, targetLanguage, bilingual })}
 - Output JSON only using this shape: ${JSON.stringify(articleSchema(articleCount))}
 
@@ -375,6 +378,9 @@ function attemptSummary(attempt, uniqueness, accepted = false, error = "") {
     historyMaxSimilarity: uniqueness?.historyMaxSimilarity ?? null,
     titleSimilarity: uniqueness?.titleSimilarity ?? null,
     templatePhraseHits: uniqueness?.templatePhraseHits ?? null,
+    aiWritingScoreMax: uniqueness?.aiWritingScoreMax ?? null,
+    aiWritingStatus: uniqueness?.aiWritingStatus || "",
+    aiWritingIssueCount: uniqueness?.aiWritingIssueCount ?? null,
     issues: uniqueness?.issues || [],
     error,
   };
@@ -395,9 +401,11 @@ function buildFinalResult({ articles, knowledgeBase, chunks, webSearch, webField
     ...warnings,
     ...enrichedArticles.flatMap((article) => article.warnings || []),
     ...(webFields.warnings || []),
+    ...(Array.isArray(uniqueness?.warnings) ? uniqueness.warnings : []),
     ...(Array.isArray(modelResult.data?.warnings) ? modelResult.data.warnings : [modelResult.data?.warnings].filter(Boolean)),
     ...(modelResult.truncated || modelResult.finishReason === "length" ? ["model_output_truncated"] : []),
-    ...(uniqueness?.overallStatus === "needs_rewrite" ? ["article_similarity_above_threshold"] : []),
+    ...(uniqueness?.overallStatus === "needs_rewrite" && (uniqueness.issues || []).some((item) => item !== "ai_writing_style") ? ["article_similarity_above_threshold"] : []),
+    ...((uniqueness?.issues || []).includes("ai_writing_style") ? ["article_ai_style_above_threshold"] : []),
   ]).slice(0, 12);
   const first = enrichedArticles[0] || {};
   return {

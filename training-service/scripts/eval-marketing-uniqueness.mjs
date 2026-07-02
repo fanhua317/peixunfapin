@@ -19,6 +19,9 @@ process.env.TRAINING_MARKETING_INTERNAL_REPEAT_MAX = "0.18";
 process.env.TRAINING_MARKETING_BATCH_SIMILARITY_MAX = "0.42";
 process.env.TRAINING_MARKETING_HISTORY_SIMILARITY_MAX = "0.50";
 process.env.TRAINING_MARKETING_TITLE_SIMILARITY_MAX = "0.65";
+process.env.TRAINING_MARKETING_AI_STYLE_ENABLED = "1";
+process.env.TRAINING_MARKETING_AI_SCORE_MAX = "35";
+process.env.TRAINING_MARKETING_AI_STYLE_TOP_ISSUES = "8";
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -121,6 +124,7 @@ try {
     evaluateMarketingUniqueness,
     marketingUniquenessThresholds,
   } = await import("../src/ai/article-uniqueness.mjs");
+  const { analyzeMarketingArticleStyle } = await import("../src/ai/ai-writing-style.mjs");
   const { appendBossChatMessages, listRecentMarketingArticles } = await import("../src/boss-chat/store.mjs");
   const { generateMarketingArticle } = await import("../src/ai/marketing.mjs");
 
@@ -136,6 +140,25 @@ try {
 
   const template = evaluateMarketingUniqueness([repeatedArticle("Template", "A")]);
   assert(template.templatePhraseHits > 0, "template phrase should be detected");
+
+  const aiHeavyArticle = {
+    title: "AI-heavy industrial article",
+    summary: "In today's ever-evolving landscape, this robust solution is a game-changer.",
+    article: [
+      "In today's ever-evolving landscape, we delve into the intricate tapestry of industrial innovation.",
+      "This seamless, robust paradigm showcases a comprehensive framework.",
+      "Moreover, it truly is a game-changer. Furthermore, this pivotal moment underscores market transformation.",
+    ].join(" "),
+  };
+  const aiHeavy = analyzeMarketingArticleStyle(aiHeavyArticle);
+  assert(aiHeavy.aiWritingScore > 60, `AI-heavy text should score high, got ${aiHeavy.aiWritingScore}`);
+  const aiHeavyQuality = evaluateMarketingUniqueness([aiHeavyArticle]);
+  assert(aiHeavyQuality.aiWritingScoreMax > 35, `AI writing score should flag AI-heavy prose, got ${aiHeavyQuality.aiWritingScoreMax}`);
+  assert(aiHeavyQuality.issues.includes("ai_writing_style"), "AI-heavy prose should include ai_writing_style issue");
+  assert(aiHeavyQuality.aiWritingTopIssues?.length > 0, "AI writing style issues should include grouped top issues");
+
+  const plainIndustrial = analyzeMarketingArticleStyle(diversifiedArticles()[0]);
+  assert(plainIndustrial.aiWritingScore <= 35, `plain industrial prose should pass AI-style threshold, got ${plainIndustrial.aiWritingScore}`);
 
   const mixed = evaluateMarketingUniqueness([
     {
@@ -223,11 +246,15 @@ try {
   assert(result.uniqueness?.historyWindowDays === 3, `history window should be 3 days, got ${result.uniqueness?.historyWindowDays}`);
   assert(result.uniqueness?.batchMaxSimilarity <= result.uniqueness.thresholds.batchSimilarityMax, `final batch similarity should pass threshold, got ${result.uniqueness?.batchMaxSimilarity}`);
   assert(result.uniqueness?.historyMaxSimilarity <= result.uniqueness.thresholds.historySimilarityMax, `final history similarity should pass threshold, got ${result.uniqueness?.historyMaxSimilarity}`);
+  assert(result.uniqueness?.aiWritingScoreMax <= result.uniqueness.thresholds.aiWritingScoreMax, `final AI writing score should pass threshold, got ${result.uniqueness?.aiWritingScoreMax}`);
+  assert(result.articles.every((article) => article.uniqueness?.aiWritingScore <= article.uniqueness?.aiWritingScoreMax), "per-article AI writing scores should pass thresholds");
   assert(result.sourceRefs?.includes("pump.md :: CM2"), "top-level source refs should be preserved");
   assert(result.articles.every((article) => article.sourceRefs?.includes("pump.md :: CM2")), "per-article source refs should be preserved");
   assert(prompts[0].includes("Generate 3 factual marketing article"), "first prompt should request three structured articles");
   assert(prompts[0].includes("distinct angle"), "first prompt should enforce different angles");
+  assert(prompts[0].includes("Avoid-AI-writing style guardrail"), "first prompt should include avoid-ai-writing style guardrail");
   assert(prompts.some((prompt) => prompt.includes("Rewrite the marketing article JSON")), "rewrite prompt should be sent");
+  assert(prompts.some((prompt) => prompt.includes("Fix avoid-AI-writing issues")), "rewrite prompt should target AI writing style issues");
   assert(prompts.some((prompt) => prompt.includes("Allowed local sourceRefs")), "rewrite prompt should preserve local source refs");
 
   console.log(JSON.stringify({
@@ -237,6 +264,8 @@ try {
       distinctBatchMaxSimilarity: distinct.batchMaxSimilarity,
       templatePhraseHits: template.templatePhraseHits,
       mixedBatchMaxSimilarity: mixed.batchMaxSimilarity,
+      aiHeavyScore: aiHeavy.aiWritingScore,
+      plainIndustrialScore: plainIndustrial.aiWritingScore,
     },
     generation: {
       articleCount: result.articleCount,
@@ -245,6 +274,8 @@ try {
       internalRepeatRatio: result.uniqueness.internalRepeatRatio,
       batchMaxSimilarity: result.uniqueness.batchMaxSimilarity,
       historyMaxSimilarity: result.uniqueness.historyMaxSimilarity,
+      aiWritingScoreMax: result.uniqueness.aiWritingScoreMax,
+      aiWritingIssueCount: result.uniqueness.aiWritingIssueCount,
       historyWindowDays: result.uniqueness.historyWindowDays,
       sourceCount: result.sourceRefs.length,
       warningCount: result.warnings.length,

@@ -108,6 +108,8 @@ try {
   });
   assert(capturedPrompts.some((prompt) => prompt.includes("Avoid generic AI templates")), "prompt should include anti-template AI-style guidance");
   assert(capturedPrompts.some((prompt) => prompt.includes("repeated openings") && prompt.includes("overused endings")), "prompt should discourage generic repeated phrasing");
+  assert(capturedPrompts.some((prompt) => prompt.includes("Avoid-AI-writing style guardrail")), "prompt should include vendored avoid-ai-writing guidance");
+  assert(capturedPrompts.some((prompt) => prompt.includes("delve/leverage/robust/seamless") && prompt.includes("chatbot artifacts")), "prompt should discourage common AI writing tells");
   assert(capturedPrompts.some((prompt) => prompt.includes("Do not invent facts")), "prompt should preserve factual grounding while improving style");
   assert(result.article.length > 2400, `article should keep long content, got ${result.article.length}`);
   assert(!result.article.trim().endsWith("..."), "article should not be hard-cut with ellipsis");

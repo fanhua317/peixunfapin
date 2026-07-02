@@ -63,6 +63,8 @@ function summarizeArticle(payload) {
     internalRepeatRatio: payload.article?.uniqueness?.internalRepeatRatio ?? null,
     batchMaxSimilarity: payload.article?.uniqueness?.batchMaxSimilarity ?? null,
     historyMaxSimilarity: payload.article?.uniqueness?.historyMaxSimilarity ?? null,
+    aiWritingScoreMax: payload.article?.uniqueness?.aiWritingScoreMax ?? null,
+    aiWritingIssueCount: payload.article?.uniqueness?.aiWritingIssueCount ?? null,
     rewriteAttempts: payload.article?.uniqueness?.rewriteAttempts || 0,
     warningCount: payload.article?.warnings?.length || 0,
     retrievalMode: payload.article?.retrievalMode || "",

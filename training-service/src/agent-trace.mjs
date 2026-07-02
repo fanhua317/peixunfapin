@@ -72,6 +72,8 @@ function summarizeResult(result) {
       insufficient: result.article?.insufficient === true,
       sourceCount: result.article?.sourceRefs?.length || 0,
       warningCount: result.article?.warnings?.length || 0,
+      uniquenessStatus: result.article?.uniqueness?.overallStatus,
+      aiWritingScoreMax: result.article?.uniqueness?.aiWritingScoreMax,
       retrievalMode: result.article?.retrievalMode,
     };
   }

@@ -331,10 +331,30 @@ function renderMetricPill(label, value) {
   return `<span class="metric-pill"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></span>`;
 }
 
+function scoreText(value, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  const threshold = Number(max);
+  return Number.isFinite(threshold) ? `${Math.round(number)}/${Math.round(threshold)}` : String(Math.round(number));
+}
+
+function renderAiWritingIssues(issues = []) {
+  const items = (issues || [])
+    .slice(0, 5)
+    .map((issue) => {
+      const samples = (issue.samples || []).slice(0, 2).join(" / ");
+      const label = [issue.label || issue.type || "AI writing pattern", issue.count ? `x${issue.count}` : ""].filter(Boolean).join(" ");
+      return `<li>${escapeHtml(label)}${samples ? `：${escapeHtml(samples)}` : ""}</li>`;
+    })
+    .join("");
+  return items ? `<ul class="compact-list">${items}</ul>` : "";
+}
+
 function renderUniquenessSummary(uniqueness = {}) {
   if (!uniqueness || uniqueness.enabled === false || !uniqueness.overallStatus) return "";
   const status = uniqueness.overallStatus === "ok" ? "通过" : "需注意";
   const historyDays = uniqueness.historyWindowDays || 3;
+  const aiScoreLimit = uniqueness.thresholds?.aiWritingScoreMax ?? uniqueness.aiWritingScoreMax;
   const metrics = [
     renderMetricPill("状态", status),
     renderMetricPill("内部重复", percentText(uniqueness.internalRepeatRatio)),
@@ -342,14 +362,17 @@ function renderUniquenessSummary(uniqueness = {}) {
     renderMetricPill(`近${historyDays}天历史最高相似`, percentText(uniqueness.historyMaxSimilarity)),
     renderMetricPill("标题相似", percentText(uniqueness.titleSimilarity)),
     renderMetricPill("模板句命中", String(uniqueness.templatePhraseHits ?? 0)),
+    renderMetricPill("AI 写作痕迹", scoreText(uniqueness.aiWritingScoreMax, aiScoreLimit)),
+    renderMetricPill("AI 问题数", String(uniqueness.aiWritingIssueCount ?? 0)),
     renderMetricPill("重写次数", String(uniqueness.rewriteAttempts ?? 0)),
   ].join("");
   const issues = (uniqueness.issues || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
   return `
     <div class="uniqueness-summary">
-      <div class="task-section-title">重复率检查</div>
+      <div class="task-section-title">重复率 / AI 写作痕迹</div>
       <div class="metric-row">${metrics}</div>
       ${issues ? `<ul class="compact-list">${issues}</ul>` : ""}
+      ${renderAiWritingIssues(uniqueness.aiWritingTopIssues || [])}
     </div>
   `;
 }
@@ -359,9 +382,10 @@ function renderArticleUniqueness(uniqueness = null) {
   const metrics = [
     renderMetricPill("内部重复", percentText(uniqueness.internalRepeatRatio)),
     renderMetricPill("模板句命中", String(uniqueness.templatePhraseHits ?? 0)),
+    renderMetricPill("AI 写作痕迹", scoreText(uniqueness.aiWritingScore, uniqueness.aiWritingScoreMax)),
     renderMetricPill("状态", uniqueness.status === "ok" ? "通过" : "需注意"),
   ].join("");
-  return `<div class="article-uniqueness metric-row">${metrics}</div>`;
+  return `<div class="article-uniqueness metric-row">${metrics}</div>${renderAiWritingIssues(uniqueness.aiWritingTopIssues || [])}`;
 }
 
 function renderMarketingArticleBlock(article = {}, { index = 0, total = 1 } = {}) {
