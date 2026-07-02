@@ -15,6 +15,7 @@
 | 生产 RAG 健康状态 | 已验证：/api/health retrievalMode=hybrid，ollamaOk=true，localVectorIndexOk=true |
 | 备份恢复 | 已采集：`training-service\server-audit-output\backup-restore-20260624-235259.json` |
 | Tavily 联网专项 | 已采集：`training-service\server-audit-output\web-search-20260630-190622.json`；本轮已扩展六链路 mock 回归 |
+| 软文去重专项 | 本地 mock 回归通过，最近 3 天历史窗口，3 篇高重复稿触发 1 次重写 |
 | 合成数据 | 已采集：`training-service\server-audit-output\synthetic-20260624-230439.json` |
 
 > 生产端口只做只读基线；写入、合成数据导入、极限压测和恢复演练均在服务器本机 127.0.0.1:18787 隔离副本完成。
@@ -155,18 +156,38 @@
 | /api/answer | 通过 | 7665 ms | ok / 本地 8 / 联网 3 |
 | ws:/api/agent/stream | 通过 | 9982 ms | ok / 本地 8 / 联网 3 |
 
-## 9. Bug 与风险记录
+## 9. 软文去重专项
+
+| 指标 | 数值 |
+| --- | --- |
+| 回归脚本 | `npm run eval:marketing-uniqueness` |
+| 历史比对窗口 | 最近 3 天老板端营销软文 |
+| 历史比对上限 | 50 篇 |
+| 自动重写上限 | 2 轮 |
+| 样本文章数 | 3 |
+| 首轮触发 | 高内部重复、同批相似、模板句命中 |
+| 实际重写次数 | 1 |
+| 最终状态 | `overallStatus=ok` |
+| 最终内部重复率 | 1.25% |
+| 最终同批最高相似 | 1.9% |
+| 最终历史最高相似 | 5.0% |
+| 来源保留 | 1 个本地 `sourceRef` 保留到顶层和每篇文章 |
+
+覆盖项：完全相同文章高相似、共享产品型号但不同结构不误判、模板句命中、中英文混合重复、多篇结构化返回、最近 3 天历史过滤、自动重写后保留来源引用。该专项是本地 mock 回归，用于证明算法和闭环稳定；不代表真实模型在所有主题上的实际重复率。
+
+## 10. Bug 与风险记录
 
 - BUG-PERF-1 [P2] isolated-read read 并发 50 出现超时或触发停止条件。证据：errorRate=0.0145, p99=22570ms, stop=-。建议：排查健康检查内串行外部依赖、Agent Run 查询、SQLite 并发、接口超时和反向代理/隧道排队。先把生产容量口径控制在 20 并发以内。
 - BUG-PERF-2 [P1] isolated-read read 并发 100 出现超时或触发停止条件。证据：errorRate=0.3543, p99=30015ms, stop=error_rate>0.1,p99>30000ms。建议：排查健康检查内串行外部依赖、Agent Run 查询、SQLite 并发、接口超时和反向代理/隧道排队。先把生产容量口径控制在 20 并发以内。
 - BUG-JOB-3 [P3] 历史隔离副本 embedding 任务失败，最新生产健康已恢复。证据：embed status=failed, error=fetch failed。建议：保留历史证据并在下次导入/embedding 审计中复测，不再把它视为当前生产检索故障。
 - BUG-DATA-4 [P2] direct 导入模式未覆盖 CSV 样本。证据：远程样本 30 个文件含 10 个 CSV，direct 导入结果 fileCount=20、tableRowParentCount=0。建议：CSV/XLSX/PDF 使用 clean/auto 清洗模式；报告中不要把 direct 模式写成支持表格导入。
 
-## 10. 结论
+## 11. 结论
 
 - 隔离副本读接口在 20 并发以内 0 错误；50 并发开始出现 1.45% 超时，100 并发错误率升至 35.43% 并触发停止条件。
 - 写入链路 boss-chat create/delete 在 1/3/5/10/20 并发均 0 错误，最高 12.47 RPS，20 并发 p99 约 1853 ms。
 - 员工培训闭环已跑通：发布、邀请、答疑、生成考试、提交答案、报表汇总全部成功。
 - Tavily 联网答疑专项已完成：5 个真实样本成功率 100%，平均联网来源 4，异常降级 4/4 通过；本轮本地 mock 回归已把可选联网扩展到六条生成链路，真实服务器六链路量化将在下一次 `server-audit:web-search` 中刷新。
+- 软文去重专项已完成本地 mock 回归：最近 3 天历史窗口、3 篇高重复稿、1 次自动重写，最终同批最高相似约 1.9%、历史最高相似约 5.0%。
 - 备份、校验、dry-run restore、throwaway 强制恢复均成功。
 - 当前生产健康检查显示 retrievalMode=hybrid、ollamaOk=true、localVectorIndexOk=true，向量检索处于可用状态；历史导入/embedding 单项失败保留为复测风险，不再作为当前线上短板。

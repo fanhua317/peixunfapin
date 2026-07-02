@@ -412,6 +412,71 @@ export async function deleteBossChatSession(sessionId, { accountId = BOSS_ACCOUN
   return await updateBossChatSession(sessionId, { status: "deleted" }, { accountId });
 }
 
+function marketingArticlesFromPayload(payload = {}, message = {}) {
+  if (payload?.action !== "marketing_article") return [];
+  const root = payload.article || payload;
+  const articles = Array.isArray(root.articles) && root.articles.length ? root.articles : [root];
+  return articles
+    .filter((article) => article && typeof article === "object" && String(article.article || "").trim())
+    .map((article, index) => ({
+      index,
+      sessionId: message.sessionId || "",
+      messageId: message.id || "",
+      createdAt: message.createdAt || "",
+      knowledgeBaseId: article.knowledgeBase?.id || root.knowledgeBase?.id || "",
+      knowledgeBaseName: article.knowledgeBase?.name || root.knowledgeBase?.name || "",
+      title: String(article.title || root.title || "").trim(),
+      summary: String(article.summary || root.summary || "").trim(),
+      article: String(article.article || "").trim(),
+      angle: String(article.angle || "").trim(),
+    }));
+}
+
+function preferKnowledgeBaseHistory(items = [], knowledgeBaseId = "", limit = 50) {
+  const max = Math.max(1, Math.min(200, Number(limit) || 50));
+  const kbId = String(knowledgeBaseId || "").trim();
+  const sameKb = kbId ? items.filter((item) => item.knowledgeBaseId === kbId) : [];
+  const seen = new Set(sameKb.map((item) => `${item.messageId}:${item.index}`));
+  const global = items.filter((item) => !seen.has(`${item.messageId}:${item.index}`));
+  return [...sameKb, ...global].slice(0, max);
+}
+
+export async function listRecentMarketingArticles({ accountId = BOSS_ACCOUNT_ID, limit = 50, days = 3, knowledgeBaseId = "" } = {}) {
+  const max = Math.max(1, Math.min(200, Number(limit) || 50));
+  const cutoff = new Date(Date.now() - Math.max(1, Number(days) || 3) * 24 * 60 * 60 * 1000).toISOString();
+  if (isSqliteStorage()) {
+    prepareSqliteSessions();
+    const rows = db().prepare(`
+      SELECT m.json AS messageJson
+      FROM boss_chat_messages m
+      JOIN boss_chat_sessions s ON s.id = m.sessionId
+      WHERE s.accountId = ?
+        AND s.status = 'active'
+        AND m.role = 'assistant'
+        AND m.action = 'marketing_article'
+        AND m.createdAt >= ?
+      ORDER BY m.createdAt DESC, m.id DESC
+      LIMIT ?
+    `).all(accountId, cutoff, max * 3);
+    const items = rows.flatMap((row) => {
+      const message = normalizeMessage(JSON.parse(row.messageJson));
+      return marketingArticlesFromPayload(message.payload, message);
+    });
+    return preferKnowledgeBaseHistory(items, knowledgeBaseId, max);
+  }
+  const store = await loadJsonStore();
+  const activeIds = new Set(store.sessions
+    .filter((session) => session.accountId === accountId && session.status === "active")
+    .map((session) => session.id));
+  const items = store.messages
+    .filter((message) => activeIds.has(message.sessionId))
+    .filter((message) => message.role === "assistant" && message.action === "marketing_article")
+    .filter((message) => String(message.createdAt || "") >= cutoff)
+    .sort((left, right) => Date.parse(right.createdAt || "") - Date.parse(left.createdAt || ""))
+    .flatMap((message) => marketingArticlesFromPayload(message.payload, message));
+  return preferKnowledgeBaseHistory(items, knowledgeBaseId, max);
+}
+
 async function ensureSession(sessionId, options = {}) {
   const id = makeBossChatSessionId(sessionId);
   const existing = await getBossChatSession(id, { accountId: options.accountId || BOSS_ACCOUNT_ID });

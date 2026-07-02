@@ -250,7 +250,8 @@ try {
       marketingArticleResponse.article?.insufficient ||
       !marketingArticleResponse.article?.article ||
       !marketingArticleResponse.article?.sourceRefs?.length ||
-      !marketingArticleResponse.article?.warnings?.some((warning) => /联网搜索/.test(warning))
+      !marketingArticleResponse.article?.warnings?.includes("web_search_requested_but_disabled") ||
+      marketingArticleResponse.article?.uniqueness?.overallStatus !== "ok"
     ) {
       throw new Error(`expected local marketing article with web-search warning, got ${JSON.stringify(marketingArticleResponse)}`);
     }

@@ -122,15 +122,19 @@ registerLlmProvider("auto", async (prompt, options = {}) => {
   const usesWeb = promptText.includes("web:1 Industrial motor applications");
   const usesLocal = promptText.includes("motor.md :: 应用");
   const webRefs = usesWeb ? ["web:1 Industrial motor applications"] : [];
-  if (promptText.includes("营销内容策划")) {
+  if (promptText.includes("industrial B2B marketing editor")) {
     return {
       answer: JSON.stringify({
-        title: "电机应用营销软文",
-        summary: "基于本地资料整理电机应用场景。",
-        article: "电机适用于水泵、风机、输送设备等场景，选型时要结合负载和防护等级。",
-        sellingPoints: ["应用场景清晰", "选型依据明确"],
-        sourceRefs: usesLocal ? ["motor.md :: 应用"] : [],
-        webSourceRefs: webRefs,
+        articles: [{
+          title: "电机应用营销软文",
+          angle: "应用场景型",
+          summary: "基于本地资料整理电机应用场景。",
+          article: "电机适用于水泵、风机、输送设备等场景，选型时要结合负载和防护等级。",
+          sellingPoints: ["应用场景清晰", "选型依据明确"],
+          sourceRefs: usesLocal ? ["motor.md :: 应用"] : [],
+          webSourceRefs: webRefs,
+          warnings: [],
+        }],
         warnings: [],
       }),
       source: "mock-llm",

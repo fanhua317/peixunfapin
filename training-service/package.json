@@ -22,6 +22,7 @@
     "eval:jobs": "node scripts/eval-jobs.mjs",
     "eval:streaming": "node scripts/eval-streaming.mjs",
     "eval:web-search": "node scripts/eval-web-search.mjs",
+    "eval:marketing-uniqueness": "node scripts/eval-marketing-uniqueness.mjs",
     "eval:marketing-length": "node scripts/eval-marketing-length.mjs",
     "eval:boss-chat": "node scripts/eval-boss-chat.mjs",
     "eval:translation": "node scripts/eval-translation.mjs",

@@ -87,11 +87,14 @@ SQLite + JSONL + local vector index + clean documents
 -> 匹配知识库
 -> hybrid RAG 获取产品卖点和应用场景
 -> 用户开启联网搜索时补充 Tavily 市场/背景参考
--> LLM 生成结构化文章卡片
+-> LLM 按差异化角度生成结构化文章数组
+-> 重复率评估，必要时自动重写最多 2 轮
+-> 前端展示文章卡片、来源和重复率指标
 ```
 
 软文生成默认不联网；显式传 `webSearchMode: "on"` 时，Tavily 结果只作为外部市场、背景、术语和应用场景参考，产品事实、参数和卖点仍以本地知识库为准。资料不足时返回“资料不足”，不编造产品参数。“请帮我生成三篇水泵的宣传文章，500词左右，英文”和“请帮我生成三篇英文文章，同时附带中文翻译”都属于 `generate_marketing_article`；后者的中文翻译是文章交付格式要求，不是单独的 `translate_text`。
-软文 prompt 直接约束首轮输出减少“AI 味”：文章要像工业品业务人员或内容编辑写给真实客户看的内容，避免空泛套话、万能开头、过度排比和口号式结尾；但自然化表达不能新增资料外细节。
+软文 prompt 直接约束首轮输出减少“AI 味”：文章要像工业品业务人员或内容编辑写给真实客户看的内容，避免空泛套话、万能开头、过度排比和口号式结尾；多篇文章会分配应用场景型、采购决策型、技术卖点型、维护成本型、客户沟通型等角度，要求开头、段落结构、小标题顺序和结尾句式不得复用；但自然化表达不能新增资料外细节。
+软文去重默认开启。后端使用纯 JS 计算中文 4/5-gram、英文 3-gram、分句重复、同批相似度、标题相似度、模板句命中，以及最近 3 天老板端历史软文最高相似度。默认阈值是内部重复率 `0.18`、同批最高相似度 `0.42`、历史最高相似度 `0.50`、标题相似度 `0.65`、模板句命中不超过 `2`。不达标时自动重写最多 2 轮；仍不达标则返回当前最好版本，并在 `warnings` 中标记 `article_similarity_above_threshold`。响应兼容旧前端的 `article` 字段，同时新增 `articles[]`、`uniqueness` 和 `rewriteAttempts`。
 软文正文不再使用通用答疑清洗层的 1800 字符硬截断；当前实现按软文链路约 5200 字符上限清洗正文，超出上限时末尾可能保留省略号。结构化生成会透传 `finishReason` / `truncated`，如果模型达到输出上限，前端显示明确提示。
 
 ### 老板端资料答疑
@@ -309,6 +312,13 @@ Qdrant 是可选部署，不是低并发轻量服务器默认项。使用 Qdrant
 | `TRAINING_WEB_SEARCH_API_KEY` / `TAVILY_API_KEY` | Tavily Search API key |
 | `TRAINING_WEB_SEARCH_MAX_RESULTS` | 单次联网搜索返回数量，默认 5 |
 | `TRAINING_WEB_SEARCH_SEARCH_DEPTH` | Tavily 搜索深度，默认 `basic` |
+| `TRAINING_MARKETING_UNIQUENESS_ENABLED` | 软文重复率检查开关，默认 `1` |
+| `TRAINING_MARKETING_REWRITE_ATTEMPTS` | 软文自动重写轮数，默认 2 |
+| `TRAINING_MARKETING_HISTORY_DAYS` | 历史软文相似度比对窗口，默认最近 3 天 |
+| `TRAINING_MARKETING_HISTORY_LIMIT` | 历史软文比对上限，默认 50 篇 |
+| `TRAINING_MARKETING_INTERNAL_REPEAT_MAX` | 单篇内部重复率阈值，默认 `0.18` |
+| `TRAINING_MARKETING_BATCH_SIMILARITY_MAX` | 同批文章最高相似度阈值，默认 `0.42` |
+| `TRAINING_MARKETING_HISTORY_SIMILARITY_MAX` | 历史文章最高相似度阈值，默认 `0.50` |
 | `TRAINING_HYBRID_RETRIEVAL` | 是否启用 hybrid 检索 |
 | `TRAINING_VECTOR_BACKEND` | `auto`、`local` 或 `qdrant` |
 | `TRAINING_EMBEDDING_MODEL` | embedding 模型名 |
@@ -337,6 +347,7 @@ npm run eval:import
 npm run eval:jobs
 npm run eval:streaming
 npm run eval:web-search
+npm run eval:marketing-uniqueness
 npm run eval:marketing-length
 npm run eval:boss-chat
 npm run eval:translation
@@ -351,6 +362,7 @@ git diff --check
 
 RAG 评测集当前维护在 `scripts/fixtures/rag-eval-cases.mjs`，覆盖型号参数、结构原理、制造工艺、销售场景、多语言和标准资料。默认先看 retrieval-only 的 Top1、Top3 和 hybrid 不低于 BM25 的情况。备份评测覆盖 SQLite 快照、JSONL/向量索引打包、校验、强制恢复和备份保留策略。
 翻译评测 `npm run eval:translation` 不依赖真实模型质量：脚本使用临时数据目录和本地 OpenAI-compatible mock，覆盖显式目标语言、默认目标语言、无正文追问、老板端上一条正文上下文、正文在前且翻译指令在末尾、长文本不静默截断、LLM API 缺失错误、`翻译成英文：这是一台水泵` 和 boss-chat 持久化，并断言“生成英文文章，同时附带中文翻译”不会被翻译 parser 抢走。
+软文去重评测 `npm run eval:marketing-uniqueness` 使用 mock LLM 和临时老板端历史，覆盖相同文章高相似、仅共享产品型号不误判、模板句命中、中英文混合重复、三篇文章结构化返回、最近 3 天历史窗口过滤和自动重写闭环。当前夹具首轮三篇高度相似稿触发 1 次重写，最终 `overallStatus=ok`、同批最高相似度约 `0.019`、历史最高相似度约 `0.05`。
 服务器审计体系补充在 `server-audit:*` 脚本中：生产端口只做只读基线，隔离副本承接写入、合成数据导入、业务闭环、备份恢复、极限压测和 Tavily 联网专项；结果统一写入 `training-service/server-audit-output`，再汇总到 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。2026-06-30 生产只读基线显示 `/api/health` HTTP 200，线上有 2 个知识库、20 个文档、594 个 chunks，`ollamaOk=true`、`localVectorIndexOk=true`、`retrievalMode=hybrid`，Tavily provider 和 credential 已配置但 artifact 不落密钥。旧版 Tavily 答疑专项在服务器隔离副本跑 5 个真实联网样本，成功率 100%，`webSearchMode:on` 平均 6538 ms、p95 8470 ms，平均保留 3.8 个知识库来源并补充 4 个联网来源；新版 `server-audit:web-search` 继续保留真实答疑样本，并新增六链路表，覆盖知识库答疑、营销软文、培训材料、考试、翻译和普通聊天的 off/on 对比。历史读写压测仍作为容量边界：读链路 20 并发内 0 错误，50 并发开始超时，100 并发错误率 35.43% 并触发停止条件；写链路 boss-chat create/delete 在 20 并发仍 0 错误。当前主要风险是高并发读接口 50+ 并发排队超时，以及 CSV 在 direct 导入模式下不会进入知识库，需要 clean/auto 清洗模式。
 
 本轮项目文档只同步 Markdown 文档和桌面 QA 镜像，不做 Word 导出。

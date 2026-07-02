@@ -1550,6 +1550,50 @@ button:disabled {
   margin: 0;
 }
 
+.article-variant {
+  display: grid;
+  gap: 10px;
+  padding: 14px 0 0;
+  border-top: 1px solid var(--border);
+}
+
+.article-variant h3 {
+  margin: 0;
+  color: #172033;
+  font-size: 19px;
+  line-height: 1.35;
+}
+
+.uniqueness-summary {
+  display: grid;
+  gap: 8px;
+}
+
+.metric-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.metric-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 9px;
+  border: 1px solid #dbe5f5;
+  border-radius: 8px;
+  background: #f8fbff;
+  color: #475467;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.metric-pill strong {
+  color: #172033;
+  overflow-wrap: anywhere;
+}
+
 .knowledge-answer .section-kicker,
 .translation-card .section-kicker {
   margin: 0;

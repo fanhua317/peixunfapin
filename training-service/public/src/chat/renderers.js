@@ -285,14 +285,8 @@ function renderWebSourcesSection(result = {}) {
 
 export function renderMarketingArticleResult(result) {
   const article = result.article || result || {};
+  const articles = Array.isArray(article.articles) && article.articles.length ? article.articles : [article];
   const warnings = renderWarningBox(article.warnings || []);
-  const sellingPoints = (article.sellingPoints || [])
-    .map((point) => `<li>${escapeHtml(point)}</li>`)
-    .join("");
-  const sourceRefs = (article.sourceRefs || [])
-    .map((source) => `<li>${escapeHtml(source)}</li>`)
-    .join("");
-  const body = renderMarkdown(article.article || "");
   const meta = [
     article.knowledgeBase?.name ? `资料：${article.knowledgeBase.name}` : "",
     article.retrievalMode ? `检索：${article.retrievalMode}` : "",
@@ -310,19 +304,87 @@ export function renderMarketingArticleResult(result) {
       </div>
     `;
   }
+  const renderedArticles = articles
+    .map((item, index) => renderMarketingArticleBlock(item, { index, total: articles.length }))
+    .join("");
   return `
     <div class="marketing-article">
-      <p class="section-kicker">营销软文</p>
-      <h2>${escapeHtml(article.title || "营销软文")}</h2>
+      <p class="section-kicker">营销软文${articles.length > 1 ? ` · ${articles.length}篇` : ""}</p>
+      <h2>${escapeHtml(article.title || articles[0]?.title || "营销软文")}</h2>
       ${article.summary ? `<p class="article-summary">${escapeHtml(article.summary)}</p>` : ""}
       ${meta ? `<p class="muted">${escapeHtml(meta)}</p>` : ""}
       ${completionWarning(article)}
       ${warnings}
+      ${renderUniquenessSummary(article.uniqueness)}
+      ${renderedArticles}
+    </div>
+  `;
+}
+
+function percentText(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  return `${Math.round(number * 1000) / 10}%`;
+}
+
+function renderMetricPill(label, value) {
+  return `<span class="metric-pill"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></span>`;
+}
+
+function renderUniquenessSummary(uniqueness = {}) {
+  if (!uniqueness || uniqueness.enabled === false || !uniqueness.overallStatus) return "";
+  const status = uniqueness.overallStatus === "ok" ? "通过" : "需注意";
+  const historyDays = uniqueness.historyWindowDays || 3;
+  const metrics = [
+    renderMetricPill("状态", status),
+    renderMetricPill("内部重复", percentText(uniqueness.internalRepeatRatio)),
+    renderMetricPill("同批最高相似", percentText(uniqueness.batchMaxSimilarity)),
+    renderMetricPill(`近${historyDays}天历史最高相似`, percentText(uniqueness.historyMaxSimilarity)),
+    renderMetricPill("标题相似", percentText(uniqueness.titleSimilarity)),
+    renderMetricPill("模板句命中", String(uniqueness.templatePhraseHits ?? 0)),
+    renderMetricPill("重写次数", String(uniqueness.rewriteAttempts ?? 0)),
+  ].join("");
+  const issues = (uniqueness.issues || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  return `
+    <div class="uniqueness-summary">
+      <div class="task-section-title">重复率检查</div>
+      <div class="metric-row">${metrics}</div>
+      ${issues ? `<ul class="compact-list">${issues}</ul>` : ""}
+    </div>
+  `;
+}
+
+function renderArticleUniqueness(uniqueness = null) {
+  if (!uniqueness) return "";
+  const metrics = [
+    renderMetricPill("内部重复", percentText(uniqueness.internalRepeatRatio)),
+    renderMetricPill("模板句命中", String(uniqueness.templatePhraseHits ?? 0)),
+    renderMetricPill("状态", uniqueness.status === "ok" ? "通过" : "需注意"),
+  ].join("");
+  return `<div class="article-uniqueness metric-row">${metrics}</div>`;
+}
+
+function renderMarketingArticleBlock(article = {}, { index = 0, total = 1 } = {}) {
+  const sellingPoints = (article.sellingPoints || [])
+    .map((point) => `<li>${escapeHtml(point)}</li>`)
+    .join("");
+  const sourceRefs = (article.sourceRefs || [])
+    .map((source) => `<li>${escapeHtml(source)}</li>`)
+    .join("");
+  const body = renderMarkdown(article.article || "");
+  return `
+    <section class="article-variant">
+      ${total > 1 ? `<p class="section-kicker">第 ${index + 1} 篇${article.angle ? ` · ${escapeHtml(article.angle)}` : ""}</p>` : article.angle ? `<p class="section-kicker">${escapeHtml(article.angle)}</p>` : ""}
+      <h3>${escapeHtml(article.title || `营销软文 ${index + 1}`)}</h3>
+      ${article.summary ? `<p class="article-summary">${escapeHtml(article.summary)}</p>` : ""}
+      ${completionWarning(article)}
+      ${renderWarningBox(article.warnings || [])}
+      ${renderArticleUniqueness(article.uniqueness)}
       ${sellingPoints ? `<div class="task-section-title">核心卖点</div><ul class="compact-list">${sellingPoints}</ul>` : ""}
       <div class="article-body">${body || "<p>未生成正文。</p>"}</div>
       ${sourceRefs ? `<div class="task-section-title">资料来源</div><ul class="compact-list">${sourceRefs}</ul>` : ""}
       ${renderWebSourcesSection(article)}
-    </div>
+    </section>
   `;
 }
 

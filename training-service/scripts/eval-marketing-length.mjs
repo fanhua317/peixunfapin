@@ -8,6 +8,7 @@ process.env.TRAINING_LLM_TIMEOUT_MS = "5000";
 
 let mockServer = null;
 let capturedPrompt = "";
+const capturedPrompts = [];
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -30,6 +31,7 @@ async function startMockServer() {
     try {
       const body = JSON.parse(rawBody || "{}");
       capturedPrompt = String(body.messages?.find((message) => message.role === "user")?.content || "");
+      capturedPrompts.push(capturedPrompt);
     } catch {
       capturedPrompt = "";
     }
@@ -104,9 +106,9 @@ try {
     instruction: "write a detailed YINJIA pump customer marketing article",
     memoryContext: { longTerm: [], recentMessages: [] },
   });
-  assert(/不要像通用 AI 模板/.test(capturedPrompt), "prompt should include anti-template AI-style guidance");
-  assert(/避免空泛套话、万能开头、过度排比和口号式结尾/.test(capturedPrompt), "prompt should discourage generic AI-style phrasing");
-  assert(/不得为了自然感新增资料外细节/.test(capturedPrompt), "prompt should preserve factual grounding while improving style");
+  assert(capturedPrompts.some((prompt) => prompt.includes("Avoid generic AI templates")), "prompt should include anti-template AI-style guidance");
+  assert(capturedPrompts.some((prompt) => prompt.includes("repeated openings") && prompt.includes("overused endings")), "prompt should discourage generic repeated phrasing");
+  assert(capturedPrompts.some((prompt) => prompt.includes("Do not invent facts")), "prompt should preserve factual grounding while improving style");
   assert(result.article.length > 2400, `article should keep long content, got ${result.article.length}`);
   assert(!result.article.trim().endsWith("..."), "article should not be hard-cut with ellipsis");
   assert(result.finishReason === "stop", `finishReason should propagate, got ${result.finishReason}`);
