@@ -3,8 +3,10 @@ import { cleanReadableText, uniqueStrings } from "./text-utils.mjs";
 const DEFAULT_PROVIDER = "tavily";
 const DEFAULT_BASE_URL = "https://api.tavily.com";
 const DEFAULT_MAX_RESULTS = 5;
+const DEFAULT_MARKETING_MAX_RESULTS = 8;
 const DEFAULT_TIMEOUT_MS = 8_000;
 const DEFAULT_SEARCH_DEPTH = "basic";
+const DEFAULT_MARKETING_SEARCH_DEPTH = "basic";
 const QUERY_LIMIT = 400;
 
 function clampNumber(value, fallback, min, max) {
@@ -37,19 +39,24 @@ function searchEndpoint(baseUrl) {
   return /\/search$/i.test(trimmed) ? trimmed : `${trimmed}/search`;
 }
 
-function configuredSearchDepth() {
-  const value = String(process.env.TRAINING_WEB_SEARCH_SEARCH_DEPTH || DEFAULT_SEARCH_DEPTH).trim().toLowerCase();
-  return ["advanced", "basic"].includes(value) ? value : DEFAULT_SEARCH_DEPTH;
+function configuredSearchDepth(value, fallback = DEFAULT_SEARCH_DEPTH) {
+  const normalized = String(value || fallback).trim().toLowerCase();
+  return ["advanced", "basic"].includes(normalized) ? normalized : fallback;
 }
 
-function resolveWebSearchConfig() {
+function resolveWebSearchConfig({ purpose = "llm_reference" } = {}) {
+  const isMarketingArticle = purpose === "marketing_article";
   return {
     provider: String(process.env.TRAINING_WEB_SEARCH_PROVIDER || DEFAULT_PROVIDER).trim().toLowerCase(),
     apiKey: process.env.TRAINING_WEB_SEARCH_API_KEY || process.env.TAVILY_API_KEY || "",
     baseUrl: process.env.TRAINING_WEB_SEARCH_BASE_URL || DEFAULT_BASE_URL,
-    maxResults: clampNumber(process.env.TRAINING_WEB_SEARCH_MAX_RESULTS, DEFAULT_MAX_RESULTS, 1, 10),
+    maxResults: isMarketingArticle
+      ? clampNumber(process.env.TRAINING_MARKETING_WEB_SEARCH_MAX_RESULTS, DEFAULT_MARKETING_MAX_RESULTS, 1, 10)
+      : clampNumber(process.env.TRAINING_WEB_SEARCH_MAX_RESULTS, DEFAULT_MAX_RESULTS, 1, 10),
     timeoutMs: clampNumber(process.env.TRAINING_WEB_SEARCH_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1_000, 60_000),
-    searchDepth: configuredSearchDepth(),
+    searchDepth: isMarketingArticle
+      ? configuredSearchDepth(process.env.TRAINING_MARKETING_WEB_SEARCH_SEARCH_DEPTH, DEFAULT_MARKETING_SEARCH_DEPTH)
+      : configuredSearchDepth(process.env.TRAINING_WEB_SEARCH_SEARCH_DEPTH, DEFAULT_SEARCH_DEPTH),
   };
 }
 
@@ -184,7 +191,7 @@ export async function searchWebForLlmReference({ query, webSearchMode, purpose =
     };
   }
 
-  const config = resolveWebSearchConfig();
+  const config = resolveWebSearchConfig({ purpose });
   if (config.provider !== "tavily") {
     return {
       mode,

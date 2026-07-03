@@ -86,7 +86,7 @@ OPENAI_API_KEY=...
 
 ## Tavily 联网搜索配置
 
-六条 LLM 生成链路支持可选联网搜索，默认关闭：知识库答疑、营销软文、培训讲义/发布生成、员工考试生成、多语言翻译和普通聊天。只有老板端或员工端请求显式传 `webSearchMode: "on"` 时，后端才会调用 Tavily Search API；联网结果只作为外部参考资料，不写入知识库、不做 embedding，也不改变 RAG 评测口径。本地知识库资料或用户原文优先，联网资料与本地资料冲突时应说明，不强行合并。
+六条 LLM 生成链路支持可选联网搜索，默认关闭：知识库答疑、营销软文、培训讲义/发布生成、员工考试生成、多语言翻译和普通聊天。只有老板端或员工端请求显式传 `webSearchMode: "on"` 时，后端才会调用 Tavily Search API；联网结果不写入知识库、不做 embedding，也不改变 RAG 评测口径。本地知识库资料或用户原文优先，联网资料与本地资料冲突时应说明，不强行合并。营销软文链路会把联网结果用于选题、开头角度、买家痛点、市场表达和应用场景，产品事实、参数、认证和性能声明仍以本地知识库为准。
 
 ```env
 TRAINING_WEB_SEARCH_PROVIDER=tavily
@@ -96,6 +96,8 @@ TRAINING_WEB_SEARCH_API_KEY=...
 TRAINING_WEB_SEARCH_MAX_RESULTS=5
 TRAINING_WEB_SEARCH_TIMEOUT_MS=8000
 TRAINING_WEB_SEARCH_SEARCH_DEPTH=basic
+TRAINING_MARKETING_WEB_SEARCH_MAX_RESULTS=8
+TRAINING_MARKETING_WEB_SEARCH_SEARCH_DEPTH=basic
 ```
 
 生成响应会在现有本地来源字段之外补充 `webSearchMode`、`webSearchStatus`、`webSources` 和 `webSourceRefs`。未配置 key、搜索超时、Tavily 返回错误或无结果时，系统只追加 warning，并继续使用本地知识库或用户原文完成原链路。
@@ -108,11 +110,14 @@ TRAINING_WEB_SEARCH_SEARCH_DEPTH=basic
 - Router 不可用或低置信时兜底到普通聊天或确认卡片。
 - 知识库答疑和软文生成必须经过知识库选择与 RAG 命中校验，避免“水泵”问题误选电机资料库。
 
-软文请求如“请帮我生成三篇水泵的宣传文章，500词左右，英文”和“请帮我生成三篇英文文章，同时附带中文翻译”都应进入 `generate_marketing_article`；后者的“中文翻译”是文章交付要求，不是 `translate_text`。软文链路支持 `articleCount`、`targetLanguage`、`bilingual`，多篇文章会按应用场景型、采购决策型、技术卖点型、维护成本型、客户沟通型等角度拆分生成，避免只靠模型自由发挥。软文 prompt 要求文章像工业品业务人员或内容编辑写给真实客户看的内容，减少通用 AI 模板感、空泛套话、万能开头、过度排比和口号式结尾，并接入 vendored `conorbronsdon/avoid-ai-writing` 检测器识别英文 AI-isms、模板转场、夸张营销词和 chatbot 式客套；所有自然化表达都不得新增资料外事实。资料问题如“请帮我检索 CM2 的相关知识”应进入 `answer_knowledge_question` 并选择银嘉泵/水泵知识库；水泵问答后的“有具体型号吗”追问也应沿用同一资料库。
+软文请求如“请帮我生成三篇水泵的宣传文章，500词左右，英文”和“请帮我生成三篇英文文章，同时附带中文翻译”都应进入 `generate_marketing_article`；后者的“中文翻译”是文章交付要求，不是 `translate_text`。软文链路支持 `articleCount`、`targetLanguage`、`bilingual`，多篇文章会按应用场景型、采购决策型、技术卖点型、维护成本型、客户沟通型等角度拆分生成，避免只靠模型自由发挥。软文模型调用使用营销专用温度，默认 `TRAINING_MARKETING_TEMPERATURE=0.6`；其他问答、培训资料、翻译和普通聊天不受影响。软文 prompt 要求文章像外贸水泵销售工程师或工业品内容编辑写给真实客户看的内容，不能用内部资料摘要、参数罗列或 “In today's...” 类泛泛开场；开启联网时，Tavily 材料可用于选题、开头、买家痛点、地区/应用场景和市场表达，本地知识库负责校验产品事实、参数、卖点、认证和性能声明。prompt 仍要求减少通用 AI 模板感、空泛套话、万能开头、过度排比和口号式结尾，并接入 vendored `conorbronsdon/avoid-ai-writing` 检测器识别英文 AI-isms、模板转场、夸张营销词和 chatbot 式客套；所有自然化表达都不得新增资料外事实。资料问题如“请帮我检索 CM2 的相关知识”应进入 `answer_knowledge_question` 并选择银嘉泵/水泵知识库；水泵问答后的“有具体型号吗”追问也应沿用同一资料库。
 
 软文生成默认启用重复率和 AI 写作痕迹检查：首轮生成后计算单篇内部重复、同批文章相似度、最近 3 天老板端历史软文相似度、标题相似度、模板句命中和 `aiWritingScore`；不达标时自动重写，默认最多 2 轮。重写只能改变表达、角度和段落组织，不能新增知识库或联网资料之外的产品事实。响应保留旧的 `article` 单篇字段，并新增 `articles[]`、`uniqueness` 和 `rewriteAttempts`；前端会展示“重复率 / AI 写作痕迹”摘要和每篇文章的指标。
 
 ```env
+TRAINING_MARKETING_TEMPERATURE=0.6
+TRAINING_MARKETING_WEB_SEARCH_MAX_RESULTS=8
+TRAINING_MARKETING_WEB_SEARCH_SEARCH_DEPTH=basic
 TRAINING_MARKETING_UNIQUENESS_ENABLED=1
 TRAINING_MARKETING_REWRITE_ATTEMPTS=2
 TRAINING_MARKETING_HISTORY_LIMIT=50

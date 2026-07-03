@@ -37,6 +37,7 @@ export const AI_PROFILE = {
     thinking: process.env.OPENCLAW_MARKETING_ARTICLE_THINKING || process.env.OPENCLAW_TRAINING_MARKETING_THINKING || "medium",
     model: process.env.OPENCLAW_MARKETING_ARTICLE_MODEL || process.env.OPENCLAW_TRAINING_MARKETING_MODEL || DEFAULT_TRAINING_MODEL,
     timeoutMs: Number(process.env.OPENCLAW_MARKETING_ARTICLE_TIMEOUT_MS || process.env.OPENCLAW_TRAINING_TIMEOUT_MS || process.env.OPENCLAW_CHAT_TIMEOUT_MS || 180_000),
+    temperature: Number(process.env.TRAINING_MARKETING_TEMPERATURE ?? 0.6),
   },
   repair: {
     thinking: process.env.OPENCLAW_REPAIR_THINKING || process.env.OPENCLAW_TRAINING_REPAIR_THINKING || "minimal",

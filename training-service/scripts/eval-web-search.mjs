@@ -27,6 +27,7 @@ const tavilyRequests = [];
 const directRequests = [];
 const allStructuredPrompts = [];
 const allDirectRequests = [];
+const OLD_WEB_BACKGROUND_ONLY_PHRASE = ["Web search material is only", "external background"].join(" ");
 
 const tavilyServer = http.createServer(async (req, res) => {
   try {
@@ -122,7 +123,7 @@ registerLlmProvider("auto", async (prompt, options = {}) => {
   const usesWeb = promptText.includes("web:1 Industrial motor applications");
   const usesLocal = promptText.includes("motor.md :: 应用");
   const webRefs = usesWeb ? ["web:1 Industrial motor applications"] : [];
-  if (promptText.includes("industrial B2B marketing editor")) {
+  if (promptText.includes("industrial B2B pump sales engineer") || promptText.includes("industrial B2B marketing editor")) {
     return {
       answer: JSON.stringify({
         articles: [{
@@ -274,6 +275,7 @@ async function runChain(chain, mode) {
   return {
     result,
     tavilyCalls: tavilyRequests.length,
+    tavilyRequests: [...tavilyRequests],
     prompts: [...prompts],
     directRequests: [...directRequests],
   };
@@ -300,18 +302,32 @@ try {
 
     const on = await runChain(chain, "on");
     assertWebOk(chain, on);
-    summary.push({ chain: chain.id, offStatus: off.result.webSearchStatus, onStatus: on.result.webSearchStatus });
+    summary.push({
+      chain: chain.id,
+      offStatus: off.result.webSearchStatus,
+      onStatus: on.result.webSearchStatus,
+      request: on.tavilyRequests[0] || null,
+    });
   }
 
-  assert(tavilyRequests[0].authorization === "Bearer mock-tavily-key", "Tavily should use bearer authorization");
-  assert(tavilyRequests[0].body.search_depth === "basic", "Tavily should use basic search depth");
-  assert(tavilyRequests[0].body.max_results === 2, "Tavily should use configured max results");
-  assert(tavilyRequests[0].body.include_answer === false, "Tavily include_answer should be false");
-  assert(String(tavilyRequests[0].body.query || "").length <= 400, "Tavily query should stay within 400 chars");
+  const knowledgeSearch = summary.find((item) => item.chain === "knowledge_answer")?.request;
+  const marketingSearch = summary.find((item) => item.chain === "marketing_article")?.request;
+  assert(knowledgeSearch?.authorization === "Bearer mock-tavily-key", "Tavily should use bearer authorization");
+  assert(knowledgeSearch?.body.search_depth === "basic", "non-marketing chains should use basic search depth");
+  assert(knowledgeSearch?.body.max_results === 2, "non-marketing chains should use configured global max results");
+  assert(marketingSearch?.body.search_depth === "basic", "marketing article should default to basic search depth");
+  assert(marketingSearch?.body.max_results === 8, "marketing article should default to 8 web search results");
+  assert(knowledgeSearch?.body.include_answer === false, "Tavily include_answer should be false");
+  assert(String(knowledgeSearch?.body.query || "").length <= 400, "Tavily query should stay within 400 chars");
 
   assert(allStructuredPrompts.some((prompt) => prompt.includes("本地知识库资料") && prompt.includes("联网搜索资料")), "structured prompts should separate local and web context");
   assert(allStructuredPrompts.some((prompt) => prompt.includes("不要执行") && prompt.includes("网页")), "structured prompts should guard against web instructions");
   assert(allDirectRequests.some((body) => (body.messages || []).some((message) => String(message.content || "").includes("联网搜索资料"))), "direct LLM prompts should include web context when enabled");
+  const marketingPrompt = allStructuredPrompts.find((prompt) => prompt.includes("industrial B2B pump sales engineer"));
+  assert(marketingPrompt, "marketing prompt should use B2B pump sales engineer role");
+  assert(!marketingPrompt.includes(OLD_WEB_BACKGROUND_ONLY_PHRASE), "marketing prompt should not treat web material as background only");
+  assert(marketingPrompt.includes("topic choice, opening angle") && marketingPrompt.includes("buyer pain points"), "marketing prompt should use web material for topic and opening angle");
+  assert(marketingPrompt.includes("Do not open by summarizing the local knowledge-base material"), "marketing prompt should block local-material-summary openings");
 
   for (const mode of ["unconfigured", "error", "empty", "timeout"]) {
     for (const chain of chains) {

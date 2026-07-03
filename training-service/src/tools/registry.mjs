@@ -209,7 +209,7 @@ const webSkills = [
     id: "generate_marketing_article",
     kind: "web-skill",
     label: "生成营销软文",
-    description: "基于本地知识库和 RAG 上下文生成 B2B 客户营销文章，不联网搜索。",
+    description: "基于本地知识库和 RAG 上下文生成 B2B 客户营销文章；默认不联网，显式 webSearchMode=on 时使用 Tavily 外部参考。",
     risk: "normal",
     requiresConfirmation: false,
     idempotent: true,

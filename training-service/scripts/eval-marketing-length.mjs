@@ -8,7 +8,9 @@ process.env.TRAINING_LLM_TIMEOUT_MS = "5000";
 
 let mockServer = null;
 let capturedPrompt = "";
+const capturedRequests = [];
 const capturedPrompts = [];
+const OLD_WEB_BACKGROUND_ONLY_PHRASE = ["Web search material is only", "external background"].join(" ");
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -30,6 +32,7 @@ async function startMockServer() {
     const rawBody = await readBody(req);
     try {
       const body = JSON.parse(rawBody || "{}");
+      capturedRequests.push(body);
       capturedPrompt = String(body.messages?.find((message) => message.role === "user")?.content || "");
       capturedPrompts.push(capturedPrompt);
     } catch {
@@ -111,6 +114,10 @@ try {
   assert(capturedPrompts.some((prompt) => prompt.includes("Avoid-AI-writing style guardrail")), "prompt should include vendored avoid-ai-writing guidance");
   assert(capturedPrompts.some((prompt) => prompt.includes("delve/leverage/robust/seamless") && prompt.includes("chatbot artifacts")), "prompt should discourage common AI writing tells");
   assert(capturedPrompts.some((prompt) => prompt.includes("Do not invent facts")), "prompt should preserve factual grounding while improving style");
+  assert(capturedRequests.some((body) => body.temperature === 0.6), "marketing article requests should use temperature 0.6");
+  assert(!capturedPrompts.some((prompt) => prompt.includes(OLD_WEB_BACKGROUND_ONLY_PHRASE)), "prompt should not demote web material to background only");
+  assert(capturedPrompts.some((prompt) => prompt.includes("topic choice, opening angle") && prompt.includes("buyer pain points")), "prompt should use web material for article angle and opening when available");
+  assert(capturedPrompts.some((prompt) => prompt.includes("Do not open by summarizing the local knowledge-base material")), "prompt should block local-KB-summary openings");
   assert(result.article.length > 2400, `article should keep long content, got ${result.article.length}`);
   assert(!result.article.trim().endsWith("..."), "article should not be hard-cut with ellipsis");
   assert(result.finishReason === "stop", `finishReason should propagate, got ${result.finishReason}`);
@@ -118,6 +125,7 @@ try {
   console.log(JSON.stringify({
     ok: true,
     promptStyleGuidance: true,
+    temperature: capturedRequests.find((body) => body.temperature !== undefined)?.temperature,
     articleLength: result.article.length,
     finishReason: result.finishReason,
     truncated: result.truncated,

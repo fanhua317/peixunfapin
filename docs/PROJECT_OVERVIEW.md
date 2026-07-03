@@ -86,14 +86,14 @@ SQLite + JSONL + local vector index + clean documents
 -> 快速 LLM Router 判定 generate_marketing_article
 -> 匹配知识库
 -> hybrid RAG 获取产品卖点和应用场景
--> 用户开启联网搜索时补充 Tavily 市场/背景参考
+-> 用户开启联网搜索时补充 Tavily 选题/开头/市场场景参考
 -> LLM 按差异化角度生成结构化文章数组
 -> 重复率和 AI 写作痕迹评估，必要时自动重写最多 2 轮
 -> 前端展示文章卡片、来源、重复率和 AI 写作痕迹指标
 ```
 
-软文生成默认不联网；显式传 `webSearchMode: "on"` 时，Tavily 结果只作为外部市场、背景、术语和应用场景参考，产品事实、参数和卖点仍以本地知识库为准。资料不足时返回“资料不足”，不编造产品参数。“请帮我生成三篇水泵的宣传文章，500词左右，英文”和“请帮我生成三篇英文文章，同时附带中文翻译”都属于 `generate_marketing_article`；后者的中文翻译是文章交付格式要求，不是单独的 `translate_text`。
-软文 prompt 直接约束首轮输出减少“AI 味”：文章要像工业品业务人员或内容编辑写给真实客户看的内容，避免空泛套话、万能开头、过度排比和口号式结尾；多篇文章会分配应用场景型、采购决策型、技术卖点型、维护成本型、客户沟通型等角度，要求开头、段落结构、小标题顺序和结尾句式不得复用；同时固定 vendoring `conorbronsdon/avoid-ai-writing` 的 MIT detector，检测英文 AI-isms、模板转场、夸张营销词、万能结尾和 chatbot 式客套。自然化表达不能新增资料外细节。
+软文生成默认不联网；显式传 `webSearchMode: "on"` 时，Tavily 结果可作为选题、开头角度、买家痛点、地区/应用场景和市场表达来源，产品事实、参数、认证、性能声明和卖点仍以本地知识库为准。软文链路使用营销专用温度，默认 `TRAINING_MARKETING_TEMPERATURE=0.6`；营销专用联网数量默认 `TRAINING_MARKETING_WEB_SEARCH_MAX_RESULTS=8`，搜索深度默认 `basic`。资料不足时返回“资料不足”，不编造产品参数。“请帮我生成三篇水泵的宣传文章，500词左右，英文”和“请帮我生成三篇英文文章，同时附带中文翻译”都属于 `generate_marketing_article`；后者的中文翻译是文章交付格式要求，不是单独的 `translate_text`。
+软文 prompt 直接约束首轮输出减少“AI 味”：文章要像外贸水泵销售工程师或工业品内容编辑写给真实客户看的内容，不能用内部资料摘要、参数罗列或 “In today's...” 类泛泛开头，优先从客户问题、地区场景、农场/灌溉/偏远地区、柴油替代、维护成本或选型风险切入；多篇文章会分配应用场景型、采购决策型、技术卖点型、维护成本型、客户沟通型等角度，要求开头、段落结构、小标题顺序和结尾句式不得复用；同时固定 vendoring `conorbronsdon/avoid-ai-writing` 的 MIT detector，检测英文 AI-isms、模板转场、夸张营销词、万能结尾和 chatbot 式客套。自然化表达不能新增资料外细节。
 软文去重和 AI 写作痕迹检查默认开启。后端使用纯 JS 计算中文 4/5-gram、英文 3-gram、分句重复、同批相似度、标题相似度、模板句命中、最近 3 天老板端历史软文最高相似度，以及 `aiWritingScore`。默认阈值是内部重复率 `0.18`、同批最高相似度 `0.42`、历史最高相似度 `0.50`、标题相似度 `0.65`、模板句命中不超过 `2`、AI 写作痕迹分不超过 `35`。不达标时自动重写最多 2 轮；仍不达标则返回当前最好版本，并在 `warnings` 中标记 `article_similarity_above_threshold` 或 `article_ai_style_above_threshold`。响应兼容旧前端的 `article` 字段，同时新增 `articles[]`、`uniqueness`、`aiWritingScoreMax`、`aiWritingTopIssues` 和 `rewriteAttempts`。
 软文正文不再使用通用答疑清洗层的 1800 字符硬截断；当前实现按软文链路约 5200 字符上限清洗正文，超出上限时末尾可能保留省略号。结构化生成会透传 `finishReason` / `truncated`，如果模型达到输出上限，前端显示明确提示。
 
@@ -312,6 +312,9 @@ Qdrant 是可选部署，不是低并发轻量服务器默认项。使用 Qdrant
 | `TRAINING_WEB_SEARCH_API_KEY` / `TAVILY_API_KEY` | Tavily Search API key |
 | `TRAINING_WEB_SEARCH_MAX_RESULTS` | 单次联网搜索返回数量，默认 5 |
 | `TRAINING_WEB_SEARCH_SEARCH_DEPTH` | Tavily 搜索深度，默认 `basic` |
+| `TRAINING_MARKETING_TEMPERATURE` | 软文专用生成温度，默认 `0.6` |
+| `TRAINING_MARKETING_WEB_SEARCH_MAX_RESULTS` | 软文联网搜索返回数量，默认 8 |
+| `TRAINING_MARKETING_WEB_SEARCH_SEARCH_DEPTH` | 软文 Tavily 搜索深度，默认 `basic` |
 | `TRAINING_MARKETING_UNIQUENESS_ENABLED` | 软文重复率检查开关，默认 `1` |
 | `TRAINING_MARKETING_REWRITE_ATTEMPTS` | 软文自动重写轮数，默认 2 |
 | `TRAINING_MARKETING_HISTORY_DAYS` | 历史软文相似度比对窗口，默认最近 3 天 |

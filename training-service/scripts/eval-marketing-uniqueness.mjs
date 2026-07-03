@@ -94,6 +94,8 @@ function articleText(article) {
 }
 
 const prompts = [];
+const temperatures = [];
+const OLD_WEB_BACKGROUND_ONLY_PHRASE = ["Web search material is only", "external background"].join(" ");
 let callCount = 0;
 
 try {
@@ -101,6 +103,7 @@ try {
   registerLlmProvider("marketing-uniqueness-mock", async (prompt, options = {}) => {
     const promptText = String(prompt || "");
     prompts.push(promptText);
+    temperatures.push(options.temperature);
     callCount += 1;
     const isRewrite = promptText.includes("Rewrite the marketing article JSON");
     return {
@@ -251,9 +254,16 @@ try {
   assert(result.sourceRefs?.includes("pump.md :: CM2"), "top-level source refs should be preserved");
   assert(result.articles.every((article) => article.sourceRefs?.includes("pump.md :: CM2")), "per-article source refs should be preserved");
   assert(prompts[0].includes("Generate 3 factual marketing article"), "first prompt should request three structured articles");
+  assert(prompts[0].includes("industrial B2B pump sales engineer"), "first prompt should use B2B pump sales engineer role");
+  assert(prompts[0].includes("topic choice, opening angle") && prompts[0].includes("buyer pain points"), "first prompt should let web sources shape article angles");
+  assert(prompts[0].includes("Do not open by summarizing the local knowledge-base material"), "first prompt should block local-material-summary openings");
   assert(prompts[0].includes("distinct angle"), "first prompt should enforce different angles");
   assert(prompts[0].includes("Avoid-AI-writing style guardrail"), "first prompt should include avoid-ai-writing style guardrail");
+  assert(temperatures.some((value) => value === 0.6), "marketing model calls should use temperature 0.6");
+  assert(!prompts.some((prompt) => prompt.includes(OLD_WEB_BACKGROUND_ONLY_PHRASE)), "prompts should not demote web material to background only");
   assert(prompts.some((prompt) => prompt.includes("Rewrite the marketing article JSON")), "rewrite prompt should be sent");
+  assert(prompts.some((prompt) => prompt.includes("B2B pump sales engineer") && prompt.includes("industrial export sales editor")), "rewrite prompt should use sales-engineer editor voice");
+  assert(prompts.some((prompt) => prompt.includes("buyer objection handling")), "rewrite prompt should improve sales objections and angle");
   assert(prompts.some((prompt) => prompt.includes("Fix avoid-AI-writing issues")), "rewrite prompt should target AI writing style issues");
   assert(prompts.some((prompt) => prompt.includes("Allowed local sourceRefs")), "rewrite prompt should preserve local source refs");
 
