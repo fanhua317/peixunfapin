@@ -16,7 +16,8 @@
 - 讲义、答疑、考试、软文必须基于知识库来源；资料不足时拒绝编造。
 - 没有可用大模型 API 时，不生成讲义、不出题、不写软文。
 - 高风险动作必须确认，包括发布、删除、回滚、恢复、清空记忆等。
-- RAG 不只靠 embedding，主路径是 BM25 + 向量 hybrid + parent-child 上下文。
+- RAG 不只靠 embedding，主路径是 BM25 + BGE-M3 hybrid + parent-child 上下文，可选 BGE reranker 重排并自动降级。
+- 可观测性以 Agent Run 为本地事实源，OpenTelemetry 只做可选外部导出；不保存完整 prompt、回答或密钥。
 - 本地改动默认只提交并推送 GitHub，不自动连接、更新或重启服务器；部署必须获得当前任务的明确授权。
 
 ## 3. 系统分层
@@ -41,7 +42,8 @@ SQLite + JSONL + local vector index + clean documents
 - `src/http/controllers`：HTTP API 适配层。
 - `src/agent`、`src/tools`、`src/agent-runs`：Agent 运行治理、Tool Registry、Run/Step 记录。
 - `src/domain`：培训、员工、邀请、考试、报表等业务逻辑。
-- `src/rag.mjs`：BM25、向量检索、parent-child 展开和上下文渲染。
+- `src/rag.mjs`、`src/reranker.mjs`：BM25、向量检索、parent-child 展开、证据门禁和远程重排降级。
+- `src/observability`：AsyncLocalStorage 关联 Run、LLM、tool、RAG 和 reranker 指标，可选导出 OTLP spans。
 - `src/ai`、`src/chat`：意图识别、普通聊天、多语言翻译、讲义、答疑、出题、软文和 LLM 调用。
 - `src/import`：资料清洗、语义切片、导入写入和质量统计。
 - `src/jobs`：异步任务队列，覆盖导入、embedding 和知识库回滚。
@@ -106,6 +108,7 @@ SQLite + JSONL + local vector index + clean documents
 -> 安全规则过滤高风险操作
 -> 知识库别名、会话上下文和 RAG 命中校验
 -> hybrid RAG 获取 chunk 和 parent context
+-> reranker 可用时重排 parent 候选，不可用时保留 hybrid 顺序
 -> 用户开启联网搜索时调用 Tavily Search API 获取外部参考资料
 -> answer_knowledge_question 生成有来源回答
 -> 前端展示答案、知识库来源、联网来源和命中片段
@@ -178,7 +181,9 @@ memory_recall
 -> result_output
 ```
 
-Run 和 Trace 只保存脱敏摘要、message hash、message preview、意图、skill、action、耗时和错误，不保存完整 API Key 或完整模型输出。
+Run 和 Trace 只保存脱敏摘要、message hash、message preview、意图、skill、action、耗时和错误，不保存完整 API Key、prompt 或模型输出。每个新 Run 的 `summary.observability` 聚合 LLM token/成本/TTFT、工具成功率、线上证据命中、检索与 rerank 延迟和降级原因；历史 Run 缺少指标时保持“无数据”。
+
+`GET /api/observability/summary?hours=24&skill=` 提供老板鉴权后的时间窗聚合。线上证据命中率表示“检索调用返回至少一条可用证据”，与离线 ground-truth Hit@K 是两种指标，不能混用。OpenTelemetry 默认关闭；开启后可向 OTLP HTTP collector 导出 `agent.run`、`agent.tool`、`rag.retrieve`、`rag.rerank` 和 `llm.chat` spans，没有 collector 时本地指标仍正常写入。
 
 ## 6. 意图识别与安全门禁
 
@@ -217,10 +222,14 @@ query
 -> score normalization
 -> weighted fusion
 -> same parent dedupe
+-> optional bge-reranker-v2-m3 over at most 20 parent candidates
+-> 0.75 * rerankerNormalized + 0.25 * hybridNormalized
 -> parent context rendering
 ```
 
-参数、型号、功率、能效、条款类问题会提高 BM25 权重；口语化问题更多依赖向量召回。向量不可用时使用 BM25-only，服务仍可答复基于文本的请求。
+参数、型号、功率、能效、条款类问题会提高 BM25 权重；口语化问题更多依赖向量召回。Reranker 请求最多 50 个文档、单段最多 4000 字符，默认候选 20 个。未配置、超时、鉴权失败、5xx 或模型不可用时保留 hybrid 排序；向量不可用时使用 BM25-only，服务仍可答复基于文本的请求。
+
+2026-07-10 至 2026-07-11 的隔离规模基准表明，把导入、全量 embedding、资源峰值、质量、错误和模式降级一起纳入统一门槛后，最大严格通过 100 文件/并发 20。仅看 5 次预热后的查询层，5000 文件 BM25 在并发 20 时 p95=22 ms；hybrid+reranker 在并发 5 时 p95=1668 ms 且无降级，并发 10 虽 p95=3271 ms 但发生 1 次回退。该结论来自合成语料，不替代 150 条真实分层评测，完整证据见 [RAG_BENCHMARK.md](RAG_BENCHMARK.md)。
 
 ### 资料质量
 
@@ -298,7 +307,17 @@ optional Ollama bge-m3 query embedding
 DeepSeek/OpenAI-compatible chat API
 ```
 
-部署脚本支持“主计划任务 + watchdog + 备份任务 + Ollama 任务”：`JuzhouAgentTraining` 运行 `start-server.ps1`，watchdog 检查 8787 端口、首页和 `/api/health`，备份任务执行生成、校验和保留策略，Ollama 任务只提供本机 query embedding。这里描述的是可用部署结构，不代表当前服务器实时状态；实际状态只引用带日期的审计证据。
+可选专用 GPU Reranker：
+
+```text
+Windows GPU host
+Scheduled Task: JuzhouAgentReranker
+FastAPI :8910 + bearer token + LAN firewall
+BAAI/bge-reranker-v2-m3
+7-day rotated logs
+```
+
+部署脚本支持“主计划任务 + watchdog + 备份任务 + Ollama 任务”：`JuzhouAgentTraining` 运行 `start-server.ps1`，watchdog 检查 8787 端口、首页和 `/api/health`，备份任务执行生成、校验和保留策略，Ollama 任务只提供本机 query embedding。专用 GPU Reranker 独立于培训服务部署；当前 `192.168.9.105` 只用于明确授权的 reranker/benchmark，不是培训生产服务器。这里描述的是可用部署结构，不代表任何服务器实时状态；实际状态只引用带日期的审计证据。
 
 Qdrant 是可选部署，不是低并发轻量服务器默认项。使用 Qdrant 时，需要单独备份 volume 或 snapshot。
 
@@ -338,6 +357,17 @@ Qdrant 是可选部署，不是低并发轻量服务器默认项。使用 Qdrant
 | `TRAINING_VECTOR_BACKEND` | `auto`、`local` 或 `qdrant` |
 | `TRAINING_EMBEDDING_MODEL` | embedding 模型名 |
 | `OLLAMA_URL` | Ollama 地址 |
+| `TRAINING_RERANKER_ENABLED` | 是否显式启用已通过 A/B 验收的远程重排，默认关闭 |
+| `TRAINING_RERANKER_URL` | Reranker 内网地址 |
+| `TRAINING_RERANKER_API_KEY` | 独立 Bearer token，仅放未跟踪环境文件 |
+| `TRAINING_RERANKER_MODEL` | 默认 `BAAI/bge-reranker-v2-m3` |
+| `TRAINING_RERANKER_TIMEOUT_MS` | 重排超时，默认 15000 ms |
+| `TRAINING_RERANKER_CANDIDATES` | 重排候选数，默认 20，上限 50 |
+| `TRAINING_RERANKER_WEIGHT` | 最终融合中的重排权重，默认 `0.75` |
+| `TRAINING_LLM_*_COST_PER_MILLION` | 可选 token 单价快照，不在代码中写死 |
+| `TRAINING_LLM_PRICE_SOURCE_DATE` | 成本价格快照日期；未配置则成本为“无数据” |
+| `TRAINING_OTEL_ENABLED` | OpenTelemetry 导出开关，默认关闭 |
+| `TRAINING_OTEL_OTLP_ENDPOINT` | OTLP HTTP trace endpoint |
 | `PUBLIC_BASE_URL` | 固定邀请链接域名 |
 | `TRAINING_AGENT_TRACE` | 是否写入脱敏 trace |
 | `TRAINING_BACKUP_RETENTION_DAYS` | `backup-server.ps1` 默认保留天数 |
@@ -352,6 +382,8 @@ Qdrant 是可选部署，不是低并发轻量服务器默认项。使用 Qdrant
 npm run check
 npm run smoke
 npm run eval:rag -- --retrieval-only
+npm run eval:reranker
+npm run eval:observability
 npm run eval:intent
 npm run eval:memory
 npm run eval:agent-trajectory
@@ -370,10 +402,11 @@ npm run eval:marketing-length
 npm run eval:boss-chat
 npm run eval:translation
 npm run eval:kb-versions
+npm run benchmark:rag-scale -- --sizes=100,1000,5000 --queries=100 --concurrency=1,5,10,20
 git diff --check
 ```
 
-RAG 评测集维护在 `scripts/fixtures/rag-eval-cases.mjs`，覆盖型号参数、结构原理、制造工艺、销售场景、多语言和标准资料。Ollama 关闭时评测结果属于 BM25 环境降级；hybrid 质量验收必须先确认 `retrievalMode=hybrid`，再检查 Top1、Top3 和“不低于 BM25”。备份评测覆盖 SQLite 快照、JSONL/向量索引打包、校验、强制恢复和备份保留策略。
+RAG 评测集按领域维护，共 150 条：120 条开发/回归集、30 条冻结测试集；分类为 60 条型号/参数、30 条语义改写/原理、20 条多语言、20 条跨知识库 hard negative、20 条无答案/拒答。60 条真实答案子集进一步检查事实忠实、禁止事实、数字/型号一致性、引用 precision/recall 和明确拒答；2026-07-10 最终实测为忠实 42/45（93.33%）、引用 precision/recall=100%/100%、拒答 15/15。3 条未通过用例均为期望事实覆盖不足，没有错误引用、禁止事实或网络失败混入通过结果。Agent trajectory 从 14 条扩到 30 条。Ollama 关闭时评测结果属于 BM25 环境降级；hybrid 与 hybrid+reranker 验收必须先确认对应运行状态，再比较 Hit@1/3/5、MRR@5、nDCG@5、拒答和分层失败样本。备份评测覆盖 SQLite 快照、JSONL/向量索引打包、校验、强制恢复和备份保留策略。
 翻译评测 `npm run eval:translation` 不依赖真实模型质量：脚本使用临时数据目录和本地 OpenAI-compatible mock，覆盖显式目标语言、默认目标语言、无正文追问、老板端上一条正文上下文、正文在前且翻译指令在末尾、长文本不静默截断、LLM API 缺失错误、`翻译成英文：这是一台水泵` 和 boss-chat 持久化，并断言“生成英文文章，同时附带中文翻译”不会被翻译 parser 抢走。
 软文去重评测 `npm run eval:marketing-uniqueness` 使用 mock LLM 和临时老板端历史，覆盖相同文章高相似、仅共享产品型号不误判、模板句命中、中英文混合重复、avoid-ai-writing AI 写作痕迹检测、三篇文章结构化返回、最近 3 天历史窗口过滤和自动重写闭环。当前夹具英文 AI-heavy 样本 `aiWritingScore=78`、平实工业产品样本 `aiWritingScore=0`；首轮三篇高度相似稿触发 1 次重写，最终 `overallStatus=ok`、同批最高相似度约 `0.019`、历史最高相似度约 `0.05`、AI 写作痕迹最高分 `0`。
 服务器审计属于显式授权的独立流程。脚本、原始 artifact 和带日期结论分别位于 `server-audit:*`、`training-service/server-audit-output` 和 `docs/PERFORMANCE_AUDIT.md` / `docs/RESUME_EVIDENCE.md`；本总览只保留长期有效的架构与验证口径。
@@ -386,6 +419,8 @@ RAG 评测集维护在 `scripts/fixtures/rag-eval-cases.mjs`，覆盖型号参�
 - 老板端旧本地聊天记录导入需要确认，并且只能作为安全文本 transcript 进入服务端历史。
 - 大模型仍可能表达偏差，必须依赖来源引用、低置信拒答和评测约束。
 - 服务器资源有限时，不建议同时运行完整聊天模型、Qdrant 和重型 embedding 服务。
+- 远程 reranker 是可降级依赖；内网、token、计划任务、显存和超时都必须监控，不能把它变成答疑单点故障。
+- 5000 文件时 JSON 向量索引约 258 MiB，继续扩容应评估增量索引、Qdrant 和进程/队列隔离。
 - `TRAINING_ACCESS_KEY` 不是完整账号体系，公网部署时仍需反向代理、HTTPS、防火墙和更细权限。
 
 ## 15. 后续方向
@@ -407,4 +442,4 @@ RAG 评测集维护在 `scripts/fixtures/rag-eval-cases.mjs`，覆盖型号参�
 
 - 从单机 SQLite 演进到多用户数据库和对象存储。
 - 增加多租户、审计、审批和企业级运维。
-- 构建更完整的 Agent 轨迹评测和线上质量监控。
+- 持续扩充冻结测试集和真实答案抽样，并将 OTLP traces 接入正式 collector/告警平台。

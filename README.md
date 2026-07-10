@@ -25,7 +25,7 @@ http://127.0.0.1:8787/
 - `/`：老板端聊天和内部 skill。
 - `/imports`：知识库导入、质量和版本差异。
 - `/jobs`：异步导入、embedding、回滚任务中心。
-- `/traces`：Agent Run 和脱敏 Trace。
+- `/traces`：Agent Run、脱敏 Trace 和近 24 小时可观测指标。
 - `/t/{inviteToken}`：员工学习、答疑和考试。
 
 ## 核心能力
@@ -41,7 +41,8 @@ http://127.0.0.1:8787/
 - 本地记忆用于普通聊天连续性和低风险默认偏好。
 - 快速 LLM Router、确认卡片、Tool Registry 和 Agent Run 轨迹用于减少误判。
 - 知识库支持目录导入、上传导入、异步任务、版本差异和上一版回滚。
-- RAG 使用 BM25 + 本地向量 hybrid + parent-child 上下文；向量不可用时回退 BM25。
+- RAG 使用 BM25 + 本地向量 hybrid + parent-child 上下文，并可通过独立 `bge-reranker-v2-m3` 服务重排；reranker 或向量不可用时自动回退，不中断答疑。
+- Agent Run 记录脱敏的 token、成本估算、TTFT、工具成功率、检索证据命中率和检索/rerank 延迟；OpenTelemetry OTLP 导出可选且默认关闭。
 
 ## 数据目录
 
@@ -100,6 +101,22 @@ npm run embed:local -- --full
 ```
 
 服务器可只运行 Ollama `bge-m3` 做 query embedding，资料侧复用已生成的 `vector-index-bge-m3.json`。Qdrant 仍保留为可选方案，适合数据量或并发更高的场景。
+
+可选 GPU reranker 通过 HTTP 接入；API key 只放在未跟踪环境文件中：
+
+```env
+TRAINING_RERANKER_ENABLED=1
+TRAINING_RERANKER_URL=http://192.168.9.105:8910
+TRAINING_RERANKER_API_KEY=...
+TRAINING_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
+TRAINING_RERANKER_TIMEOUT_MS=15000
+TRAINING_RERANKER_CANDIDATES=20
+TRAINING_RERANKER_WEIGHT=0.75
+```
+
+2026-07-10 至 2026-07-11 的专用 GPU 主机规模基准覆盖 100/1000/5000 个 Markdown 文件。把导入、全量 embedding、资源峰值、质量、错误和模式降级一起纳入门槛后，最大严格通过档位是 100 文件/并发 20。仅看 5 次预热后的查询层，5000 文件 BM25 在并发 20 时 Hit@3=100%、p95=22 ms；hybrid+reranker 在并发 5 时 Hit@3=100%、p95=1668 ms 且无降级，并发 10 虽 p95=3271 ms 但出现 1 次回退，不能计作纯重排容量。完整矩阵、限制和失败样本见 [docs/RAG_BENCHMARK.md](docs/RAG_BENCHMARK.md)。这些数据不是现有培训生产服务器的实时状态。
+
+成本单价不写死在代码中，应按供应商当前价格给环境变量配置带日期的快照；未配置时 token 和时延仍记录，成本显示为“无数据”。OpenTelemetry 默认关闭，即使没有 collector，本地 Run 指标仍完整可用。
 
 ## 资料导入
 
@@ -170,6 +187,8 @@ Windows Server 当前推荐用计划任务长期运行：
 - [training-service/README.md](training-service/README.md)
 - [deploy/server/README-server.md](deploy/server/README-server.md)
 
+`192.168.9.105` 只承载本次明确授权的专用 Reranker 和隔离 benchmark，不是培训生产服务器。benchmark 完成后回收项目副本、合成语料、临时数据库/索引、Ollama 模型和缓存，只保留 Reranker 服务所需文件与轮转日志。
+
 ## 常用验证
 
 ```powershell
@@ -177,6 +196,12 @@ cd D:\juzhou-agent\peixun\training-service
 npm run check
 npm run smoke
 npm run eval:rag -- --retrieval-only
+npm run eval:reranker
+npm run eval:observability
+npm run eval:tool-observability
+npm run eval:answer-evidence-gate
+npm run eval:bm25-cache
+npm run eval:rag-scale-benchmark
 npm run eval:intent
 npm run eval:memory
 npm run eval:agent-trajectory
@@ -191,11 +216,12 @@ npm run eval:http-security
 npm run eval:boss-chat
 npm run eval:translation
 npm run eval:kb-versions
+npm run benchmark:rag-scale -- --sizes=100,1000,5000
 git diff --check
 ```
 
 文档-only 改动通常至少跑 `npm run check` 和 `git diff --check`。
-`npm run eval:rag -- --retrieval-only` 会忠实反映当前环境：Ollama 关闭时是 BM25 降级验证，不应冒充 hybrid 质量验收；hybrid 验收必须临时启用本机 Ollama，确认 `retrievalMode=hybrid` 后再检查 Top1/Top3 门槛。
+RAG fixture 共 150 条，按 120 条开发/回归集和 30 条冻结测试集分层，另有 60 条真实答案质量子集；Agent trajectory 共 30 条。`npm run eval:rag -- --retrieval-only` 会忠实反映当前环境：Ollama 关闭时是 BM25 降级验证，不应冒充 hybrid 质量验收；hybrid 和 hybrid+reranker 验收必须确认对应运行状态后再检查 Hit@K、MRR、nDCG、拒答与降级门槛。规模 benchmark 的 v2 artifact 还会记录 requested/effective mode 和降级原因，任何 semantic/reranker fallback 都不能计作原模式成功。
 
 服务器审计属于显式授权的独立运维流程，证据和日期统一记录在 [docs/PERFORMANCE_AUDIT.md](docs/PERFORMANCE_AUDIT.md)，不作为本地代码修改的默认步骤。
 
@@ -205,6 +231,7 @@ git diff --check
 - [docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md)：架构总览、数据流、风险和路线图。
 - [docs/Agent项目面试QA.md](docs/Agent项目面试QA.md)：中文面试问答，按真实项目实现整理。
 - [docs/PERFORMANCE_AUDIT.md](docs/PERFORMANCE_AUDIT.md)：服务器性能、数据规模、回归结果和 bug 排查记录。
+- [docs/RAG_BENCHMARK.md](docs/RAG_BENCHMARK.md)：100/1000/5000 文件 RAG 三路检索规模基准、容量边界和原始失败证据。
 - [docs/RESUME_EVIDENCE.md](docs/RESUME_EVIDENCE.md)：可改写进简历的业务成果和量化证据。
 - [training-service/LLM_CONFIG.md](training-service/LLM_CONFIG.md)：LLM Provider 与 OpenClaw Gateway 兼容说明。
 - [training-plugin/README.md](training-plugin/README.md)：OpenClaw 插件的 8 个 training tool。

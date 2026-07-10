@@ -29,8 +29,9 @@
 - 前端使用无构建浏览器 ES modules，代码在 `training-service/public/src`。
 - 业务状态默认使用 SQLite：`D:\juzhou-agent\data\training-index\training.db`。
 - JSON 文件是兼容、备份或回滚格式；`state.json` 继续保持 `meta.version = 1`。
-- RAG 默认是 BM25 + 本地向量混合检索。
+- RAG 默认是 BM25 + 本地向量混合检索；远程 BGE Reranker 是显式启用、可降级的可选层，不能因仅存在 URL/密钥就自动改变检索行为。
 - Parent-Child RAG 是核心设计：child chunk 用于检索，parent context 用于生成答案。
+- Agent Run 用 `AsyncLocalStorage` 关联 LLM、tool、RAG 与 reranker 指标；OpenTelemetry 默认关闭，指标和 span 不得保存完整 prompt、回答、密钥、原始异常文本或带凭据 URL。
 - LLM 默认走 OpenAI-compatible API，例如 DeepSeek。只有显式设置 `TRAINING_LLM_PROVIDER=openclaw` 时才走 OpenClaw Gateway。
 - 不做假的兜底生成：没有可用大模型 API 时，不生成培训讲义、不出题、不写软文。
 
@@ -80,6 +81,12 @@ cd D:\juzhou-agent\peixun\training-service
 npm run check
 npm run smoke
 npm run eval:rag -- --retrieval-only
+npm run eval:reranker
+npm run eval:observability
+npm run eval:tool-observability
+npm run eval:answer-evidence-gate
+npm run eval:bm25-cache
+npm run eval:rag-scale-benchmark
 npm run eval:intent
 npm run eval:memory
 npm run eval:agent-trajectory
@@ -146,6 +153,9 @@ npm run restore:data -- --from D:\juzhou-agent\data\training-index\backups\train
 - SQLite “索引列 + JSON 原文”的兼容存储策略。
 - 培训发布确认、删除确认、知识库回滚确认和低置信意图确认。
 - 向量检索不可用时必须能回退 BM25。
+- 证据门禁判定资料不足后不得再调用未门禁检索回填；只有明确的语义后端异常才能回退到同样经过证据门禁的 BM25。
+- BM25 缓存必须以提交态 `meta.chunksRevision` 和知识库作用域为键；构建期原始 token 不得常驻，LRU 的条目、chunk、term 三重上限与增删改失效行为必须保留。
+- 规模 benchmark 必须记录 requested/effective mode、reranker 状态和降级原因；任何 fallback 都不能冒充原模式成功，checkpoint 必须原子且可恢复。
 - 培训讲义、考试题、RAG 答疑、营销软文必须保留来源引用。
 
 ## 项目经验总结

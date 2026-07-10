@@ -1,6 +1,6 @@
 # Agent 项目面试 QA
 
-更新时间：2026-06-26
+更新时间：2026-07-10
 
 本文按真实项目实现整理，用于面试时解释钜洲培训 Agent 的技术选型、架构取舍、RAG、Agent 路由、记忆、部署和安全治理。
 
@@ -76,7 +76,11 @@ A：它把 skill/tool 的名称、用途、风险等级、是否需要确认、�
 
 ### Q17：Agent Run 和 Trace 有什么区别？
 
-A：Trace 是脱敏摘要日志，方便快速排查；Agent Run 是结构化运行记录，一次请求一个 run，里面按 step 记录记忆召回、意图路由、确认校验、skill 执行、结果输出和错误，更适合做轨迹评测和治理。
+A：Trace 是脱敏摘要日志，方便快速排查；Agent Run 是结构化运行记录，一次请求一个 run，里面按 step 记录记忆召回、意图路由、确认校验、skill 执行、结果输出和错误。现在 run 的 `summary.observability` 还保存 LLM token/成本/TTFT、工具成功率、检索证据数、检索与 rerank 耗时和降级原因，便于轨迹评测和线上治理。
+
+### Q17-1：可观测性具体做了什么？
+
+A：后端用 `AsyncLocalStorage` 把 HTTP/WebSocket 请求、Agent Run、LLM、RAG、reranker 和 tool step 关联在同一个上下文中。每个 run 记录输入/输出/缓存 token、估算成本、首字延迟 TTFT、调用耗时、工具成功率、检索模式、证据命中和降级原因；老板鉴权的汇总接口和 `/traces` 页面再做 24 小时分位数与聚合。这里的线上“证据命中率”只表示检索结果通过证据门禁，不等于离线有 ground truth 的 Hit@K。OpenTelemetry 是可选项：配置 OTLP HTTP collector 后导出 `agent.run`、`agent.tool`、`rag.retrieve`、`rag.rerank`、`llm.chat` spans；默认关闭，没有 collector 也不影响本地指标。完整 prompt、回答和密钥不进入指标或 span。
 
 ## 4. RAG 原理
 
@@ -98,7 +102,15 @@ A：本地知识库适合企业内部资料、产品参数和培训内容这类�
 
 ### Q20：为什么要 BM25 + 向量混合检索？
 
-A：embedding 擅长语义相近问题，但型号、功率、能效、条款号、标准号这类精确词容易被稀释。BM25 能精确召回专有词，向量能召回口语化表达，混合后更稳。
+A：embedding 擅长语义相近问题，但型号、功率、能效、条款号、标准号这类精确词容易被稀释。BM25 能精确召回专有词，BGE-M3 向量能召回口语化和多语言表达，混合后更稳。冻结测试集的 26 条可回答检索问题中，hybrid Hit@3 是 25/26；这是真实回归数字，不应写成 30/30。
+
+### Q20-1：为什么还要加 BGE Reranker？
+
+A：BM25 和向量先做高召回候选，`BAAI/bge-reranker-v2-m3` 再对 query-document 对做交叉编码精排，最终分数是标准化后的 `0.75 * reranker + 0.25 * hybrid`。冻结集 A/B 中，hybrid 是 Hit@1=21/26、Hit@3=25/26、MRR@5=0.8782、nDCG@5=0.9044；hybrid+reranker 是 Hit@1=23/26、Hit@3=25/26、MRR@5=0.9231、nDCG@5=0.9348。MRR@5 和 nDCG@5 分别衡量首个相关结果的排位以及 Top-5 整体排序质量，不能只用 Top-1 提升掩盖整体排序退化。代码默认关闭远程重排；只有 A/B 达到 Hit@1、MRR@5、nDCG@5 不低于 hybrid、Hit@3 最多少 1 条且拒答准确率不退化后，运维才显式设置 `TRAINING_RERANKER_ENABLED=1`。重排前先检查 plain hybrid 证据；只有原始候选池已包含查询中的全部精确型号/证据编号时，才允许从较深候选做安全救援，重排后还要再次通过完整证据门禁。这样既不让精排把无答案问题变成有答案，也不会把本来就在 Top-20 的精确证据挡在重排之前。服务超时、401、5xx 或断连时自动回退 hybrid，不打断答疑。
+
+### Q20-2：BM25 在 5000 文件时怎么避免每次重算？
+
+A：系统按知识库作用域构建 BM25 倒排索引缓存，保存每个 chunk 的 term 词频、文档频率、平均长度和 postings；查询时只扫描命中 term 的候选 chunk，而不是对全库反复分词。构建期的原始 token 数组完成统计后立即释放，缓存上限按真正驻留内存的去重 term 槽位计数。缓存键绑定提交时生成的 `meta.chunksRevision` 和知识库作用域，JSON/SQLite 写入都在原子提交前更新 revision；同一进程还用 LRU 的条目数、chunk 数和 term 数三重上限控制内存，资料增删改后必然失效，避免用旧索引换速度。
 
 ### Q21：什么是 Parent-Child RAG？
 
@@ -118,7 +130,7 @@ A：导入时清洗目录、页眉页脚、OCR 占位和低价值短片段；检
 
 ### Q25：RAG 评测看什么指标？
 
-A：当前默认看 retrieval-only 的 Top1、Top3 命中率、hybrid 是否不低于 BM25、分类命中和失败用例。大模型回答质量可以额外评估，但不作为检索回归的默认硬门槛。
+A：检索层对 BM25、hybrid、hybrid+reranker 三路统一计算 Hit@1/3/5、MRR@5、nDCG@5、拒答准确率、p50/p95/p99、分类统计和失败样本。门槛只用 120 条 dev 集校准，30 条 test 冻结后不能为了过测试而降低验收线。回答层另选 60 条真实 DeepSeek 用例，检查事实覆盖、禁止事实、数字/型号一致性、引用合法性、引用召回和明确拒答。2026-07-10 最终完整实测中，45 条可回答用例忠实 42 条（93.33%），引用 precision=100%、recall=100%，15 条拒答全部正确；通过既定的忠实度≥90%、引用 precision=100%、引用 recall≥90%、拒答至少 14/15 门槛。3 条失败均是期望事实覆盖不足；没有把网络错误当拒答，也没有禁止事实或错误来源通过检查。
 
 ## 5. Embedding 与模型部署
 
@@ -132,11 +144,11 @@ A：不需要。10MB 更适合做 RAG 数据入库和索引，不适合拿来训
 
 ### Q28：本地部署模型会不会更快？
 
-A：小模型做意图或 embedding 可能更快，但长文本生成在普通服务器上未必快。当前策略是服务器可只跑 Ollama `bge-m3` 做 query embedding，聊天和生成仍走在线 API。
+A：小模型做意图或 embedding 可能更快，但长文本生成在普通服务器上未必快。当前用 Ollama `bge-m3` 做 query/document embedding，聊天和生成仍走在线 API；计算更重的 `bge-reranker-v2-m3` 放在 `192.168.9.105` 的 RTX 4080 专用服务上。这是可替换的计算后端，Node 业务服务通过受限 HTTP 接口调用，不把 Python 模型运行时塞进主进程。
 
-### Q29：为什么本地生成向量索引后上传服务器？
+### Q29：为什么要把 embedding、Reranker 和业务部署边界分开？
 
-A：资料侧 embedding 可以离线批处理，本地机器资源更充足。服务器只需要用同一模型生成用户 query embedding，再和上传的 `vector-index-bge-m3.json` 做相似度匹配。前提是服务器的 chunks/chunkParents 与索引完全匹配。
+A：资料侧 embedding 适合批处理，query embedding 和检索在 Node 业务链路中完成，reranker 适合独占 GPU 并通过超时/降级边界隔离。这样可分别优化向量构建、业务一致性和 GPU 推理，也能在 Reranker 不可用时回退 hybrid。本轮只在远程 GPU 主机长期保留 Reranker 服务、模型、venv、计划任务和轮转日志；基准工程副本、合成语料、临时 SQLite/向量索引、Ollama 与缓存在取回证据后删除。现有培训生产服务器没有部署或重启本轮代码。
 
 ## 6. 资料导入与视觉 PDF
 
@@ -266,15 +278,15 @@ A：适合作为素材库或视觉检索能力，但不应直接当产品事实�
 
 ### Q56：项目有哪些测试？
 
-A：有 ESLint 正确性/未使用代码门禁、语法检查、烟测、RAG 评测、意图评测、记忆评测、Agent 轨迹评测、Trace 评测、SQLite 评测、并发一致性评测、备份/恢复/保留策略评测、导入与暂存生命周期评测、任务评测、HTTP/邀请/WebSocket 安全评测、老板端聊天历史评测、流式输出评测、软文长度与去重评测、多语言翻译评测、知识库版本评测，以及 OpenClaw 插件 8 个 tool/endpoint 契约检查。
+A：有 ESLint 正确性/未使用代码门禁、语法检查、烟测、150 条 RAG 分层评测、60 条真实答案质量评测、意图评测、记忆评测、30 条 Agent 轨迹评测、Trace/可观测性/OpenTelemetry 评测、SQLite 评测、并发一致性评测、备份/恢复/保留策略评测、导入与暂存生命周期评测、任务评测、HTTP/邀请/WebSocket 安全评测、老板端聊天历史评测、流式输出评测、Reranker 正常与异常降级评测、软文长度与去重评测、多语言翻译评测、知识库版本评测、100/1000/5000 文件规模基准，以及 OpenClaw 插件 8 个 tool/endpoint 契约检查。
 
 ### Q57：轨迹评测和意图评测区别是什么？
 
-A：意图评测看“分类对不对”，例如水泵宣传文章要进 `generate_marketing_article`，明确翻译才进 `translate_text`；轨迹评测看“整个执行路径对不对”，例如是否先确认、是否错误执行删除、是否把文章+翻译误走翻译工具、是否在 CM2 或追问型号时选对银嘉泵/水泵知识库。
+A：意图评测看“分类对不对”，例如水泵宣传文章要进 `generate_marketing_article`，明确翻译才进 `translate_text`；轨迹评测看“整个执行路径对不对”。当前 30 条轨迹覆盖工具选择、知识库连续性、确认先于执行、禁止错误工具、资料不足拒答、模型失败、reranker 降级和指标记录，同时保留确认删除与 JSON 存储检查。
 
 ### Q58：RAG 评测集怎么构造？
 
-A：用真实资料中的业务问题构造，覆盖型号参数、结构原理、制造工艺、销售话术、多语言和标准资料。每条用例有 query、expected 和可选 minHits。
+A：当前是 150 条统一 schema 的分层集，每条都有 `id/split/domain/category/query/knowledgeBase/expectedFacts/expectedSources/forbiddenFacts/answerMode/minHits/tags`。按用途分为 120 条 dev 和 30 条冻结 test；按难度分为 60 条型号/参数精确检索、30 条语义改写与原理、20 条多语言、20 条跨知识库 hard negative、20 条无答案/拒答，同时覆盖电机和水泵资料。其中 60 条答案子集由 45 条可回答和 15 条应拒答组成；禁止事实和期望来源是为了防止“语句通顺但引错资料”也被算作通过。
 
 ### Q58-1：多语言翻译评测怎么避免依赖真实模型质量？
 
@@ -282,19 +294,21 @@ A：`npm run eval:translation` 会使用临时 `TRAINING_DATA_DIR`、关闭认�
 
 ### Q58-2：服务器性能测试怎么做？
 
-A：`server-audit:*` 使用“生产只读基线 + 同机隔离副本”的方法，极限压测使用独立 `TRAINING_DATA_DIR`、SQLite 路径和端口，记录 RPS、错误率、p50/p95/p99 与资源采样，写入必须显式传 `--allow-write`。2026-06-30 的快照中，读链路 20 并发内 0 错误，50 并发开始超时，100 并发错误率 35.43%；写链路 boss-chat create/delete 到 20 并发仍 0 错误。这个数字是审计证据，不是服务器实时状态；没有当前任务授权时不复查服务器。
+A：规模基准在远程 GPU 主机上生成恰好 100、1000、5000 个可解析 Markdown 文件，对每档完整执行导入、Parent-Child 切片、SQLite 落库、BGE-M3 embedding，再对 BM25、hybrid、hybrid+reranker 在并发 1/5/10/20 下各跑 100 个确定性查询。每格先做 5 次预热，延迟因此表示预热后的查询层。严格容量门槛要求三路同时满足 0 错误、请求模式不降级、Hit@3≥95%、单并发 p95≤2 秒、10 并发 p95≤5 秒、内存<80%、显存<95%且剩余磁盘>20GB；按这个最保守的全生命周期口径，最大通过档为 100 文件/并发 20。1000 和 5000 档的 plain hybrid Hit@3 分别只有 92/100 和 91/100，内存峰值也分别达到 85.56% 和 98.04%；5000 档另记录了 5 次重排回退。
+
+若只看预热后的查询层，5000 文件 BM25 在并发 20 达到 Hit@3=100%、p95=22 ms。hybrid+reranker 在并发 5 达到 Hit@1/3/5=100/100/100、p95=1.668 秒且 0 回退；并发 10 虽然 p95=3.271 秒，但发生 1 次回退，并发 20 则 p95=6.492 秒且发生 4 次回退。因此“全生命周期严格容量是 100/c20”和“5000 文件的纯重排查询层无降级建议是 c5”是两个不同口径，不能混成一个数字。
 
 ### Q58-3：怎么把测试结果沉淀成简历材料？
 
-A：审计脚本统一输出 JSON 到 `server-audit-output`，再由 `npm run server-audit:report` 汇总成 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。报告里记录数据规模、功能回归、接口性能、并发稳定性、合成数据、bug 风险和证据文件；简历文档把这些数字改写成业务成果口径。2026-06-30 审计可引用的数字包括：隔离副本最大读压测 100 并发、20 并发稳定 0 错误、写链路最高 12.47 RPS、业务闭环全链路通过、备份 4.25 MB 并完成校验和恢复；Tavily 答疑专项 5 个真实样本成功率 100%，on p95 8470 ms，平均 3.8 个知识库来源 + 4 个联网来源。后续专项脚本增加六链路表，覆盖答疑、软文、培训材料、考试、翻译和普通聊天的 off/on 对比。历史 embedding 失败和 CSV direct 导入不覆盖继续作为风险记录；2026-06-30 后续健康快照是 `ollamaOk=true`、`localVectorIndexOk=true`、`retrievalMode=hybrid`，不能当成服务器实时状态。
+A：原则是“简历数字必须能回指到可重现 artifact”。RAG A/B 保留用例分层、失败 ID、Hit@K、MRR、nDCG 和延迟；规模基准保留 100/1000/5000 档的导入、切片、embedding、三路检索、资源采样、requested/effective mode 与容量判定 JSON，再汇总到带日期的 benchmark/简历证据文档。面试可如实说：冻结集 reranker 把 Top-1 从 21/26 提到 23/26，MRR@5 从 0.8782 提到 0.9231，nDCG@5 从 0.9044 提到 0.9348；全生命周期严格容量为 100/c20，5000 文件的纯重排查询层无降级建议为 c5。不把旧快照冒充实时状态，也不把回退请求冒充原模式成功。
 
 ### Q58-4：Tavily 六链路联网专项怎么测？
 
 A：分两层测。第一层是 `npm run eval:web-search` 的 mock 回归，用 mock Tavily 和 mock OpenAI-compatible LLM 覆盖六条链路：`webSearchMode:off` 不调用 Tavily，`on` 返回 `webSearchStatus=ok`、`webSources/webSourceRefs`，缺 key、Tavily 500、超时、空结果都不打断原生成链路；同时断言 prompt 已把“本地知识库资料/用户原文”和“联网搜索资料”分区，并明确禁止执行网页指令。第二层是服务器审计，“生产只读基线 + 服务器隔离副本端到端”：生产只读先确认 `/api/health`、部署代码、Tavily 配置存在性和知识库规模；隔离副本使用独立 `TRAINING_DATA_DIR`、端口和临时 access key。旧版结果是 5 个真实联网答疑样本成功率 100%，on 平均 6538 ms、p95 8470 ms，API 5/5 通过，异常降级 4/4 通过；新版脚本会额外输出六链路专项表和发布/考试生成 API 覆盖。
 
-### Q58-5：embedding 后端为什么不可用，后来怎么恢复？
+### Q58-5：远程 Reranker 怎么部署，基准垃圾怎么回收？
 
-A：审计时 `/api/health` 显示 `ollamaOk=false`、`retrievalMode=bm25`，隔离副本 embedding 任务报 `fetch failed`。排查后确认不是代码找不到模型，而是服务器上 Ollama 没有持久运行：临时手动启动能监听 `11434`，SSH 会话结束后就消失；旧计划任务也没有把 `OLLAMA_MODELS` 和日志托管好。修复方式是在服务器新增 `JuzhouAgentOllama` 计划任务，用 `start-ollama.cmd` 固定 `OLLAMA_HOST=127.0.0.1:11434` 和 `OLLAMA_MODELS=C:\OllamaModels`，以 SYSTEM 后台运行。验证结果是 `/api/embed` 能返回 1024 维 bge-m3 向量，训练服务 `/api/health` 恢复为 `ollamaOk=true`、`localVectorIndexOk=true`、`retrievalMode=hybrid`。`qdrantOk=false` 在当前 local vector backend 下是正常的，因为 Qdrant 是可选高资源后端。
+A：`192.168.9.105` 上的 `D:\juzhou-agent-reranker` 使用独立 Python venv、CUDA PyTorch、固定版本 FlagEmbedding 和 FastAPI/Uvicorn，对内网提供受 Bearer token 保护的 `/health` 与 `/rerank`。服务限制候选数、单段长度、批量、超时和显存，通过 `JuzhouAgentReranker` 计划任务开机启动、失败重启，日志按大小/日期轮转并保留 7 天。基准使用时间戳隔离的代码副本、语料、数据库、向量索引和临时 Ollama/BGE-M3；结果 JSON 取回后，这些临时项以及 pip/npm 下载缓存与失败分片全部删除，只保留 Reranker 运行必需的服务、venv、模型、计划任务和轮转日志。这个专用 GPU 主机不是现有培训生产服务器；本轮没有对生产服务做代码部署或重启。
 
 ### Q59：为什么文档也要跟代码一起更新？
 
@@ -308,15 +322,15 @@ A：不是单个 API 调用，而是把 RAG 资料质量、Agent 工具选择、
 
 ### Q61：你个人贡献怎么描述？
 
-A：可以说负责从 MVP 到可维护 Agent 架构的重构，包括后端分层、domain 拆分、AI 层拆分、前端模块化、DeepSeek 接入、快速 LLM Router 与安全门禁、WebSocket 流式、RAG 混合检索、Parent-Child、SQLite、记忆、任务中心、Trace/Agent Run、导入版本回滚、服务器性能审计和评测体系。
+A：可以说负责从 MVP 到可维护 Agent 架构的重构，包括后端分层、domain/AI 层拆分、前端模块化、DeepSeek 接入、快速 LLM Router 与安全门禁、WebSocket 流式、BM25+BGE-M3+Reranker 三路检索、Parent-Child、BM25 倒排缓存、SQLite、记忆、任务中心、Trace/Agent Run 与 OpenTelemetry、导入版本回滚、150 条检索+60 条答案+30 条轨迹评测，以及 100/1000/5000 文件容量基准。
 
 ### Q62：项目当前不足是什么？
 
-A：账号权限还比较简单；OCR/版面解析还不是自动化平台；SQLite 不是多租户数据库；部分业务 skill 如报价、阿里发布、视频生成还未正式接入；公网安全和审计还需要加强。
+A：账号权限还比较简单；OCR/版面解析还不是自动化平台；SQLite 不是多租户数据库；部分业务 skill 如报价、阿里发布、视频生成还未正式接入；公网安全和审计还需要加强。基准也暴露了明确容量边界：1000/5000 文件时原始 hybrid 召回和全生命周期内存都未通过门槛；5000 文件的 hybrid+reranker 在并发 5 无降级，并发 10 虽延迟达标却出现 1 次回退，并发 20 又有更多回退且延迟超标。这说明后续还要做向量候选优化、内存治理、reranker 批处理/排队和长期线上样本监测。
 
 ### Q63：如果继续优化，优先做什么？
 
-A：优先补账号权限和公网安全、备份失败告警与异地副本、资料治理自动化、报价/发布等独立 skill、更多轨迹评测、服务器性能趋势看板和线上质量监控。
+A：优先补账号权限和公网安全、备份失败告警与异地副本、资料治理自动化、报价/发布等独立 skill；RAG 方面持续维护并扩展 60 条真实答案回归，对 5000 文件档的内存、hybrid 候选召回和 reranker 并发调度做优化，再用 OpenTelemetry collector/看板连续观察 token、成本、TTFT、工具成功率和证据命中趋势。
 
 ### Q64：软文 skill 的内容是什么？
 

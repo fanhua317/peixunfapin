@@ -1,5 +1,9 @@
 # Dependencies and build output
 node_modules/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.venv/
 dist/
 coverage/
 .cache/

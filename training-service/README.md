@@ -207,6 +207,8 @@ npm run eval:import
 -> 可用时做 bge-m3 向量召回
 -> 融合排序
 -> parent-child 展开
+-> 可用时将最多 20 个 parent 候选交给 bge-reranker-v2-m3
+-> 0.75 * rerankerNormalized + 0.25 * hybridNormalized
 -> 将父块上下文交给讲义、答疑、出题或软文生成
 ```
 
@@ -231,7 +233,21 @@ OLLAMA_URL=http://127.0.0.1:11434
 TRAINING_RAG_EMBEDDING_TIMEOUT_MS=12000
 ```
 
-向量服务或索引不可用时，服务会回退 BM25；不会因为语义检索离线而让培训和答疑完全不可用。
+GPU reranker 是独立 HTTP 服务，配置后由 Node 主服务调用：
+
+```env
+TRAINING_RERANKER_ENABLED=1
+TRAINING_RERANKER_URL=http://192.168.9.105:8910
+TRAINING_RERANKER_API_KEY=...
+TRAINING_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
+TRAINING_RERANKER_TIMEOUT_MS=15000
+TRAINING_RERANKER_CANDIDATES=20
+TRAINING_RERANKER_WEIGHT=0.75
+```
+
+请求最多发送 50 个候选、每段最多 4000 字符；默认实际候选数为 20。未配置、超时、401、5xx、非 JSON 响应或模型不可用时，当前请求保留原 hybrid 排序并写入降级原因。向量服务或索引不可用时继续回退 BM25；不会因为语义检索或 reranker 离线而让培训和答疑完全不可用。
+
+2026-07-10 至 2026-07-11 的专用 RTX 4080 主机基准显示：统一严格门槛同时评价导入、全量 embedding、资源和三路检索时，最大通过档位为 100 文件/并发 20。仅看 5 次预热后的查询层，5000 文件 BM25 在并发 20 时 Hit@3=100%、p95=22 ms；hybrid+reranker 在并发 5 时 Hit@3=100%、p95=1668 ms 且无降级，并发 10 虽 p95=3271 ms 但有 1 次回退。完整三路矩阵和适用限制见 [../docs/RAG_BENCHMARK.md](../docs/RAG_BENCHMARK.md)。
 
 ## 图片型 PDF 处理
 
@@ -277,7 +293,28 @@ POST /api/jobs/embed
 POST /api/jobs/knowledge-bases/:kbId/rollback
 ```
 
-Trace 和 Agent Run 只保存脱敏摘要、消息预览、hash、意图、skill、耗时、错误和 step 时间线，不保存完整密钥或完整模型输出。
+Trace 和 Agent Run 只保存脱敏摘要、消息预览、hash、意图、skill、耗时、错误和 step 时间线，不保存完整密钥、完整 prompt 或完整模型输出。
+
+每个新 Run 的 `summary.observability` 还会记录 LLM provider/model、输入/输出/缓存/总 token、调用时延、流式 TTFT、是否估算、工具成功率、检索证据命中、检索与 rerank 延迟和降级原因。`/traces` 展示近 24 小时聚合卡片和单 Run 明细；历史 Run 没有指标时显示“无数据”，不伪造为 0。
+
+成本必须通过带来源日期的环境快照配置，代码不内置长期价格：
+
+```env
+TRAINING_LLM_INPUT_COST_PER_MILLION=...
+TRAINING_LLM_OUTPUT_COST_PER_MILLION=...
+TRAINING_LLM_CACHED_INPUT_COST_PER_MILLION=...
+TRAINING_LLM_COST_CURRENCY=USD
+TRAINING_LLM_PRICE_SOURCE_DATE=YYYY-MM-DD
+TRAINING_LLM_PRICE_SOURCE=provider-pricing-page
+```
+
+可选 OpenTelemetry 默认关闭。开启后输出 `agent.run`、`agent.tool`、`rag.retrieve`、`rag.rerank` 和 `llm.chat` spans；collector 不可用不会影响本地 Run 指标：
+
+```env
+TRAINING_OTEL_ENABLED=0
+TRAINING_OTEL_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces
+TRAINING_OTEL_SERVICE_NAME=juzhou-agent-training-service
+```
 
 ## 备份与恢复
 
@@ -306,6 +343,8 @@ GET  /api/auth/status
 GET  /api/health
 ```
 
+`/api/health` 保留原字段并新增只读的 `reranker` / `rerankerOk` 与 `openTelemetry` 状态；URL 中的凭据和 Bearer token 不会回显。
+
 除员工邀请能力接口外，`/api/*` 在启用 `TRAINING_ACCESS_KEY` 时都要求老板端认证。JSON 请求默认上限 1 MiB；非法 JSON/URI 返回 400，超限返回 413，缺失静态资源返回 404，只有无扩展名页面路由回退 `index.html`。未知 500 只向客户端返回通用错误，不暴露内部路径。WebSocket 要求浏览器同源、客户端掩码、合法 opcode，单条消息上限 1 MiB。
 
 老板端 Agent：
@@ -320,7 +359,10 @@ GET  /api/agent-runs
 GET  /api/agent-runs/:runId
 GET  /api/traces
 GET  /api/traces/:traceId
+GET  /api/observability/summary?hours=24&skill=
 ```
+
+`/api/observability/summary` 需要老板端认证。返回的“证据命中率”是线上检索调用是否返回至少一条可用证据，不等于离线带 ground truth 的 Hit@K。
 
 老板端聊天历史：
 
@@ -399,6 +441,8 @@ TRAINING_LLM_MODEL=deepseek-chat
 
 2 核 4GB 服务器不建议长期运行完整聊天大模型。若要启用语义检索，可以只安装 Ollama 和 `bge-m3` 做 query embedding，资料向量索引用本地生成后同步的 `vector-index-bge-m3.json`。
 
+GPU reranker 可以部署为独立服务并由主服务通过内网 HTTP 调用。仓库中的 `ops/reranker-service` 提供 Windows 安装、计划任务、输入上限、日志轮转和验证脚本；token 只进入未跟踪的远程配置文件。`192.168.9.105` 是专用 reranker/benchmark 主机，不是培训生产服务器。
+
 Windows Server 长期运行建议保留计划任务，但要去掉默认运行时长限制：
 
 ```powershell
@@ -438,6 +482,12 @@ Get-Content .\logs\backup.log -Tail 80
 npm run check
 npm run smoke
 npm run eval:rag -- --retrieval-only
+npm run eval:reranker
+npm run eval:observability
+npm run eval:tool-observability
+npm run eval:answer-evidence-gate
+npm run eval:bm25-cache
+npm run eval:rag-scale-benchmark
 npm run eval:intent
 npm run eval:memory
 npm run eval:agent-trajectory
@@ -456,10 +506,11 @@ npm run eval:marketing-length
 npm run eval:boss-chat
 npm run eval:translation
 npm run eval:kb-versions
+npm run benchmark:rag-scale -- --sizes=100,1000,5000 --queries=100 --concurrency=1,5,10,20
 git diff --check
 ```
 
-RAG 评测用例在 `scripts/fixtures/rag-eval-cases.mjs`，当前共 30 条。Ollama 关闭时 `eval:rag -- --retrieval-only` 验证的是 BM25 环境降级；hybrid 质量回归必须在 `retrievalMode=hybrid` 时验收 Top1/Top3 和“不低于 BM25”的门槛。备份评测覆盖 SQLite 快照、JSONL/向量索引打包、校验、强制恢复和保留策略清理。
+RAG 评测用例按领域拆分到 `scripts/fixtures/rag-eval-*-cases.mjs`，共 150 条：120 条开发/回归集、30 条冻结测试集，覆盖 60 条型号/参数、30 条语义改写/原理、20 条多语言、20 条跨知识库 hard negative 和 20 条无答案/拒答。60 条答案质量子集覆盖 45 条可回答和 15 条拒答，检查事实覆盖、禁止事实、数字/型号一致性、引用合法性、引用召回和明确拒答；2026-07-10 最终真实 DeepSeek 回归结果为忠实 42/45（93.33%）、引用 precision/recall=100%/100%、拒答 15/15，3 条失败均为期望事实覆盖不足，没有错误引用、禁止事实或网络失败混入通过结果。Agent trajectory fixture 共 30 条。Ollama 关闭时 `eval:rag -- --retrieval-only` 验证的是 BM25 环境降级；hybrid 与 hybrid+reranker 质量回归必须在对应运行状态下验收 Hit@1/3/5、MRR@5、nDCG@5、拒答、分层统计和降级行为。`eval:answer-evidence-gate` 防止拒答后绕过门禁回填，`eval:bm25-cache` 覆盖 JSON/SQLite 跨 load、同对象属性修改和 LRU，`eval:rag-scale-benchmark` 检查 requested/effective mode、降级硬门槛与原子 checkpoint；`eval:reranker` 覆盖正常、401、5xx、超时、超限与断连回退，`eval:observability` / `eval:tool-observability` 覆盖 token/cost/TTFT、工具业务失败、检索聚合及 OpenTelemetry no-op/脱敏。
 翻译评测会创建临时 `TRAINING_DATA_DIR`，设置 `TRAINING_AUTH_DISABLED=1`，并启动本地 OpenAI-compatible mock 服务覆盖中英日西法、默认目标语言、缺正文追问、上一条老板端正文上下文、正文在前且翻译指令在末尾、长文本不静默截断、LLM API 缺失错误、`翻译成英文：这是一台水泵` 和 boss-chat 写入；同时断言“生成英文文章，同时附带中文翻译”不会被翻译 parser 抢走。
 联网搜索评测 `npm run eval:web-search` 使用 mock Tavily 和 mock OpenAI-compatible LLM，覆盖知识库答疑、营销软文、培训讲义、考试生成、翻译、普通聊天六条生成链路：`off` 不调用 Tavily，`on` 返回 `webSources/webSourceRefs`，缺 key、500、超时、空结果都不打断原生成链路，并检查 prompt 已区分本地资料/联网资料且不会执行网页指令。
 软文去重评测 `npm run eval:marketing-uniqueness` 使用 mock LLM 覆盖纯 JS 相似度算法、模板句命中、中英文混合文本、vendored avoid-ai-writing AI 写作痕迹检测、多篇文章生成、最近 3 天历史比对和自动重写闭环；当前夹具中英文 AI-heavy 样本 `aiWritingScore=78`，平实工业产品样本 `aiWritingScore=0`，首轮三篇高度相似稿会触发 1 次重写，最终同批相似度约 1.9%、历史最高相似度约 5%、AI 写作痕迹最高分 0。

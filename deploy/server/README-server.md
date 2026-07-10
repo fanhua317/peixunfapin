@@ -2,7 +2,7 @@
 
 本文是服务器部署速查。更完整的运行说明见 `training-service/README.md`。
 
-本文件中的命令只供明确授权的部署任务使用。本地代码修改、提交和推送不会自动连接、更新或重启服务器；服务器现状也不能从这份长期说明中推断，应查看带日期的审计证据。
+本文件中的命令只供明确授权的部署任务使用。本地代码修改、提交和推送不会自动连接、更新或重启服务器；服务器现状也不能从这份长期说明中推断，应查看带日期的审计证据。`192.168.9.105` 当前只用于经授权的专用 Reranker 和隔离 benchmark，不是培训生产服务器。
 
 ## Docker Compose
 
@@ -198,3 +198,48 @@ Recommended flow:
    ```
 
 If Ollama or the vector index is unavailable, retrieval falls back to BM25. Qdrant remains an optional high-resource deployment path; when used, back up its volume or collection snapshot together with the application data. For local-vector deployments, `qdrantOk=false` in `/api/health` is expected as long as `ollamaOk=true`, `localVectorIndexOk=true`, and `retrievalMode=hybrid`.
+
+## Optional GPU Reranker
+
+The training service can call a separately deployed `BAAI/bge-reranker-v2-m3` HTTP service. It reranks at most 20 parent candidates by default and blends `0.75 * rerankerNormalized + 0.25 * hybridNormalized`. A timeout, 401, 5xx, malformed response, or unavailable model preserves the original hybrid order instead of failing the user request.
+
+```env
+TRAINING_RERANKER_ENABLED=1
+TRAINING_RERANKER_URL=http://192.168.9.105:8910
+TRAINING_RERANKER_API_KEY=replace-with-separate-random-token
+TRAINING_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
+TRAINING_RERANKER_TIMEOUT_MS=15000
+TRAINING_RERANKER_CANDIDATES=20
+TRAINING_RERANKER_WEIGHT=0.75
+```
+
+Use the tracked [ops/reranker-service](../../ops/reranker-service/README.md) bundle on a Windows GPU host. Its installer creates an isolated venv and model directory, a cryptographically random token in an untracked environment file, the `JuzhouAgentReranker` startup task, a LAN-only firewall rule for port `8910`, and seven-day rotating logs. Never copy the generated token into Git, documentation, command history, benchmark artifacts, or application logs.
+
+The 2026-07-10 to 2026-07-11 benchmark on `192.168.9.105` is documented in [docs/RAG_BENCHMARK.md](../../docs/RAG_BENCHMARK.md). Its full-lifecycle capacity, including import, complete embedding, resource peaks, quality, errors, and mode degradation, is 100 files / concurrency 20. On the warmed query path only, 5000-file BM25 reached Hit@3=100% and p95=22 ms at concurrency 20; hybrid+reranker reached Hit@3=100% and p95=1668 ms without fallback at concurrency 5. Concurrency 10 reached p95=3271 ms but incurred one fallback, so it is not reported as pure reranker capacity. These are synthetic benchmark limits, not a claim about the existing training production server.
+
+After an authorized benchmark, remove the benchmark checkout, generated corpus, temporary SQLite/vector indexes, temporary Ollama/BGE-M3 model, installers, and package caches. Retain only the explicitly approved Reranker venv, model, task, private config, and rotating logs.
+
+## Observability and OpenTelemetry
+
+Local Agent Run metrics work without external infrastructure. `GET /api/observability/summary?hours=24&skill=` requires boss authentication and aggregates token usage, configured cost estimates, TTFT, tool success rate, online evidence hit rate, and retrieval/rerank latency. Online evidence hit rate is not offline ground-truth Hit@K.
+
+Provider prices are not hard-coded. Configure a dated price snapshot only when cost estimates are required:
+
+```env
+TRAINING_LLM_INPUT_COST_PER_MILLION=
+TRAINING_LLM_OUTPUT_COST_PER_MILLION=
+TRAINING_LLM_CACHED_INPUT_COST_PER_MILLION=
+TRAINING_LLM_COST_CURRENCY=USD
+TRAINING_LLM_PRICE_SOURCE_DATE=
+TRAINING_LLM_PRICE_SOURCE=
+```
+
+OpenTelemetry export is optional and disabled by default:
+
+```env
+TRAINING_OTEL_ENABLED=0
+TRAINING_OTEL_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces
+TRAINING_OTEL_SERVICE_NAME=juzhou-agent-training-service
+```
+
+When enabled, the service exports `agent.run`, `agent.tool`, `rag.retrieve`, `rag.rerank`, and `llm.chat` spans through OTLP HTTP. Local metrics remain available if no collector is configured.

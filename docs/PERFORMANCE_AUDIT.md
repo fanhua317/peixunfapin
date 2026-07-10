@@ -1,8 +1,32 @@
 # 钜洲培训 Agent 性能与排障审计报告
 
-更新时间：2026-07-10
+更新时间：2026-07-11
 
-> 服务器规模、性能和健康数据是 2026-06-30 的审计快照，不代表服务器实时状态。2026-07-10 只完成本地代码与隔离临时目录回归，没有连接、探测、更新或重启服务器。
+> 现有培训生产服务器的规模、性能和健康数据仍是 2026-06-30 审计快照，不代表实时状态。2026-07-10 经当次明确授权，只在专用 GPU 主机 `192.168.9.105` 部署 Reranker 并运行隔离 benchmark；没有连接、更新或重启培训生产服务器。仓库后续改动仍默认不部署任何服务器。
+
+## 2026-07-10 至 2026-07-11 专用 GPU RAG 规模基准
+
+| 项目 | 结果 |
+| --- | --- |
+| 主机 | Windows x64，24 逻辑处理器，31.77 GiB RAM，RTX 4080 16 GB |
+| 数据规模 | 精确导入 100 / 1000 / 5000 个 Markdown 文件 |
+| 切片规模 | 408 / 4113 / 20579 child chunks |
+| 导入耗时 | 1.468 s / 2.320 s / 8.808 s |
+| 全量 BGE-M3 embedding | 14.379 s / 110.307 s / 536.692 s |
+| SQLite | 2.38 MiB / 31.49 MiB / 154.84 MiB |
+| JSON 向量索引 | 5.12 MiB / 51.58 MiB / 258.12 MiB |
+| 检索矩阵 | BM25、hybrid、hybrid+reranker × 并发 1/5/10/20 × 每格 100 查询 |
+| 请求结果 | 最终 3600 次检索请求 0 错误；5000 文件重排发生 5 次可识别回退 |
+| 统一严格容量 | 100 文件 / 并发 20 |
+| 预热查询层：hybrid+reranker | 5000 文件 / 并发 5：Hit@3=100%，p95=1668 ms，0 回退 |
+| 预热查询层：BM25 | 5000 文件 / 并发 20：Hit@3=100%，p95=22 ms，0 回退 |
+| 严格失败原因 | 1000/5000 文件 plain hybrid Hit@3=92%/91%；内存峰值 85.56%/98.04%；5000 文件另有 5 次重排回退 |
+
+统一容量门槛要求 0 错误、请求模式不降级、Hit@3≥95%、单并发 p95≤2 秒、并发 10 p95≤5 秒、内存<80%、显存<95%、剩余磁盘>20 GB，并要求三种检索模式同时通过。5000 文件 hybrid+reranker 在并发 10 的 p95=3271 ms，但发生 1 次回退；并发 20 的 p95=6492 ms 且发生 4 次回退。因此不把它写成纯重排容量，查询层无降级建议停在并发 5。完整 36 格矩阵、缓存优化对照、失败 case ID 和限制见 [RAG_BENCHMARK.md](RAG_BENCHMARK.md)，最终 v2 原始 JSON 位于 `docs/artifacts/rag-scale-20260710-final.json`。
+
+第一次远程执行暴露 BM25 重复构建语料统计的热路径：旧 v1 证据中 1000 文件并发 20 的 p95 为 9925 ms、RPS 为 2.02；按知识库 `chunksRevision` 缓存并以实际保留的词项槽位控制 LRU 后，最终 v2 完整复跑为 p95=8 ms、RPS=2941.18，Hit@K 不变。100 文件并发 20 同样从旧 v1 的 994 ms / 20.23 RPS 改善到最终 v2 的 5 ms / 4545.45 RPS。旧 v1 artifact 仅用于这个历史前后对照，不作为最终容量证据。
+
+专用主机只长期保留 `BAAI/bge-reranker-v2-m3` 服务、venv、计划任务、私密配置和 7 天轮转日志；benchmark 项目副本、合成语料、临时数据库/索引、Ollama/BGE-M3 临时模型和缓存均已回收，清理前后磁盘可用空间增加 5,118,050,304 bytes（约 4.77 GiB）。
 
 ## 2026-07-10 本地一致性与安全回归
 
@@ -26,7 +50,7 @@
 | 隔离副本写压测 | 已采集：`training-service\server-audit-output\perf-write-20260624-234948.json` |
 | 业务闭环 | 已采集：`training-service\server-audit-output\business-flow-20260624-235206.json` |
 | 导入与 embedding | 已采集：`training-service\server-audit-output\import-embed-final-20260624-235944.json` |
-| 生产 RAG 健康状态 | 已验证：/api/health retrievalMode=hybrid，ollamaOk=true，localVectorIndexOk=true |
+| 2026-06-30 生产 RAG 健康快照 | /api/health retrievalMode=hybrid，ollamaOk=true，localVectorIndexOk=true；不代表实时状态 |
 | 备份恢复 | 已采集：`training-service\server-audit-output\backup-restore-20260624-235259.json` |
 | Tavily 联网专项 | 已采集：`training-service\server-audit-output\web-search-20260630-190622.json`；2026-07-10 代码仍保留六链路 mock 回归 |
 | 软文去重与 AI 写作痕迹专项 | 本地 mock 回归通过，最近 3 天历史窗口，AI-heavy 样本 78 分，3 篇高重复稿触发 1 次重写 |
@@ -208,3 +232,4 @@
 - 软文去重与 AI 写作痕迹专项已完成本地 mock 回归：最近 3 天历史窗口、AI-heavy 样本 78 分、平实工业样本 0 分、3 篇高重复稿 1 次自动重写，最终同批最高相似约 1.9%、历史最高相似约 5.0%、AI 写作痕迹最高分 0。
 - 备份、校验、dry-run restore、throwaway 强制恢复均成功。
 - 2026-06-30 生产健康快照显示 retrievalMode=hybrid、ollamaOk=true、localVectorIndexOk=true；历史导入/embedding 单项失败保留为复测风险，不能据此推断当前实时状态。
+- 2026-07-10 至 2026-07-11 专用 GPU 规模基准证明 5000 文件可完成全量导入、20579 个 child embedding 和三路检索；全生命周期严格容量仍如实记为 100 文件/并发 20。5 次预热后的 5000 文件查询层中，hybrid+reranker 无降级建议为并发 5，BM25 实测到并发 20；更高重排并发的 fallback 作为失败证据保留。
