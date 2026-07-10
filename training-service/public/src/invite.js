@@ -247,6 +247,11 @@ async function submitQuiz() {
   document.querySelectorAll("#quizForm input").forEach((input) => {
     input.disabled = true;
   });
+  const submitButton = document.querySelector("#quizForm button[type='submit']");
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent = "已提交";
+  }
   const details = result.attempt.answers.map((entry, index) => `<div class="review-row ${entry.correct ? "correct" : "wrong"}">
     <div><strong>${index + 1}. ${entry.correct ? "正确" : "错误"}</strong><p>${escapeHtml(entry.prompt)}</p></div>
     <div class="review-answer">

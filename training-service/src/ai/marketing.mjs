@@ -400,7 +400,7 @@ function mergeArticleUniqueness(articles, uniqueness) {
   }));
 }
 
-function buildFinalResult({ articles, knowledgeBase, chunks, webSearch, webFields, warnings, modelResult, uniqueness, rewriteAttempts, retrievalMode, generatedAt }) {
+function buildFinalResult({ articles, knowledgeBase, chunks, webFields, warnings, modelResult, uniqueness, rewriteAttempts, retrievalMode, generatedAt }) {
   const enrichedArticles = mergeArticleUniqueness(articles, uniqueness);
   const unionSourceRefs = uniqueStrings(enrichedArticles.flatMap((article) => article.sourceRefs || []));
   const unionWebSourceRefs = uniqueStrings(enrichedArticles.flatMap((article) => article.webSourceRefs || []));
@@ -558,7 +558,6 @@ export async function generateMarketingArticle(state, { instruction, memoryConte
       articles: best.articles,
       knowledgeBase,
       chunks,
-      webSearch,
       webFields,
       warnings,
       modelResult: best.modelResult,

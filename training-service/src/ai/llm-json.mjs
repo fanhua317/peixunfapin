@@ -11,6 +11,20 @@ export function extractJsonObject(text) {
   return JSON.parse(candidate);
 }
 
+export function llmResultMetadata(result, profile, overrides = {}) {
+  const finishReason = (overrides.finishReason ?? result.finishReason) || "";
+  return {
+    runId: overrides.runId ?? result.runId,
+    source: overrides.source ?? (result.source || "openclaw"),
+    thinking: overrides.thinking ?? (result.thinking || profile.thinking),
+    model: overrides.model ?? (result.model || profile.model),
+    finishReason,
+    truncated: overrides.truncated ?? (result.truncated === true || finishReason === "length"),
+    usage: overrides.usage ?? result.usage,
+    sessionPatch: overrides.sessionPatch ?? result.sessionPatch,
+  };
+}
+
 export async function askLlmJson({ purpose, prompt, profile }) {
   const result = await askLLM(prompt, {
     sessionKey: `${TRAINING_AI_SESSION_KEY}:${purpose}`,
@@ -22,14 +36,7 @@ export async function askLlmJson({ purpose, prompt, profile }) {
   return {
     data: extractJsonObject(result.answer),
     raw: result.answer,
-    runId: result.runId,
-    source: result.source || "openclaw",
-    thinking: result.thinking || profile.thinking,
-    model: result.model || profile.model,
-    finishReason: result.finishReason || "",
-    truncated: result.truncated === true || result.finishReason === "length",
-    usage: result.usage,
-    sessionPatch: result.sessionPatch,
+    ...llmResultMetadata(result, profile),
   };
 }
 
@@ -45,14 +52,7 @@ export async function askLlmStructured({ purpose, prompt, profile, repairSchema 
     return {
       data: extractJsonObject(result.answer),
       raw: result.answer,
-      runId: result.runId,
-      source: result.source || "openclaw",
-      thinking: result.thinking || profile.thinking,
-      model: result.model || profile.model,
-      finishReason: result.finishReason || "",
-      truncated: result.truncated === true || result.finishReason === "length",
-      usage: result.usage,
-      sessionPatch: result.sessionPatch,
+      ...llmResultMetadata(result, profile),
       format: "json",
     };
   } catch (error) {
@@ -68,14 +68,11 @@ export async function askLlmStructured({ purpose, prompt, profile, repairSchema 
         return {
           data: extractJsonObject(repair.answer),
           raw: repair.answer,
-          runId: repair.runId,
-          source: repair.source || "openclaw",
-          thinking: repair.thinking || repairProfile.thinking,
-          model: repair.model || repairProfile.model,
-          finishReason: repair.finishReason || result.finishReason || "",
-          truncated: repair.truncated === true || repair.finishReason === "length" || result.truncated === true || result.finishReason === "length",
-          usage: repair.usage || result.usage,
-          sessionPatch: repair.sessionPatch,
+          ...llmResultMetadata(repair, repairProfile, {
+            finishReason: repair.finishReason || result.finishReason || "",
+            truncated: repair.truncated === true || repair.finishReason === "length" || result.truncated === true || result.finishReason === "length",
+            usage: repair.usage || result.usage,
+          }),
           format: "json",
           repaired: true,
         };
@@ -85,14 +82,7 @@ export async function askLlmStructured({ purpose, prompt, profile, repairSchema 
     return {
       data: null,
       raw: result.answer,
-      runId: result.runId,
-      source: result.source || "openclaw",
-      thinking: result.thinking || profile.thinking,
-      model: result.model || profile.model,
-      finishReason: result.finishReason || "",
-      truncated: result.truncated === true || result.finishReason === "length",
-      usage: result.usage,
-      sessionPatch: result.sessionPatch,
+      ...llmResultMetadata(result, profile),
       format: "text",
       error: error instanceof Error ? error.message : String(error),
     };

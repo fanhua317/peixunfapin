@@ -16,8 +16,6 @@ import {
   cleanReadableText,
   cleanTrainingText,
   modelRequiredError,
-  splitTrainingSentences,
-  stripCodeFence,
   uniqueStrings,
 } from "./text-utils.mjs";
 import {
@@ -65,25 +63,6 @@ function withAnswerMetadata(payload, chunks, extra = {}) {
       generatedBy: payload.generatedBy || extra.generatedBy || "",
     }),
     warnings,
-  };
-}
-
-function answerFromOpenClawText(raw, chunks, result) {
-  const answer = cleanAnswerText(stripCodeFence(raw));
-  if (!answer) throw modelRequiredError("资料答疑", "大模型没有返回可显示内容");
-  return {
-    answer,
-    keyPoints: splitTrainingSentences(answer, 6),
-    caveats: [],
-    sources: sourceObjects(chunks),
-    sourceRefs: uniqueStrings(chunks.map((chunk) => chunk.sourceRef)).slice(0, 8),
-    confidence: "medium",
-    generatedBy: "openclaw-text",
-    thinking: result.thinking || AI_PROFILE.answer.thinking,
-    model: result.model || AI_PROFILE.answer.model,
-    sessionPatch: result.sessionPatch,
-    runId: result.runId,
-    parseWarning: result.error,
   };
 }
 

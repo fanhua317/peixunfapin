@@ -100,7 +100,6 @@ async function main() {
     const scrollFilter = filterKb
       ? { must: [{ key: "knowledgeBaseId", match: { value: filterKb } }] }
       : undefined;
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       const page = await qdrant.scrollPoints({ collection: collectionName, limit: 256, filter: scrollFilter, offset });
       const points = page?.result?.points || [];

@@ -331,7 +331,7 @@ async function semanticSearch(state, { knowledgeBaseId, query, limit }) {
   let vector;
   try {
     vector = await embedding.embedOne(trimmed);
-  } catch (error) {
+  } catch {
     markSemanticFailure();
     return [];
   }
@@ -365,7 +365,7 @@ async function semanticSearch(state, { knowledgeBaseId, query, limit }) {
       limit: Math.max(limit, 5),
       filter: buildKbFilter(knowledgeBaseId),
     });
-  } catch (error) {
+  } catch {
     markSemanticFailure();
     return [];
   }

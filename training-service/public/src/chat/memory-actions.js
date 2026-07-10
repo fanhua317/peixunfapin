@@ -4,7 +4,6 @@ import { escapeHtml } from "../ui.js";
 import { agentBody } from "./session.js";
 import {
   renderMemoryConfirmResult,
-  renderMemoryListResult,
   renderMemorySavedResult,
 } from "./renderers.js";
 

@@ -17,8 +17,8 @@ import path from "node:path";
 import packageInfo from "../package.json" with { type: "json" };
 import { knowledgeBaseVersionsPath } from "./knowledge-base-versions.mjs";
 import { agentRunsPath } from "./agent-runs/store.mjs";
-import { conversationHistoryPath, loadMemoryStore, memoryPath } from "./memory/store.mjs";
-import { dataDir, loadState, statePath } from "./store.mjs";
+import { conversationHistoryPath, loadMemoryStore } from "./memory/store.mjs";
+import { dataDir, loadState } from "./store.mjs";
 import { closeTrainingDatabase, openTrainingDatabase, sqlitePathFor, SQLITE_SCHEMA_VERSION } from "./sqlite-store.mjs";
 
 export const BACKUP_MANIFEST_VERSION = 1;

@@ -16,8 +16,11 @@
     "restore:data": "node scripts/restore-data.mjs",
     "backup:verify": "node scripts/backup-verify.mjs",
     "eval:sqlite": "node scripts/eval-sqlite.mjs",
+    "eval:concurrency": "node scripts/eval-concurrency.mjs",
+    "eval:http-security": "node scripts/eval-http-security.mjs",
     "eval:backup": "node scripts/eval-backup.mjs",
     "eval:import": "node scripts/eval-import.mjs",
+    "eval:import-lifecycle": "node scripts/eval-import-lifecycle.mjs",
     "eval:kb-versions": "node scripts/eval-kb-versions.mjs",
     "eval:jobs": "node scripts/eval-jobs.mjs",
     "eval:streaming": "node scripts/eval-streaming.mjs",
@@ -39,16 +42,22 @@
     "server-audit:report": "node scripts/server-audit-report.mjs",
     "qdrant:snapshot": "node scripts/qdrant-snapshot.mjs",
     "render:pdf": "node scripts/render-pdf-pages.mjs",
-    "check": "node scripts/check-syntax.mjs",
+    "check:syntax": "node scripts/check-syntax.mjs",
+    "lint": "eslint src public scripts",
+    "check:plugin": "node scripts/check-plugin-contract.mjs",
+    "check": "npm run check:syntax && npm run lint && npm run check:plugin",
     "smoke": "node scripts/smoke-test.mjs"
   },
   "dependencies": {
     "@napi-rs/canvas": "0.1.100",
-    "better-sqlite3": "^12.10.0",
+    "better-sqlite3": "12.11.1",
     "fflate": "^0.8.3",
     "pdfjs-dist": "5.7.284"
   },
   "engines": {
     "node": ">=22.14.0"
+  },
+  "devDependencies": {
+    "eslint": "^10.6.0"
   }
 }

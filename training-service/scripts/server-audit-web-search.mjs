@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, readdir, rm, stat, writeFile, copyFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, copyFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
