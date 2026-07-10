@@ -14,6 +14,51 @@ function statusBadge(status, error) {
   return `<span class="badge ${klass}">${escapeHtml(error ? "error" : status || "-")}</span>`;
 }
 
+function metric(value, suffix = "") {
+  if (value === null || value === undefined) return "无数据";
+  return `${Number(value).toLocaleString()}${suffix}`;
+}
+
+function rate(value) {
+  if (value === null || value === undefined) return "无数据";
+  return `${(Number(value) * 100).toFixed(1)}%`;
+}
+
+function aggregateCost(llm = {}) {
+  const entries = Object.entries(llm.costByCurrency || {});
+  if (!Number(llm.calls || 0)) return "无数据";
+  if (!entries.length) return "未配置价格";
+  return entries.map(([currency, amount]) => `${currency} ${Number(amount).toFixed(6)}`).join(" / ");
+}
+
+function runCost(llm = {}) {
+  if (!Number(llm.calls || 0)) return "无数据";
+  if (!llm.cost?.configured || llm.cost.amount === null || llm.cost.amount === undefined) return "未配置价格";
+  return `${llm.cost.currency || "USD"} ${Number(llm.cost.amount).toFixed(6)}`;
+}
+
+function renderObservabilityCards(summary = {}) {
+  const observed = Number(summary.runs?.observed || 0);
+  const llm = summary.llm || {};
+  const tools = summary.tools || {};
+  const retrieval = summary.retrieval || {};
+  return `<section class="import-panel full">
+    <div class="task-section-title">24 小时可观测性${summary.skill ? ` · ${escapeHtml(summary.skill)}` : ""}</div>
+    ${observed ? "" : `<div class="warning-box"><div>所选时间窗内没有带可观测指标的新 Run；历史 Run 不会显示为 0。</div></div>`}
+    <div class="info-grid">
+      <div><span>已观测 Run</span><strong>${observed ? escapeHtml(observed) : "无数据"}</strong></div>
+      <div><span>LLM Token</span><strong>${Number(llm.calls || 0) ? escapeHtml(metric(llm.totalTokens)) : "无数据"}</strong></div>
+      <div><span>估算成本</span><strong>${escapeHtml(aggregateCost(llm))}</strong></div>
+      <div><span>流式 TTFT p95</span><strong>${escapeHtml(metric(llm.ttftMs?.p95, " ms"))}</strong></div>
+      <div><span>工具成功率</span><strong>${escapeHtml(rate(tools.successRate))}</strong></div>
+      <div><span>在线证据命中率</span><strong>${escapeHtml(rate(retrieval.evidenceHitRate))}</strong></div>
+      <div><span>检索 p95</span><strong>${escapeHtml(metric(retrieval.latencyMs?.p95, " ms"))}</strong></div>
+      <div><span>Reranker p95</span><strong>${escapeHtml(metric(retrieval.rerankerLatencyMs?.p95, " ms"))}</strong></div>
+    </div>
+    <p class="muted">在线证据命中率表示检索是否返回至少一条可用证据，不等同于离线 ground-truth Hit@K。</p>
+  </section>`;
+}
+
 function renderRunRow(run) {
   return `<article class="trace-row ${run.error ? "has-error" : ""}" data-run-id="${escapeHtml(run.id)}">
     <div class="trace-main">
@@ -130,6 +175,8 @@ export function renderShell(data, filters) {
         </div>
       </section>
 
+      ${renderObservabilityCards(data.observability || {})}
+
       <section class="import-panel full">
         <h2>Agent Run</h2>
         <div class="trace-list">${runs.length ? runs.map(renderRunRow).join("") : `<p class="muted">暂无运行记录。</p>`}</div>
@@ -155,6 +202,10 @@ export function renderShell(data, filters) {
 
 export function renderRunDetail(run) {
   const steps = run.steps || [];
+  const observability = run.summary?.observability || null;
+  const llm = observability?.llm || {};
+  const tools = observability?.tools || {};
+  const retrieval = observability?.retrieval || {};
   return `<div class="result-card">
     <h2>Run 详情</h2>
     <div class="info-grid">
@@ -169,6 +220,18 @@ export function renderRunDetail(run) {
       messageHash: run.messageHash,
       messageLength: run.messageLength,
     }, null, 2))}</pre>
+    <div class="task-section-title">可观测指标</div>
+    ${observability ? `<div class="info-grid">
+      <div><span>LLM 调用 / Token</span><strong>${escapeHtml(llm.calls || 0)} / ${escapeHtml(metric(llm.totalTokens))}</strong></div>
+      <div><span>实际 / 估算调用</span><strong>${escapeHtml(Math.max(0, Number(llm.calls || 0) - Number(llm.estimatedCalls || 0)))} / ${escapeHtml(llm.estimatedCalls || 0)}</strong></div>
+      <div><span>估算成本</span><strong>${escapeHtml(runCost(llm))}</strong></div>
+      <div><span>流式 TTFT</span><strong>${escapeHtml(metric(llm.ttftMs?.p95, " ms"))}</strong></div>
+      <div><span>工具成功率</span><strong>${escapeHtml(rate(tools.successRate))}</strong></div>
+      <div><span>在线证据命中率</span><strong>${escapeHtml(rate(retrieval.evidenceHitRate))}</strong></div>
+      <div><span>检索延迟</span><strong>${escapeHtml(metric(retrieval.latencyMs?.p95, " ms"))}</strong></div>
+      <div><span>Reranker 延迟</span><strong>${escapeHtml(metric(retrieval.rerankerLatencyMs?.p95, " ms"))}</strong></div>
+    </div>
+    <pre class="command-box">${escapeHtml(JSON.stringify(observability, null, 2))}</pre>` : `<div class="warning-box"><div>该历史 Run 没有可观测指标。</div></div>`}
     <div class="task-section-title">步骤时间线</div>
     <div class="trace-list">
       ${steps.map((step, index) => `<article class="trace-row ${step.status === "failed" ? "has-error" : ""}">

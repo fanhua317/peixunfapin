@@ -1,5 +1,6 @@
 import { appendAgentTrace } from "../agent-trace.mjs";
 import { failRun, finishRun, recordRunStep } from "../agent-runs/store.mjs";
+import { finalizeCurrentObservability } from "../observability/context.mjs";
 
 export async function finalizeAgentRun({
   run,
@@ -22,8 +23,18 @@ export async function finalizeAgentRun({
       statusCode: result?.error ? 503 : 200,
     }));
   }
+  const runStatus = error || payloadError ? "failed" : "succeeded";
+  const observability = finalizeCurrentObservability({
+    status: runStatus,
+    skill: decision?.skill || decision?.intent || confirmedSkill,
+    action: payload?.action || (runStatus === "failed" ? "error" : ""),
+  });
   if (error || payloadError) {
-    await failRun(run.id, error || payloadError, { decision, latencyMs });
+    await failRun(run.id, error || payloadError, {
+      decision,
+      latencyMs,
+      summary: observability ? { observability } : {},
+    });
   } else {
     await finishRun(run.id, {
       decision,
@@ -33,6 +44,7 @@ export async function finalizeAgentRun({
       latencyMs,
       summary: {
         reason: decision?.reason || "",
+        ...(observability ? { observability } : {}),
       },
     });
   }

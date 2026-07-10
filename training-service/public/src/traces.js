@@ -31,10 +31,13 @@ function queryString() {
 
 async function refreshTraces() {
   const qs = queryString();
-  const [runsData, tracesData, toolsData] = await Promise.all([
+  const observabilityParams = new URLSearchParams({ hours: "24" });
+  if (filters.skill) observabilityParams.set("skill", filters.skill);
+  const [runsData, tracesData, toolsData, observability] = await Promise.all([
     api(`/api/agent-runs?${qs}`),
     api(`/api/traces?${qs}`),
     api("/api/tools/registry"),
+    api(`/api/observability/summary?${observabilityParams}`),
   ]);
   setMessages(renderShell({
     runs: runsData.runs || [],
@@ -42,6 +45,7 @@ async function refreshTraces() {
     traceEnabled: tracesData.enabled,
     tracePath: tracesData.path,
     tools: toolsData.tools || [],
+    observability,
   }, filters));
   wireTracePage();
 }

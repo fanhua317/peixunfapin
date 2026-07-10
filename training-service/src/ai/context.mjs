@@ -11,15 +11,21 @@ import {
 } from "./config.mjs";
 import { cleanReadableText, uniqueStrings } from "./text-utils.mjs";
 
+const CONCRETE_MODEL_RE = /\b(?=[a-z0-9._+/#:-]*[a-z])(?=[a-z0-9._+/#:-]*\d)[a-z0-9][a-z0-9._+/#:-]{1,}\b/i;
+const SUBSTANTIVE_PRODUCT_RE = /(型号|系列|功率|参数|用途|适用|结构|标准|能效|工艺|离心泵|自吸|清水输送|增压|motor|pump|model|power|application)/i;
+
 function isLowValueContext(chunk) {
   const text = `${chunk?.heading || ""}\n${chunk?.sourceRef || ""}\n${chunk?.content || ""}`;
   const cleaned = cleanReadableText(text, 500);
+  const body = cleanReadableText(chunk?.content || "", 500);
   if (!cleaned || cleaned.length < 16) return true;
-  if (LOW_VALUE_CONTEXT_RE.test(cleaned) && !/(工艺|铸铝|检测|机座范围|功率范围|能效|附加损耗|客户|销售)/.test(cleaned)) return true;
+  const substantiveBody = body.length >= 24 && (CONCRETE_MODEL_RE.test(body) || SUBSTANTIVE_PRODUCT_RE.test(body));
+  if (LOW_VALUE_CONTEXT_RE.test(cleaned) && !/(工艺|铸铝|检测|机座范围|功率范围|能效|附加损耗|客户|销售)/.test(cleaned) && !substantiveBody) return true;
   return false;
 }
 
 export function retrievalModeFromChunks(chunks) {
+  if ((chunks || []).some((chunk) => String(chunk.retrieval || "").includes("reranker") && chunk.rerankerStatus === "ready")) return "hybrid+reranker";
   if ((chunks || []).some((chunk) => String(chunk.retrieval || "").includes("hybrid"))) return "hybrid";
   if ((chunks || []).some((chunk) => /(semantic|local-vector|vector)/.test(String(chunk.retrieval || "")))) return "hybrid";
   if ((chunks || []).some((chunk) => String(chunk.retrieval || "").includes("bm25"))) return "bm25";
@@ -143,6 +149,12 @@ export function sourceObjects(chunks) {
     bm25Score: chunk.bm25Score,
     keywordScore: chunk.keywordScore,
     semanticScore: chunk.semanticScore,
+    originalScore: chunk.originalScore,
+    rerankerScore: chunk.rerankerScore,
+    rerankerStatus: chunk.rerankerStatus,
+    rerankerModel: chunk.rerankerModel,
+    retrievalLatencyMs: chunk.retrievalLatencyMs,
+    rerankerLatencyMs: chunk.rerankerLatencyMs,
     matchedPreview: chunk.matchedPreview || "",
     contentPreview: cleanReadableText(chunk.content, 220),
   }));

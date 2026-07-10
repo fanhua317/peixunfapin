@@ -25,6 +25,7 @@ import {
   renderIntentMemoryHint,
 } from "../memory/index.mjs";
 import { applyMemoryAfterTurn, processMemoryInstruction } from "../memory/flow.mjs";
+import { withAgentRunObservability } from "../observability/context.mjs";
 import { loadState } from "../store.mjs";
 import {
   executeWebSkill,
@@ -169,6 +170,11 @@ async function handleStreamMessage(socket, raw, abortController) {
     confirmedSkill: body.confirmedSkill,
     confirmationTokenPresent: Boolean(body.confirmationToken),
   });
+  return await withAgentRunObservability({
+    runId: run.id,
+    transport: "ws",
+    route: "/api/agent/stream",
+  }, async () => {
   let confirmation = null;
   let decision = null;
   try {
@@ -300,6 +306,7 @@ async function handleStreamMessage(socket, raw, abortController) {
     await traceAndFinish({ run, startedAt, body, decision, confirmation, error });
     throw error;
   }
+  });
 }
 
 export function handleAgentStreamUpgrade(req, socket, head, context = {}) {

@@ -21,6 +21,7 @@ import {
   renderIntentMemoryHint,
 } from "../../memory/index.mjs";
 import { applyMemoryAfterTurn, processMemoryInstruction } from "../../memory/flow.mjs";
+import { withAgentRunObservability } from "../../observability/context.mjs";
 import { loadState } from "../../store.mjs";
 import {
   executeWebSkill,
@@ -110,6 +111,12 @@ export async function handleAgent(req, res, url) {
       confirmedSkill,
       confirmationTokenPresent: Boolean(confirmationToken),
     });
+
+    return await withAgentRunObservability({
+      runId: run.id,
+      transport: "http",
+      route: "/api/agent/dispatch",
+    }, async () => {
 
     const confirmation = await recordRunStep(run.id, "confirmation_verify", confirmedSkill ? confirmedSkill : "none", async () => (
       validateConfirmedSkill({ confirmedSkill, confirmationToken, message })
@@ -207,6 +214,7 @@ export async function handleAgent(req, res, url) {
       throw error;
     }
     return true;
+    });
   }
 
   if (req.method === "POST" && url.pathname === "/api/chat") {
@@ -224,6 +232,11 @@ export async function handleAgent(req, res, url) {
       route: "/api/chat",
       message,
     });
+    return await withAgentRunObservability({
+      runId: run.id,
+      transport: "http",
+      route: "/api/chat",
+    }, async () => {
     const memoryContext = await recordRunStep(run.id, "memory_recall", "build_memory_context", async () => (
       await buildMemoryContext({ sessionId, message, memoryMode })
     ), memorySummary);
@@ -282,6 +295,7 @@ export async function handleAgent(req, res, url) {
       });
     }
     return true;
+    });
   }
 
   return false;

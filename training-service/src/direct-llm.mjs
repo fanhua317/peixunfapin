@@ -1,3 +1,6 @@
+import { recordLlmObservation } from "./observability/context.mjs";
+import { finishTelemetrySpan, startTelemetrySpan, withTelemetrySpan } from "./observability/telemetry.mjs";
+
 const DEFAULT_TIMEOUT_MS = Number(process.env.TRAINING_LLM_TIMEOUT_MS || process.env.OPENCLAW_CHAT_TIMEOUT_MS || 120_000);
 const DEFAULT_TEMPERATURE = Number(process.env.TRAINING_LLM_TEMPERATURE || 0.2);
 const DEFAULT_MAX_TOKENS = Number(process.env.TRAINING_LLM_MAX_TOKENS || 4096);
@@ -46,14 +49,52 @@ function streamEventsFromLine(line, meta = {}) {
   const choice = payload?.choices?.[0] || {};
   const delta = choice.delta?.content || choice.text || "";
   const finishReason = completionFinishReason(choice);
-  if (!delta && !finishReason) return [];
+  const usage = payload?.usage;
+  if (!delta && !finishReason && !usage) return [];
   return [{
     delta,
     finishReason,
+    ...(usage ? { usage } : {}),
     source: "llm-api",
     provider: "openai-compatible",
     ...meta,
   }];
+}
+
+function llmSpanAttributes(model) {
+  return {
+    "gen_ai.provider.name": "openai-compatible",
+    "gen_ai.request.model": model,
+  };
+}
+
+function recordDirectLlmCall({ model, usage, inputCharacters, outputCharacters, latencyMs, ttftMs = null, success }) {
+  return recordLlmObservation({
+    provider: "openai-compatible",
+    model,
+    usage,
+    inputCharacters,
+    outputCharacters,
+    latencyMs,
+    ttftMs,
+    success,
+  });
+}
+
+function llmMetricAttributes(call) {
+  if (!call) return {};
+  return {
+    "gen_ai.usage.input_tokens": call.inputTokens,
+    "gen_ai.usage.output_tokens": call.outputTokens,
+    "gen_ai.usage.cache_read.input_tokens": call.cachedInputTokens,
+    "llm.usage.total_tokens": call.totalTokens,
+    "llm.usage.estimated": call.estimated,
+    "llm.latency_ms": call.latencyMs,
+    "llm.ttft_ms": call.ttftMs ?? undefined,
+    "llm.cost.amount": call.cost.amount ?? undefined,
+    "llm.cost.currency": call.cost.currency,
+    "llm.success": call.success,
+  };
 }
 
 async function postChatCompletion(body, signal) {
@@ -133,34 +174,59 @@ export async function askOpenAiCompatibleLLM(message, options = {}) {
     stream: false,
   };
   if (DEFAULT_MAX_TOKENS > 0) body.max_tokens = DEFAULT_MAX_TOKENS;
+  const inputCharacters = messages.reduce((sum, item) => sum + String(item.content || "").length, 0);
+  const startedAt = Date.now();
 
-  try {
-    let payload;
+  return await withTelemetrySpan("llm.chat", llmSpanAttributes(model), async (span) => {
+    let outputCharacters = 0;
     try {
-      payload = await postChatCompletion(body, controller.signal);
-    } catch (error) {
-      if (body.temperature !== 1 && isTemperatureOneRequiredError(error.detail || error.message)) {
-        payload = await postChatCompletion({ ...body, temperature: 1 }, controller.signal);
-      } else {
-        throw error;
+      let payload;
+      try {
+        payload = await postChatCompletion(body, controller.signal);
+      } catch (error) {
+        if (body.temperature !== 1 && isTemperatureOneRequiredError(error.detail || error.message)) {
+          payload = await postChatCompletion({ ...body, temperature: 1 }, controller.signal);
+        } else {
+          throw error;
+        }
       }
+      const choice = payload?.choices?.[0] || {};
+      const finishReason = completionFinishReason(choice);
+      const answer = choice.message?.content || choice.text || "";
+      if (!answer) throw new Error("LLM API returned no assistant content");
+      outputCharacters = String(answer).length;
+      const call = recordDirectLlmCall({
+        model,
+        usage: payload?.usage,
+        inputCharacters,
+        outputCharacters,
+        latencyMs: Date.now() - startedAt,
+        success: true,
+      });
+      if (span && call) span.setAttributes(llmMetricAttributes(call));
+      return {
+        answer,
+        source: "llm-api",
+        provider: "openai-compatible",
+        model,
+        thinking: options.thinking || options.thinkingLevel,
+        usage: payload?.usage,
+        ...(finishReason ? { finishReason, truncated: finishReason === "length" } : {}),
+      };
+    } catch (error) {
+      const call = recordDirectLlmCall({
+        model,
+        inputCharacters,
+        outputCharacters,
+        latencyMs: Date.now() - startedAt,
+        success: false,
+      });
+      if (span && call) span.setAttributes(llmMetricAttributes(call));
+      throw error;
+    } finally {
+      clearTimeout(timeout);
     }
-    const choice = payload?.choices?.[0] || {};
-    const finishReason = completionFinishReason(choice);
-    const answer = choice.message?.content || choice.text || "";
-    if (!answer) throw new Error("LLM API returned no assistant content");
-    return {
-      answer,
-      source: "llm-api",
-      provider: "openai-compatible",
-      model,
-      thinking: options.thinking || options.thinkingLevel,
-      usage: payload?.usage,
-      ...(finishReason ? { finishReason, truncated: finishReason === "length" } : {}),
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
+  });
 }
 
 export async function* streamOpenAiCompatibleLLM(message, options = {}) {
@@ -187,6 +253,14 @@ export async function* streamOpenAiCompatibleLLM(message, options = {}) {
     stream: true,
   };
   if (DEFAULT_MAX_TOKENS > 0) body.max_tokens = DEFAULT_MAX_TOKENS;
+  const inputCharacters = messages.reduce((sum, item) => sum + String(item.content || "").length, 0);
+  const startedAt = Date.now();
+  const span = startTelemetrySpan("llm.chat", llmSpanAttributes(model));
+  let outputCharacters = 0;
+  let ttftMs = null;
+  let usage = null;
+  let streamError = null;
+  let completed = false;
 
   try {
     let stream;
@@ -201,7 +275,6 @@ export async function* streamOpenAiCompatibleLLM(message, options = {}) {
     }
     const decoder = new TextDecoder();
     let buffer = "";
-    let completed = false;
     let finishReason = "";
     const meta = {
       model,
@@ -213,6 +286,7 @@ export async function* streamOpenAiCompatibleLLM(message, options = {}) {
       buffer = lines.pop() || "";
       for (const line of lines) {
         for (const event of streamEventsFromLine(line, meta)) {
+          if (event.usage) usage = event.usage;
           if (event.type === "done") {
             completed = true;
             continue;
@@ -221,6 +295,10 @@ export async function* streamOpenAiCompatibleLLM(message, options = {}) {
             finishReason = event.finishReason;
             completed = true;
           }
+          if (event.delta) {
+            outputCharacters += String(event.delta).length;
+            if (ttftMs === null) ttftMs = Date.now() - startedAt;
+          }
           yield event;
         }
       }
@@ -228,6 +306,7 @@ export async function* streamOpenAiCompatibleLLM(message, options = {}) {
     buffer += decoder.decode();
     if (buffer.trim()) {
       for (const event of streamEventsFromLine(buffer, meta)) {
+        if (event.usage) usage = event.usage;
         if (event.type === "done") {
           completed = true;
           continue;
@@ -236,13 +315,30 @@ export async function* streamOpenAiCompatibleLLM(message, options = {}) {
           finishReason = event.finishReason;
           completed = true;
         }
+        if (event.delta) {
+          outputCharacters += String(event.delta).length;
+          if (ttftMs === null) ttftMs = Date.now() - startedAt;
+        }
         yield event;
       }
     }
     if (!completed && !finishReason) {
       throw new Error("LLM API stream ended before completion marker");
     }
+  } catch (error) {
+    streamError = error;
+    throw error;
   } finally {
+    const call = recordDirectLlmCall({
+      model,
+      usage,
+      inputCharacters,
+      outputCharacters,
+      latencyMs: Date.now() - startedAt,
+      ttftMs,
+      success: completed && !streamError,
+    });
+    finishTelemetrySpan(span, { attributes: llmMetricAttributes(call), error: streamError });
     clearTimeout(timeout);
     if (options.signal) options.signal.removeEventListener("abort", abortFromCaller);
   }

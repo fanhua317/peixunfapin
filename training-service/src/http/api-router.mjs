@@ -9,6 +9,7 @@ import { handleInvites } from "./controllers/invites-controller.mjs";
 import { handleJobs } from "./controllers/jobs-controller.mjs";
 import { handleKnowledge } from "./controllers/knowledge-controller.mjs";
 import { handleMemory } from "./controllers/memory-controller.mjs";
+import { handleObservability } from "./controllers/observability-controller.mjs";
 import { handleAnswer, handleQuiz } from "./controllers/quiz-controller.mjs";
 import { handleReports, handleTasks } from "./controllers/tasks-controller.mjs";
 import { handleTools } from "./controllers/tools-controller.mjs";
@@ -18,6 +19,7 @@ import { sendJson } from "./response.mjs";
 const authenticatedHandlers = [
   handleHealth,
   handleAgentRuns,
+  handleObservability,
   handleBossChat,
   handleTools,
   handleJobs,

@@ -4,12 +4,24 @@ import { appendFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { dataDir } from "../store.mjs";
 import { isSqliteStorage, openTrainingDatabase } from "../sqlite-store.mjs";
+import { recordToolObservation } from "../observability/context.mjs";
 import { ensureAgentRunTables } from "./schema.mjs";
 
 export const agentRunsPath = path.join(dataDir, "agent-runs.jsonl");
 
 const RUN_STATUSES = new Set(["running", "succeeded", "failed"]);
 const STEP_STATUSES = new Set(["running", "succeeded", "failed", "skipped"]);
+const TOOL_FAILURE_STATUSES = new Set([
+  "cancelled",
+  "canceled",
+  "denied",
+  "error",
+  "failed",
+  "failure",
+  "rejected",
+  "timeout",
+  "unavailable",
+]);
 
 function nowIso() {
   return new Date().toISOString();
@@ -32,6 +44,12 @@ function hash(value) {
   return crypto.createHash("sha256").update(String(value || ""), "utf8").digest("hex");
 }
 
+function isSensitiveKey(key) {
+  const name = String(key || "");
+  if (/^(?:input|output|cachedInput|total|prompt|completion|reasoning)Tokens$/i.test(name)) return false;
+  return /token|api[_-]?key|password|secret/i.test(name);
+}
+
 function sanitizeValue(value, depth = 0) {
   if (value === null || value === undefined) return value;
   if (typeof value === "string") return compact(value, depth ? 360 : 500);
@@ -40,7 +58,7 @@ function sanitizeValue(value, depth = 0) {
   if (typeof value === "object") {
     const output = {};
     for (const [key, item] of Object.entries(value).slice(0, 40)) {
-      if (/token|api[_-]?key|password|secret/i.test(key)) {
+      if (isSensitiveKey(key)) {
         output[key] = item ? "[redacted]" : item;
       } else {
         output[key] = sanitizeValue(item, depth + 1);
@@ -49,6 +67,39 @@ function sanitizeValue(value, depth = 0) {
     return output;
   }
   return compact(value);
+}
+
+function failureText(value, fallback) {
+  if (value instanceof Error) return value.message || fallback;
+  if (typeof value === "string") return value || fallback;
+  if (value && typeof value === "object" && value.message) return String(value.message);
+  return fallback;
+}
+
+function toolFailureFromPayload(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  if (payload.error) return failureText(payload.error, "tool returned an error payload");
+  if (payload.ok === false) return failureText(payload.message || payload.reason, "tool returned ok=false");
+  if (payload.success === false || payload.businessOk === false || payload.failed === true) {
+    return failureText(payload.message || payload.reason, "tool reported business failure");
+  }
+  const responseStatus = payload.response && typeof payload.response === "object" ? payload.response.status : undefined;
+  const statusCode = Number(payload.statusCode ?? payload.httpStatus ?? responseStatus ?? (typeof payload.status === "number" ? payload.status : NaN));
+  if (Number.isFinite(statusCode) && statusCode >= 400) {
+    return failureText(payload.message || payload.reason, `tool returned HTTP ${statusCode}`);
+  }
+  const status = typeof payload.status === "string" ? payload.status.trim().toLowerCase() : "";
+  if (TOOL_FAILURE_STATUSES.has(status)) {
+    return failureText(payload.message || payload.reason, `tool returned status=${status}`);
+  }
+  return "";
+}
+
+function toolExecutionFailure(result) {
+  const directFailure = toolFailureFromPayload(result);
+  if (directFailure) return directFailure;
+  if (result?.payload && result.payload !== result) return toolFailureFromPayload(result.payload);
+  return "";
 }
 
 function normalizeStatus(value, fallback = "running") {
@@ -249,10 +300,19 @@ export async function appendRunStep(runId, step = {}) {
   const value = normalizeStep({ ...step, runId });
   if (isSqliteStorage()) {
     saveSqliteStep(value);
-    return value;
+  } else {
+    run.steps.push(value);
+    await saveRun(run);
   }
-  run.steps.push(value);
-  await saveRun(run);
+  if (value.type === "tool_execute") {
+    recordToolObservation({
+      name: value.name,
+      success: value.status === "succeeded",
+      latencyMs: value.latencyMs,
+      startedAt: value.startedAt,
+      finishedAt: value.finishedAt,
+    });
+  }
   return value;
 }
 
@@ -304,12 +364,13 @@ function includesText(value, q) {
   return String(value || "").toLowerCase().includes(q);
 }
 
-function normalizeLimit(value) {
-  return Math.max(1, Math.min(Number(value) || 100, 500));
+function normalizeLimit(value, maxLimit = 500) {
+  return Math.max(1, Math.min(Number(value) || 100, maxLimit));
 }
 
 export async function listRuns(filters = {}) {
-  const limit = normalizeLimit(filters.limit);
+  const maxLimit = Math.max(1, Math.min(Number(filters.maxLimit) || 500, 5000));
+  const limit = normalizeLimit(filters.limit, maxLimit);
   const status = String(filters.status || "").trim();
   const skill = String(filters.skill || "").trim();
   const action = String(filters.action || "").trim();
@@ -345,14 +406,16 @@ export async function recordRunStep(runId, type, name, fn, summaryFn) {
   const startedMs = Date.now();
   try {
     const result = await fn();
+    const resultFailure = type === "tool_execute" ? toolExecutionFailure(result) : "";
     await appendRunStep(runId, {
       type,
       name,
-      status: "succeeded",
+      status: resultFailure ? "failed" : "succeeded",
       startedAt,
       finishedAt: nowIso(),
       latencyMs: Date.now() - startedMs,
       summary: typeof summaryFn === "function" ? summaryFn(result) : {},
+      error: resultFailure,
     });
     return result;
   } catch (error) {
