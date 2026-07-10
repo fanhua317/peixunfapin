@@ -1,12 +1,13 @@
 import { verifyIntentConfirmationToken } from "../../intent-confirmation.mjs";
 import { clearMemories, deleteMemory, listMemoryItems, updateMemory } from "../../memory/index.mjs";
-import { memoryClearConfirmPayload, memoryCandidateConfirmPayload, publicMemories } from "../../memory/flow.mjs";
+import { memoryClearConfirmPayload, publicMemories } from "../../memory/flow.mjs";
+import { decodePathSegment } from "../errors.mjs";
 import { readBody } from "../request.mjs";
 import { sendJson } from "../response.mjs";
 
 function memoryIdFromPath(pathname) {
   const match = pathname.match(/^\/api\/memory\/([^/]+)$/);
-  return match ? decodeURIComponent(match[1]) : "";
+  return match ? decodePathSegment(match[1]) : "";
 }
 
 function verifyConfirmMemory(id, token) {

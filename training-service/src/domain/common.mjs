@@ -1,3 +1,10 @@
+export function domainError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.expose = true;
+  return error;
+}
+
 export function includesAny(source, values) {
   const text = String(source || "").toLowerCase();
   return values.some((value) => value && text.includes(String(value).toLowerCase()));
@@ -74,7 +81,9 @@ export function isExpiredAt(value, now = new Date()) {
 }
 
 export function markInviteExpired(invite, now = new Date()) {
-  if (!invite || invite.status === "completed") return false;
+  if (!invite) return false;
+  if (invite.status === "expired") return true;
+  if (invite.status === "completed") return false;
   if (!isExpiredAt(invite.expiresAt, now)) return false;
   invite.status = "expired";
   return true;

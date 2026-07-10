@@ -1,7 +1,9 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { dataDir, makeId } from "../store.mjs";
 import { isSqliteStorage, openTrainingDatabase } from "../sqlite-store.mjs";
+import { createAsyncLock } from "../storage/async-lock.mjs";
+import { writeJsonAtomic } from "../storage/atomic-json.mjs";
 
 export const BOSS_ACCOUNT_ID = "boss-default";
 export const BOSS_CHAT_RETENTION_DAYS = 30;
@@ -12,6 +14,7 @@ const MAX_PAYLOAD_CHARS = 80000;
 const MAX_IMPORT_TRANSCRIPT_CHARS = 12000;
 
 const nowIso = () => new Date().toISOString();
+const runJsonMutation = createAsyncLock();
 
 function isValidIso(value) {
   return Number.isFinite(Date.parse(value || ""));
@@ -177,8 +180,17 @@ async function saveJsonStore(store) {
   await ensureDir();
   const value = pruneStore(repairStoreSessionTimes(store));
   value.meta.updatedAt = nowIso();
-  await writeFile(bossChatPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await writeJsonAtomic(bossChatPath, value);
   return value;
+}
+
+async function mutateJsonStore(mutator) {
+  return await runJsonMutation(async () => {
+    const store = await loadJsonStore();
+    const result = await mutator(store);
+    await saveJsonStore(store);
+    return result;
+  });
 }
 
 function db() {
@@ -346,11 +358,11 @@ export async function createBossChatSession({ id, title, preview, accountId = BO
     prepareSqliteSessions();
     return writeSqliteSession(session);
   }
-  const store = await loadJsonStore();
-  store.sessions = store.sessions.filter((item) => item.id !== session.id);
-  store.sessions.unshift(session);
-  await saveJsonStore(store);
-  return session;
+  return await mutateJsonStore((store) => {
+    store.sessions = store.sessions.filter((item) => item.id !== session.id);
+    store.sessions.unshift(session);
+    return session;
+  });
 }
 
 export async function listBossChatSessions({ accountId = BOSS_ACCOUNT_ID, limit = 80 } = {}) {
@@ -402,10 +414,20 @@ export async function updateBossChatSession(sessionId, patch = {}, { accountId =
   if (isSqliteStorage()) {
     return writeSqliteSession(updated);
   }
-  const store = await loadJsonStore();
-  store.sessions = store.sessions.map((session) => (session.id === updated.id ? updated : session));
-  await saveJsonStore(store);
-  return updated;
+  return await mutateJsonStore((store) => {
+    const current = store.sessions.find((session) => session.id === updated.id && session.accountId === accountId);
+    if (!current || current.status === "deleted") return null;
+    const next = normalizeSession({
+      ...current,
+      title: patch.title ?? current.title,
+      preview: patch.preview ?? current.preview,
+      status: patch.status ?? current.status,
+      updatedAt: nowIso(),
+      deletedAt: patch.status === "deleted" ? nowIso() : current.deletedAt,
+    });
+    store.sessions = store.sessions.map((session) => (session.id === next.id ? next : session));
+    return next;
+  });
 }
 
 export async function deleteBossChatSession(sessionId, { accountId = BOSS_ACCOUNT_ID } = {}) {
@@ -486,7 +508,10 @@ async function ensureSession(sessionId, options = {}) {
 
 export async function appendBossChatMessages(sessionId, messages = [], options = {}) {
   const accountId = options.accountId || BOSS_ACCOUNT_ID;
-  const session = await ensureSession(sessionId, { accountId, title: options.title });
+  const requestedSessionId = makeBossChatSessionId(sessionId);
+  const session = isSqliteStorage()
+    ? await ensureSession(requestedSessionId, { accountId, title: options.title })
+    : normalizeSession({ id: requestedSessionId, accountId, title: options.title || "新聊天" });
   const normalized = messages
     .map((message) => normalizeMessage({ ...message, sessionId: session.id, accountId }))
     .filter((message) => message.content || message.payload);
@@ -502,16 +527,16 @@ export async function appendBossChatMessages(sessionId, messages = [], options =
     return await getBossChatSession(session.id, { accountId });
   }
 
-  const store = await loadJsonStore();
-  const sessionIndex = store.sessions.findIndex((item) => item.id === session.id);
-  const baseSession = sessionIndex >= 0 ? store.sessions[sessionIndex] : session;
-  store.messages.push(...normalized);
-  const allMessages = store.messages.filter((message) => message.sessionId === session.id);
-  const updatedSession = sessionMetaFromMessages(baseSession, allMessages);
-  if (sessionIndex >= 0) store.sessions[sessionIndex] = updatedSession;
-  else store.sessions.unshift(updatedSession);
-  await saveJsonStore(store);
-  return { session: updatedSession, messages: allMessages };
+  return await mutateJsonStore((store) => {
+    const sessionIndex = store.sessions.findIndex((item) => item.id === session.id && item.accountId === accountId && item.status !== "deleted");
+    const baseSession = sessionIndex >= 0 ? store.sessions[sessionIndex] : session;
+    store.messages.push(...normalized);
+    const allMessages = store.messages.filter((message) => message.sessionId === session.id);
+    const updatedSession = sessionMetaFromMessages(baseSession, allMessages);
+    if (sessionIndex >= 0) store.sessions[sessionIndex] = updatedSession;
+    else store.sessions.unshift(updatedSession);
+    return { session: updatedSession, messages: allMessages };
+  });
 }
 
 export async function appendBossChatTurn({ sessionId, message, payload, runId, accountId = BOSS_ACCOUNT_ID } = {}) {

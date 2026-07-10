@@ -44,10 +44,112 @@ export async function importCleanDirectory({ inputDir, kbName, aliases = [] }) {
 
   const kbId = `kb-${slugKnowledgeBase(name)}`;
   const previousSnapshot = createKnowledgeBaseSnapshot(await loadState(), kbId);
-  const imported = await mutateState(async (state) => {
+  const now = isoNow();
+  const documents = [];
+  const chunkParents = [];
+  const preparedChunks = [];
+  let chunkCount = 0;
+  let parentCount = 0;
+  let tableRowParentCount = 0;
+  let maxChildChars = 0;
+
+  for (const file of files) {
+    const content = await readFile(file, "utf8");
+    const relative = path.relative(cleanDir, file);
+    const ext = path.extname(file).slice(1).toLowerCase();
+    const docId = makeId("doc");
+    const info = await stat(file);
+    documents.push({
+      id: docId,
+      knowledgeBaseId: kbId,
+      title: path.basename(file),
+      sourcePath: relative,
+      sourceType: ext,
+      status: "ready",
+      size: info.size,
+    });
+    const semantic = chunkSemanticDocument(content, { sourcePath: relative, title: path.basename(file), ext });
+    const parentIdByKey = new Map();
+    for (const parent of semantic.parents) {
+      const parentId = makeId("parent");
+      parentIdByKey.set(parent.localKey, parentId);
+      chunkParents.push({
+        id: parentId,
+        knowledgeBaseId: kbId,
+        documentId: docId,
+        content: parent.content,
+        sourceRef: parent.sourceRef,
+        contentHash: parent.contentHash,
+        sectionPath: parent.sectionPath,
+        heading: parent.heading,
+        page: parent.page || null,
+        sourcePath: parent.sourcePath,
+        parentType: parent.parentType,
+        businessKeys: parent.businessKeys || {},
+        tokenLength: parent.tokenLength,
+        metadata: { importedFrom: cleanDir, order: parent.order },
+      });
+      parentCount += 1;
+      if (parent.parentType === "table_row") tableRowParentCount += 1;
+    }
+    const chunks = semantic.chunks.length ? semantic.chunks : [{
+      content: content.slice(0, 900),
+      searchText: content.slice(0, 900),
+      sourceRef: relative,
+      sectionPath: [],
+      heading: "",
+      page: null,
+      sourcePath: relative,
+      parentKey: "",
+      parentId: null,
+      childType: "empty_fallback",
+      businessKeys: {},
+      contentHash: "empty-content",
+      tokenLength: Math.min(content.length, 900),
+      keywords: [],
+      order: 0,
+    }];
+    chunks.forEach((chunk, index) => {
+      preparedChunks.push({
+        id: makeId("chunk"),
+        knowledgeBaseId: kbId,
+        documentId: docId,
+        parentId: chunk.parentKey ? parentIdByKey.get(chunk.parentKey) || null : chunk.parentId || null,
+        content: chunk.content,
+        searchText: chunk.searchText || chunk.content,
+        sourceRef: chunk.sourceRef,
+        contentHash: chunk.contentHash,
+        sectionPath: chunk.sectionPath,
+        heading: chunk.heading,
+        page: chunk.page,
+        sourcePath: chunk.sourcePath,
+        childType: chunk.childType || "snippet",
+        businessKeys: chunk.businessKeys || {},
+        keywords: chunk.keywords,
+        tokenLength: chunk.tokenLength,
+        metadata: {
+          importedFrom: cleanDir,
+          index,
+          sectionPath: chunk.sectionPath,
+          page: chunk.page,
+          parentKey: chunk.parentKey || "",
+        },
+      });
+      maxChildChars = Math.max(maxChildChars, String(chunk.content || "").length);
+      chunkCount += 1;
+    });
+  }
+
+  const imported = await mutateState((state) => {
     state.chunkParents = Array.isArray(state.chunkParents) ? state.chunkParents : [];
+    const currentSnapshot = createKnowledgeBaseSnapshot(state, kbId);
+    if (JSON.stringify(currentSnapshot) !== JSON.stringify(previousSnapshot)) {
+      const error = new Error("知识库在导入准备期间已发生变化，请重试。");
+      error.statusCode = 409;
+      error.expose = true;
+      throw error;
+    }
     const existing = state.knowledgeBases.find((kb) => kb.id === kbId);
-    const now = isoNow();
     const nextAliases = [...new Set([name, path.basename(cleanDir), ...extraAliases].filter(Boolean))];
     if (existing) {
       existing.name = name;
@@ -72,103 +174,9 @@ export async function importCleanDirectory({ inputDir, kbName, aliases = [] }) {
     state.documents = state.documents.filter((doc) => doc.knowledgeBaseId !== kbId);
     state.chunks = state.chunks.filter((chunk) => chunk.knowledgeBaseId !== kbId);
     state.chunkParents = state.chunkParents.filter((parent) => parent.knowledgeBaseId !== kbId);
-
-    let chunkCount = 0;
-    let parentCount = 0;
-    let tableRowParentCount = 0;
-    let maxChildChars = 0;
-    for (const file of files) {
-      const content = await readFile(file, "utf8");
-      const relative = path.relative(cleanDir, file);
-      const ext = path.extname(file).slice(1).toLowerCase();
-      const docId = makeId("doc");
-      const info = await stat(file);
-      state.documents.push({
-        id: docId,
-        knowledgeBaseId: kbId,
-        title: path.basename(file),
-        sourcePath: relative,
-        sourceType: ext,
-        status: "ready",
-        size: info.size,
-      });
-      const semantic = chunkSemanticDocument(content, { sourcePath: relative, title: path.basename(file), ext });
-      const parentIdByKey = new Map();
-      for (const parent of semantic.parents) {
-        const parentId = makeId("parent");
-        parentIdByKey.set(parent.localKey, parentId);
-        state.chunkParents.push({
-          id: parentId,
-          knowledgeBaseId: kbId,
-          documentId: docId,
-          content: parent.content,
-          sourceRef: parent.sourceRef,
-          contentHash: parent.contentHash,
-          sectionPath: parent.sectionPath,
-          heading: parent.heading,
-          page: parent.page || null,
-          sourcePath: parent.sourcePath,
-          parentType: parent.parentType,
-          businessKeys: parent.businessKeys || {},
-          tokenLength: parent.tokenLength,
-          metadata: {
-            importedFrom: cleanDir,
-            order: parent.order,
-          },
-        });
-        parentCount += 1;
-        if (parent.parentType === "table_row") tableRowParentCount += 1;
-      }
-      const chunks = semantic.chunks;
-      if (!chunks.length) {
-        chunks.push({
-          content: content.slice(0, 900),
-          searchText: content.slice(0, 900),
-          sourceRef: relative,
-          sectionPath: [],
-          heading: "",
-          page: null,
-          sourcePath: relative,
-          parentKey: "",
-          parentId: null,
-          childType: "empty_fallback",
-          businessKeys: {},
-          contentHash: "empty-content",
-          tokenLength: Math.min(content.length, 900),
-          keywords: [],
-          order: 0,
-        });
-      }
-      chunks.forEach((chunk, index) => {
-        state.chunks.push({
-          id: makeId("chunk"),
-          knowledgeBaseId: kbId,
-          documentId: docId,
-          parentId: chunk.parentKey ? parentIdByKey.get(chunk.parentKey) || null : chunk.parentId || null,
-          content: chunk.content,
-          searchText: chunk.searchText || chunk.content,
-          sourceRef: chunk.sourceRef,
-          contentHash: chunk.contentHash,
-          sectionPath: chunk.sectionPath,
-          heading: chunk.heading,
-          page: chunk.page,
-          sourcePath: chunk.sourcePath,
-          childType: chunk.childType || "snippet",
-          businessKeys: chunk.businessKeys || {},
-          keywords: chunk.keywords,
-          tokenLength: chunk.tokenLength,
-          metadata: {
-            importedFrom: cleanDir,
-            index,
-            sectionPath: chunk.sectionPath,
-            page: chunk.page,
-            parentKey: chunk.parentKey || "",
-          },
-        });
-        maxChildChars = Math.max(maxChildChars, String(chunk.content || "").length);
-        chunkCount += 1;
-      });
-    }
+    state.documents.push(...documents);
+    state.chunks.push(...preparedChunks);
+    state.chunkParents.push(...chunkParents);
 
     return {
       kbId,

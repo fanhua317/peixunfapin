@@ -1,13 +1,8 @@
-import { mkdir, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import { restoreKnowledgeBaseVersion } from "../knowledge-base-versions.mjs";
-import { importPreparedDirectory, runExclusiveImport } from "../import/service.mjs";
+import { createImportStagingDir, importPreparedDirectory, removeImportStagingDir, runExclusiveImport } from "../import/service.mjs";
 import { buildLocalVectorIndex, localVectorBuildDefaults } from "../local-vector-build.mjs";
-import { dataDir } from "../store.mjs";
-
-function timestampId() {
-  return new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "").replace("T", "-");
-}
 
 function parseAliases(value) {
   if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
@@ -50,41 +45,46 @@ function importSummary(imported = {}) {
 async function runImportJob(job, context) {
   const input = job.input || {};
   const sourceDir = await assertDirectory(input.sourceDir || input.inputDir);
-  const stagingDir = input.stagingDir || path.join(dataDir, "imports", `${job.type}-${timestampId()}-${job.id}`);
-  await mkdir(stagingDir, { recursive: true });
-  throwIfCancelled(context.signal);
-  const result = await runExclusiveImport(job.type, async () => await importPreparedDirectory({
-    sourceDir,
-    kbName: input.kbName || path.basename(sourceDir),
-    aliases: parseAliases(input.aliases),
-    cleanMode: input.cleanMode || "auto",
-    stagingDir,
-    signal: context.signal,
-    onProgress: context.progress,
-  }));
-  const summary = importSummary(result.imported);
-  if (input.autoEmbed !== false && summary.kbId) {
-    const child = await context.enqueueChild({
-      type: "embed_local",
-      title: `重建向量索引：${summary.kbName || summary.kbId}`,
-      input: {
-        kbId: summary.kbId,
-        model: input.embeddingModel || "",
-        full: false,
-      },
-      inputSummary: {
-        kbId: summary.kbId,
-        kbName: summary.kbName,
-        model: input.embeddingModel || "默认模型",
-      },
-    });
-    result.embeddingJobId = child.id;
-    summary.embeddingJobId = child.id;
+  const stagingDir = input.stagingDir || await createImportStagingDir(job.type);
+  const stagingOwned = input.stagingOwned === true || !input.stagingDir;
+  try {
+    throwIfCancelled(context.signal);
+    const result = await runExclusiveImport(job.type, async () => await importPreparedDirectory({
+      sourceDir,
+      kbName: input.kbName || path.basename(sourceDir),
+      aliases: parseAliases(input.aliases),
+      cleanMode: input.cleanMode || "auto",
+      stagingDir,
+      signal: context.signal,
+      onProgress: context.progress,
+    }));
+    const summary = importSummary(result.imported);
+    if (input.autoEmbed !== false && summary.kbId) {
+      const child = await context.enqueueChild({
+        type: "embed_local",
+        title: `重建向量索引：${summary.kbName || summary.kbId}`,
+        input: {
+          kbId: summary.kbId,
+          model: input.embeddingModel || "",
+          full: false,
+        },
+        inputSummary: {
+          kbId: summary.kbId,
+          kbName: summary.kbName,
+          model: input.embeddingModel || "默认模型",
+        },
+      });
+      result.embeddingJobId = child.id;
+      summary.embeddingJobId = child.id;
+    }
+    return { result, resultSummary: summary };
+  } finally {
+    if (stagingOwned) await removeImportStagingDir(stagingDir);
   }
-  return { result, resultSummary: summary };
 }
 
 async function runRollbackKnowledgeBaseJob(job, context) {
+  return await runExclusiveImport(job.type, async () => {
   const input = job.input || {};
   const kbId = String(input.kbId || input.knowledgeBaseId || "").trim();
   const versionId = String(input.versionId || "").trim();
@@ -131,9 +131,11 @@ async function runRollbackKnowledgeBaseJob(job, context) {
     summary.embeddingJobId = child.id;
   }
   return { result, resultSummary: summary };
+  });
 }
 
 async function runEmbedLocalJob(job, context) {
+  return await runExclusiveImport(job.type, async () => {
   const input = job.input || {};
   const defaults = localVectorBuildDefaults({
     kbId: input.kbId || input.knowledgeBaseId || "",
@@ -158,6 +160,7 @@ async function runEmbedLocalJob(job, context) {
       outputPath: result.outputPath,
     },
   };
+  });
 }
 
 const handlers = {

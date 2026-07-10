@@ -1,16 +1,10 @@
-import path from "node:path";
-import { dataDir } from "../../store.mjs";
-import { importMaxUploadBytes, stageUploadedFiles } from "../../import/service.mjs";
+import { createImportStagingDir, importMaxUploadBytes, removeImportStagingDir, stageUploadedFiles } from "../../import/service.mjs";
 import { cancelJob, enqueueJob } from "../../jobs/scheduler.mjs";
 import { getJob, listJobs, summarizeJob } from "../../jobs/store.mjs";
 import { getKnowledgeBaseVersion } from "../../knowledge-base-versions.mjs";
-import { readMultipart } from "../multipart.mjs";
+import { multipartStringArrayField, multipartTextField, readMultipart } from "../multipart.mjs";
 import { readBody } from "../request.mjs";
 import { sendJson } from "../response.mjs";
-
-function timestampId() {
-  return new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "").replace("T", "-");
-}
 
 function boolValue(value, fallback = true) {
   if (value === undefined || value === null || value === "") return fallback;
@@ -23,20 +17,6 @@ function jobResponse(job) {
 
 function sendError(res, error) {
   sendJson(res, error.statusCode || 400, { error: error instanceof Error ? error.message : String(error) });
-}
-
-function jsonField(parts, name, fallback = "") {
-  return parts.find((part) => part.name === name && !part.filename)?.text?.trim() || fallback;
-}
-
-function parseRelativePaths(parts) {
-  const raw = jsonField(parts, "relativePaths", "[]");
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.map((item) => String(item || "")) : [];
-  } catch {
-    return [];
-  }
 }
 
 async function enqueueDirectoryImport(body) {
@@ -62,36 +42,42 @@ async function enqueueDirectoryImport(body) {
 }
 
 async function enqueueUploadImport(parts) {
-  const relativePaths = parseRelativePaths(parts);
+  const relativePaths = multipartStringArrayField(parts, "relativePaths");
   const fileParts = parts.filter((part) => part.name === "files" && part.filename);
   const files = fileParts.map((part, index) => ({
     filename: part.filename,
     relativePath: relativePaths[index] || part.filename,
     content: part.content,
   }));
-  const stagingDir = path.join(dataDir, "imports", `job-upload-${timestampId()}`);
-  const staged = await stageUploadedFiles({ files, stagingDir });
-  return await enqueueJob({
-    type: "import_upload",
-    title: `上传导入：${jsonField(parts, "kbName", "上传资料库")}`,
-    input: {
-      sourceDir: staged.uploadDir,
-      stagingDir,
-      kbName: jsonField(parts, "kbName", "上传资料库"),
-      aliases: jsonField(parts, "aliases", ""),
-      cleanMode: jsonField(parts, "cleanMode", "auto"),
-      autoEmbed: boolValue(jsonField(parts, "autoEmbed", "true"), true),
-      embeddingModel: jsonField(parts, "embeddingModel", ""),
-    },
-    inputSummary: {
-      source: "upload",
-      fileCount: staged.fileCount,
-      totalBytes: staged.totalBytes,
-      kbName: jsonField(parts, "kbName", "上传资料库"),
-      cleanMode: jsonField(parts, "cleanMode", "auto"),
-      autoEmbed: boolValue(jsonField(parts, "autoEmbed", "true"), true),
-    },
-  });
+  const stagingDir = await createImportStagingDir("job-upload");
+  try {
+    const staged = await stageUploadedFiles({ files, stagingDir });
+    return await enqueueJob({
+      type: "import_upload",
+      title: `上传导入：${multipartTextField(parts, "kbName", "上传资料库")}`,
+      input: {
+        sourceDir: staged.uploadDir,
+        stagingDir,
+        stagingOwned: true,
+        kbName: multipartTextField(parts, "kbName", "上传资料库"),
+        aliases: multipartTextField(parts, "aliases", ""),
+        cleanMode: multipartTextField(parts, "cleanMode", "auto"),
+        autoEmbed: boolValue(multipartTextField(parts, "autoEmbed", "true"), true),
+        embeddingModel: multipartTextField(parts, "embeddingModel", ""),
+      },
+      inputSummary: {
+        source: "upload",
+        fileCount: staged.fileCount,
+        totalBytes: staged.totalBytes,
+        kbName: multipartTextField(parts, "kbName", "上传资料库"),
+        cleanMode: multipartTextField(parts, "cleanMode", "auto"),
+        autoEmbed: boolValue(multipartTextField(parts, "autoEmbed", "true"), true),
+      },
+    });
+  } catch (error) {
+    await removeImportStagingDir(stagingDir);
+    throw error;
+  }
 }
 
 export async function handleJobs(req, res, url) {

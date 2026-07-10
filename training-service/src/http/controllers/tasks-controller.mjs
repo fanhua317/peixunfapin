@@ -1,4 +1,4 @@
-import { deleteTrainingRecords, getReportsOverview, getTaskStatus, publishTask } from "../../domain/index.mjs";
+import { commitTaskPublication, deleteTrainingRecords, getReportsOverview, getTaskStatus, prepareTaskPublication } from "../../domain/index.mjs";
 import { normalizeWebSearchMode } from "../../ai/web-search.mjs";
 import { appendBossChatTurn } from "../../boss-chat/store.mjs";
 import { normalizeSessionId } from "../../memory/index.mjs";
@@ -27,7 +27,8 @@ export async function handleTasks(req, res, url, context) {
   if (req.method === "POST" && url.pathname === "/api/tasks/publish") {
     const body = await readBody(req);
     const webSearchMode = normalizeWebSearchMode(body.webSearchMode);
-    const result = await mutateState((state) => publishTask(state, body.draft, { webSearchMode }));
+    const prepared = await prepareTaskPublication(await loadState(), body.draft, { webSearchMode });
+    const result = await mutateState((state) => commitTaskPublication(state, prepared));
     const base = publicBaseUrl(req, context);
     const payload = {
       action: "publish",

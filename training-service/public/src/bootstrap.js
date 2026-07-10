@@ -7,12 +7,15 @@ import { setupTracesApp } from "./traces.js";
 import { loadInvite } from "./invite.js";
 
 export async function bootstrapApp() {
-  setUnauthorizedHandler(renderLoginGate);
-  if (!(await ensureAuthenticated())) return;
   const inviteMatch = window.location.pathname.match(/^\/t\/([^/]+)/);
   if (inviteMatch) {
+    setUnauthorizedHandler(null);
     await loadInvite(inviteMatch[1]);
-  } else if (window.location.pathname === "/imports") {
+    return;
+  }
+  setUnauthorizedHandler(renderLoginGate);
+  if (!(await ensureAuthenticated())) return;
+  if (window.location.pathname === "/imports") {
     await setupImportsApp();
   } else if (window.location.pathname === "/jobs") {
     await setupJobsApp();

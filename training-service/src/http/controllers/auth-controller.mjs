@@ -18,7 +18,7 @@ export async function handleAuth(req, res, url) {
       sendJson(res, 200, result);
       return true;
     }
-    sendJson(res, 401, { error: "invalid access key" });
+    sendJson(res, 401, { error: "访问密钥不正确" });
     return true;
   }
 

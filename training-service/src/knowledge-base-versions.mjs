@@ -1,14 +1,17 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { getKnowledgeBaseQuality } from "./quality.mjs";
 import { dataDir, isoNow, loadState, makeId, mutateState } from "./store.mjs";
 import { isSqliteStorage, openTrainingDatabase } from "./sqlite-store.mjs";
+import { createAsyncLock } from "./storage/async-lock.mjs";
+import { writeJsonAtomic } from "./storage/atomic-json.mjs";
 
 export const knowledgeBaseVersionsPath = path.join(dataDir, "knowledge-base-versions.json");
 
 let jsonWriteLock = Promise.resolve();
+const runVersionMutation = createAsyncLock();
 
 function sha256(value) {
   return createHash("sha256").update(String(value || "")).digest("hex");
@@ -272,7 +275,6 @@ async function readJsonVersionStore() {
 }
 
 async function writeJsonVersionStore(store) {
-  await mkdir(path.dirname(knowledgeBaseVersionsPath), { recursive: true });
   const value = {
     meta: {
       ...(store.meta || {}),
@@ -281,9 +283,7 @@ async function writeJsonVersionStore(store) {
     },
     versions: Array.isArray(store.versions) ? store.versions.map(normalizeVersion) : [],
   };
-  const tempPath = `${knowledgeBaseVersionsPath}.tmp`;
-  await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  await rename(tempPath, knowledgeBaseVersionsPath);
+  await writeJsonAtomic(knowledgeBaseVersionsPath, value);
 }
 
 async function withJsonVersionStore(mutator) {
@@ -364,6 +364,7 @@ function previousFromUnversionedSnapshot({ knowledgeBaseId, snapshot }) {
 }
 
 export async function recordKnowledgeBaseImportVersion({ knowledgeBaseId, previousSnapshot = null, importSummary = {}, jobId = "" } = {}) {
+  return await runVersionMutation(async () => {
   const kbId = String(knowledgeBaseId || importSummary.kbId || "");
   if (!kbId) throw new Error("Missing knowledgeBaseId for version snapshot.");
   const state = await loadState();
@@ -389,6 +390,7 @@ export async function recordKnowledgeBaseImportVersion({ knowledgeBaseId, previo
   });
   const saved = await saveVersionsForKnowledgeBase(kbId, [previousVersion, current].filter(Boolean));
   return summarizeKnowledgeBaseVersionSet(saved);
+  });
 }
 
 export async function listKnowledgeBaseVersions(knowledgeBaseId, options = {}) {
@@ -407,6 +409,7 @@ export async function getKnowledgeBaseVersion(knowledgeBaseId, versionId, option
 }
 
 export async function restoreKnowledgeBaseVersion({ knowledgeBaseId, versionId, jobId = "" } = {}) {
+  return await runVersionMutation(async () => {
   const kbId = String(knowledgeBaseId || "");
   const targetId = String(versionId || "");
   if (!kbId || !targetId) throw new Error("Missing knowledgeBaseId or versionId for rollback.");
@@ -454,6 +457,7 @@ export async function restoreKnowledgeBaseVersion({ knowledgeBaseId, versionId, 
     restoredFrom: publicVersion(target, false),
     ...summarizeKnowledgeBaseVersionSet(saved),
   };
+  });
 }
 
 export function summarizeKnowledgeBaseVersionSet(versions) {

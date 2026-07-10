@@ -22,7 +22,12 @@ function parseCookies(req) {
   const header = req.headers.cookie || "";
   return Object.fromEntries(header.split(";").map((part) => {
     const [name, ...valueParts] = part.trim().split("=");
-    return [name, decodeURIComponent(valueParts.join("=") || "")];
+    const rawValue = valueParts.join("=") || "";
+    try {
+      return [name, decodeURIComponent(rawValue)];
+    } catch {
+      return [name, rawValue];
+    }
   }).filter(([name]) => name));
 }
 

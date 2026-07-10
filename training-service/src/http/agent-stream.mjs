@@ -32,7 +32,7 @@ import {
   summarizeToolResult,
 } from "../tools/registry.mjs";
 import { isAuthenticated } from "./auth.mjs";
-import { acceptWebSocket, closeWebSocket, createWebSocketParser, sendWsJson } from "./websocket.mjs";
+import { acceptWebSocket, closeWebSocket, createWebSocketParser, isSameOrigin, sendWsJson, sendWsPong } from "./websocket.mjs";
 
 async function persistBossTurn({ body, payload, runId }) {
   try {
@@ -309,6 +309,10 @@ export function handleAgentStreamUpgrade(req, socket, head, context = {}) {
     rejectUpgrade(socket, 401, "Unauthorized");
     return true;
   }
+  if (!isSameOrigin(req)) {
+    rejectUpgrade(socket, 403, "Forbidden");
+    return true;
+  }
   if (!acceptWebSocket(req, socket)) return true;
 
   const abortController = new AbortController();
@@ -325,8 +329,15 @@ export function handleAgentStreamUpgrade(req, socket, head, context = {}) {
         closeWebSocket(socket, 1011, "stream failed");
       });
     },
-    onClose: () => abortController.abort(),
-    onPing: () => sendWsJson(socket, { type: "pong" }),
+    onClose: () => {
+      abortController.abort();
+      closeWebSocket(socket);
+    },
+    onPing: (payload) => sendWsPong(socket, payload),
+    onProtocolError: (code, reason) => {
+      abortController.abort();
+      closeWebSocket(socket, code, reason);
+    },
   });
   socket.on("close", () => abortController.abort());
   socket.on("error", () => abortController.abort());

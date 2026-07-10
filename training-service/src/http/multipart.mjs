@@ -1,21 +1,39 @@
+import { HttpError } from "./errors.mjs";
+
 function parseBoundary(contentType) {
   const match = String(contentType || "").match(/boundary=(?:"([^"]+)"|([^;]+))/i);
   return match?.[1] || match?.[2] || "";
 }
 
 async function readRawBody(req, maxBytes) {
+  const contentLength = Number(req.headers["content-length"] || 0);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new HttpError(413, `请求体超过限制：${Math.round(maxBytes / 1024 / 1024)}MB`);
+  }
   const chunks = [];
   let total = 0;
   for await (const chunk of req) {
-    total += chunk.length;
+    const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += value.length;
     if (total > maxBytes) {
-      const error = new Error(`请求体超过限制：${Math.round(maxBytes / 1024 / 1024)}MB`);
-      error.statusCode = 413;
-      throw error;
+      throw new HttpError(413, `请求体超过限制：${Math.round(maxBytes / 1024 / 1024)}MB`);
     }
-    chunks.push(chunk);
+    chunks.push(value);
   }
   return Buffer.concat(chunks);
+}
+
+export function multipartTextField(parts, name, fallback = "") {
+  return parts.find((part) => part.name === name && !part.filename)?.text?.trim() || fallback;
+}
+
+export function multipartStringArrayField(parts, name) {
+  try {
+    const parsed = JSON.parse(multipartTextField(parts, name, "[]"));
+    return Array.isArray(parsed) ? parsed.map((item) => String(item || "")) : [];
+  } catch {
+    return [];
+  }
 }
 
 function indexOfBuffer(buffer, target, start = 0) {

@@ -2,13 +2,13 @@ import { openInvite } from "../../domain/index.mjs";
 import { mutateState } from "../../store.mjs";
 import { sendJson } from "../response.mjs";
 
-export async function handleInvites(req, res, url) {
+export async function handleInvites(req, res, url, context = {}) {
   const inviteMatch = url.pathname.match(/^\/api\/invites\/([^/]+)$/);
   if (req.method !== "GET" || !inviteMatch) return false;
 
   const result = await mutateState((state) => openInvite(state, inviteMatch[1]));
   if (!result) {
-    sendJson(res, 404, { error: "invite not found" });
+    sendJson(res, context.authenticated ? 404 : 401, { error: "invite not found" });
     return true;
   }
   sendJson(res, 200, result);

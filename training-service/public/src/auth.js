@@ -13,7 +13,9 @@ export function renderLoginGate(errorMessage = "") {
           </div>
         </div>
         <form id="loginForm" class="login-form">
-          <input id="accessKeyInput" type="password" autocomplete="current-password" placeholder="访问密钥" />
+          <input name="username" type="text" autocomplete="username" value="training-admin" hidden />
+          <label for="accessKeyInput">访问密钥</label>
+          <input id="accessKeyInput" name="password" type="password" autocomplete="current-password" placeholder="请输入访问密钥" required />
           <button type="submit">进入系统</button>
         </form>
         <p id="loginError" class="error-text">${escapeHtml(errorMessage)}</p>

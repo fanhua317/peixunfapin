@@ -22,7 +22,10 @@ export function createApp(context) {
     } catch (error) {
       const statusCode = Number(error?.statusCode || error?.status || 500);
       if (statusCode >= 500 && statusCode !== 503) console.error(error);
-      sendJson(res, statusCode, { error: error instanceof Error ? error.message : String(error) });
+      const exposed = error?.expose === true || statusCode < 500 || statusCode === 503;
+      sendJson(res, statusCode, {
+        error: exposed && error instanceof Error ? error.message : "internal server error",
+      });
     }
   };
 }

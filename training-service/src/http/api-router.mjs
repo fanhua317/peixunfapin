@@ -34,16 +34,24 @@ const authenticatedHandlers = [
   handleQuiz,
 ];
 
+const candidateHandlers = [handleInvites, handleAnswer, handleQuiz];
+
 export async function handleApi(req, res, url, context) {
   if (await handleAuth(req, res, url, context)) return;
 
-  if (!isAuthenticated(req)) {
+  const authenticated = isAuthenticated(req);
+  const requestContext = { ...context, authenticated };
+
+  if (!authenticated) {
+    for (const handler of candidateHandlers) {
+      if (await handler(req, res, url, requestContext)) return;
+    }
     sendJson(res, 401, { error: "access key required" });
     return;
   }
 
   for (const handler of authenticatedHandlers) {
-    if (await handler(req, res, url, context)) return;
+    if (await handler(req, res, url, requestContext)) return;
   }
 
   sendJson(res, 404, { error: "not found" });

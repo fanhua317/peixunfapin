@@ -1,6 +1,6 @@
 import { appendEvent, isoNow, makeId, makeToken } from "../store.mjs";
 import { generateTrainingMaterial } from "../ai/index.mjs";
-import { isExpiredAt, latestAttempts } from "./common.mjs";
+import { domainError, isExpiredAt, latestAttempts } from "./common.mjs";
 
 function ensureArrays(state) {
   state.tasks = Array.isArray(state.tasks) ? state.tasks : [];
@@ -36,9 +36,29 @@ function shouldDeleteAllTrainingRecords(query) {
   return remainder.length === 0;
 }
 
-export async function publishTask(state, draft, { webSearchMode = "off" } = {}) {
+function knowledgeRevision(state, knowledgeBaseId) {
+  const knowledgeBase = state.knowledgeBases.find((entry) => entry.id === knowledgeBaseId);
+  if (!knowledgeBase) return "missing";
+  const documentCount = state.documents.filter((entry) => entry.knowledgeBaseId === knowledgeBaseId).length;
+  const chunkCount = state.chunks.filter((entry) => entry.knowledgeBaseId === knowledgeBaseId).length;
+  return JSON.stringify([
+    knowledgeBase.id,
+    knowledgeBase.activeVersionId || knowledgeBase.updatedAt || knowledgeBase.importedAt || "",
+    documentCount,
+    chunkCount,
+  ]);
+}
+
+function conflict(message) {
+  return domainError(409, message);
+}
+
+export async function prepareTaskPublication(state, draft, { webSearchMode = "off" } = {}) {
   if (!draft || !draft.knowledgeBase?.id) {
-    throw new Error("draft.knowledgeBase.id required");
+    throw domainError(400, "draft.knowledgeBase.id required");
+  }
+  if (knowledgeRevision(state, draft.knowledgeBase.id) === "missing") {
+    throw domainError(404, "knowledge base not found");
   }
   const draftEmployees = Array.isArray(draft.employees) ? draft.employees : [];
   const temporaryEmployees = Array.isArray(draft.unmatchedEmployees)
@@ -53,7 +73,7 @@ export async function publishTask(state, draft, { webSearchMode = "off" } = {}) 
     : [];
   const publishEmployees = draftEmployees.length ? draftEmployees : temporaryEmployees;
   if (publishEmployees.length === 0) {
-    throw new Error("draft.employees required");
+    throw domainError(400, "draft.employees required");
   }
 
   const taskId = makeId("task");
@@ -72,7 +92,6 @@ export async function publishTask(state, draft, { webSearchMode = "off" } = {}) 
     createdAt: isoNow(),
   };
   task.trainingMaterial = await generateTrainingMaterial(state, task, { webSearchMode });
-  state.tasks.push(task);
 
   const invites = publishEmployees.map((employee) => {
     const invite = {
@@ -87,16 +106,41 @@ export async function publishTask(state, draft, { webSearchMode = "off" } = {}) 
       openedAt: null,
       completedAt: null,
     };
-    state.invites.push(invite);
     return invite;
   });
 
+  return {
+    task,
+    invites,
+    knowledgeRevision: knowledgeRevision(state, draft.knowledgeBase.id),
+  };
+}
+
+export function commitTaskPublication(state, prepared) {
+  ensureArrays(state);
+  if (!prepared?.task || !Array.isArray(prepared.invites)) throw new Error("prepared publication required");
+  if (state.tasks.some((task) => task.id === prepared.task.id)) {
+    return {
+      task: state.tasks.find((task) => task.id === prepared.task.id),
+      invites: state.invites.filter((invite) => invite.taskId === prepared.task.id),
+    };
+  }
+  if (knowledgeRevision(state, prepared.task.knowledgeBaseId) !== prepared.knowledgeRevision) {
+    throw conflict("knowledge base changed while publishing; please retry");
+  }
+  state.tasks.push(prepared.task);
+  state.invites.push(...prepared.invites);
+
   appendEvent(state, "task.published", {
-    taskId,
-    inviteCount: invites.length,
-    materialGeneratedBy: task.trainingMaterial?.generatedBy || "unknown",
+    taskId: prepared.task.id,
+    inviteCount: prepared.invites.length,
+    materialGeneratedBy: prepared.task.trainingMaterial?.generatedBy || "unknown",
   });
-  return { task, invites };
+  return { task: prepared.task, invites: prepared.invites };
+}
+
+export async function publishTask(state, draft, options = {}) {
+  return commitTaskPublication(state, await prepareTaskPublication(state, draft, options));
 }
 
 export function deleteTrainingRecords(state, options = {}) {

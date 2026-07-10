@@ -59,6 +59,12 @@ button, textarea, input { font: inherit; }
   margin-top: 22px;
 }
 
+.login-form label {
+  color: #344054;
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .login-form input {
   width: 100%;
   border: 1px solid #cfd8ea;

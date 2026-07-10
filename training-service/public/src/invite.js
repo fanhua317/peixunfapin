@@ -207,6 +207,7 @@ async function startQuiz() {
       method: "POST",
       body: JSON.stringify({
         taskId: currentInvite.task.id,
+        token: currentInvite.invite.token,
         webSearchMode: document.querySelector("#quizWebSearchToggle")?.checked ? "on" : "off",
       }),
     });

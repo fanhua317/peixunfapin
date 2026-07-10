@@ -1,12 +1,20 @@
 import { appendEvent, isoNow, makeId } from "../store.mjs";
 import { generateQuizQuestions } from "../ai/index.mjs";
-import { markInviteExpired } from "./common.mjs";
+import { domainError, markInviteExpired } from "./common.mjs";
 
-export async function generateQuiz(state, taskId, { webSearchMode = "off" } = {}) {
+function taskRevision(task) {
+  return JSON.stringify([task?.id, task?.knowledgeBaseId, task?.quizCount, task?.passScore, task?.updatedAt || task?.createdAt]);
+}
+
+function conflict(message) {
+  return domainError(409, message);
+}
+
+export async function prepareQuiz(state, taskId, { webSearchMode = "off" } = {}) {
   const task = state.tasks.find((entry) => entry.id === taskId);
-  if (!task) throw new Error("task not found");
+  if (!task) throw domainError(404, "task not found");
   const existing = state.quizzes.find((quiz) => quiz.taskId === taskId);
-  if (existing) return existing;
+  if (existing) return { existing };
 
   const aiQuiz = await generateQuizQuestions(state, task, { webSearchMode });
   const questions = (aiQuiz.questions || []).map((question) => ({
@@ -32,20 +40,43 @@ export async function generateQuiz(state, taskId, { webSearchMode = "off" } = {}
     warnings: aiQuiz.warnings || [],
     createdAt: isoNow(),
   };
-  state.quizzes.push(quiz);
-  appendEvent(state, "quiz.generated", { taskId, quizId: quiz.id, questionCount: questions.length });
-  return quiz;
+  return { quiz, taskRevision: taskRevision(task) };
+}
+
+export function commitQuiz(state, prepared) {
+  if (prepared?.existing) {
+    return state.quizzes.find((quiz) => quiz.taskId === prepared.existing.taskId) || prepared.existing;
+  }
+  if (!prepared?.quiz) throw new Error("prepared quiz required");
+  const existing = state.quizzes.find((quiz) => quiz.taskId === prepared.quiz.taskId);
+  if (existing) return existing;
+  const task = state.tasks.find((entry) => entry.id === prepared.quiz.taskId);
+  if (!task || taskRevision(task) !== prepared.taskRevision) {
+    throw conflict("task changed while generating quiz; please retry");
+  }
+  state.quizzes.push(prepared.quiz);
+  appendEvent(state, "quiz.generated", {
+    taskId: prepared.quiz.taskId,
+    quizId: prepared.quiz.id,
+    questionCount: prepared.quiz.questions.length,
+  });
+  return prepared.quiz;
+}
+
+export async function generateQuiz(state, taskId, options = {}) {
+  return commitQuiz(state, await prepareQuiz(state, taskId, options));
 }
 
 export async function submitQuiz(state, { token, answers }) {
   const invite = state.invites.find((entry) => entry.token === token);
-  if (!invite) throw new Error("invite not found");
+  if (!invite) throw domainError(401, "invite not found");
   const task = state.tasks.find((entry) => entry.id === invite.taskId);
-  if (!task) throw new Error("task not found");
+  if (!task) throw domainError(404, "task not found");
   if (markInviteExpired(invite)) {
-    throw new Error("invite expired");
+    throw domainError(401, "invite expired");
   }
-  const quiz = await generateQuiz(state, task.id);
+  const quiz = state.quizzes.find((entry) => entry.taskId === task.id);
+  if (!quiz) throw conflict("quiz not generated; please retry");
   const answerMap = answers && typeof answers === "object" ? answers : {};
   const graded = quiz.questions.map((question) => {
     const submitted = answerMap[question.id];

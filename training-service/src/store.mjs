@@ -1,5 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 import {
   isSqliteStorage,
@@ -9,6 +10,8 @@ import {
   sqliteStatus,
 } from "./sqlite-store.mjs";
 import { dataRootPath } from "./project-paths.mjs";
+import { createAsyncLock } from "./storage/async-lock.mjs";
+import { writeJsonAtomic } from "./storage/atomic-json.mjs";
 
 export const dataDir = process.env.TRAINING_DATA_DIR
   ? path.resolve(process.env.TRAINING_DATA_DIR)
@@ -18,6 +21,7 @@ export const statePath = path.join(dataDir, "state.json");
 export const sqlitePath = sqlitePathFor(dataDir);
 
 const nowIso = () => new Date().toISOString();
+const runStateMutation = createAsyncLock();
 
 export const defaultState = () => ({
   meta: {
@@ -120,7 +124,7 @@ export async function saveState(state) {
     saveSqliteState(dataDir, normalizeState(state));
     return;
   }
-  await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  await writeJsonAtomic(statePath, state);
 }
 
 export function getStorageStatus() {
@@ -133,10 +137,12 @@ export function getStorageStatus() {
 }
 
 export async function mutateState(mutator) {
-  const state = await loadState();
-  const result = await mutator(state);
-  await saveState(state);
-  return result;
+  return await runStateMutation(async () => {
+    const state = await loadState();
+    const result = await mutator(state);
+    await saveState(state);
+    return result;
+  });
 }
 
 export function appendEvent(state, type, payload = {}) {
@@ -153,7 +159,7 @@ export function makeId(prefix) {
 }
 
 export function makeToken() {
-  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+  return randomBytes(24).toString("base64url");
 }
 
 export function isoNow() {

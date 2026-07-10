@@ -5,13 +5,13 @@ import {
   listJobs,
   requestJobCancel,
   resetInterruptedJobs,
-  saveJob,
   setJobProgress,
   updateJob,
 } from "./store.mjs";
 import { getJobHandler } from "./handlers.mjs";
 
 const running = new Map();
+const KNOWLEDGE_JOB_TYPES = new Set(["import_directory", "import_upload", "rollback_knowledge_base", "embed_local"]);
 let started = false;
 let scheduling = false;
 
@@ -30,6 +30,10 @@ function isCancelError(error) {
 
 function compactError(error) {
   return error instanceof Error ? error.message : String(error || "任务失败");
+}
+
+function resourceKey(job) {
+  return KNOWLEDGE_JOB_TYPES.has(job.type) ? "knowledge-data" : "";
 }
 
 async function finishJob(jobId, patch) {
@@ -52,7 +56,7 @@ async function runOne(job) {
     return;
   }
   const controller = new AbortController();
-  running.set(job.id, controller);
+  running.set(job.id, { controller, resourceKey: resourceKey(job) });
   await updateJob(job.id, (value) => ({
     ...value,
     status: "running",
@@ -117,7 +121,8 @@ export async function scheduleJobs() {
     while (running.size < concurrency()) {
       const queued = (await listJobs({ status: "queued", limit: 500 }))
         .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)));
-      const next = queued.find((job) => !running.has(job.id));
+      const occupiedResources = new Set([...running.values()].map((entry) => entry.resourceKey).filter(Boolean));
+      const next = queued.find((job) => !running.has(job.id) && (!resourceKey(job) || !occupiedResources.has(resourceKey(job))));
       if (!next) break;
       runOne(next).catch(() => {});
     }
@@ -135,8 +140,8 @@ export async function enqueueJob(input) {
 
 export async function cancelJob(jobId) {
   const job = await requestJobCancel(jobId);
-  const controller = running.get(String(jobId || ""));
-  if (controller) controller.abort();
+  const entry = running.get(String(jobId || ""));
+  if (entry) entry.controller.abort();
   scheduleJobs().catch(() => {});
   return job;
 }

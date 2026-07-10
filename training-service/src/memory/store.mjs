@@ -1,9 +1,12 @@
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { dataDir, makeId } from "../store.mjs";
 import { isSqliteStorage, loadSqliteMemoryStore, saveSqliteMemoryStore } from "../sqlite-store.mjs";
+import { createAsyncLock } from "../storage/async-lock.mjs";
+import { writeJsonAtomic } from "../storage/atomic-json.mjs";
 
 const nowIso = () => new Date().toISOString();
+const runMemoryMutation = createAsyncLock();
 
 export const memoryPath = path.join(dataDir, "memory.json");
 export const conversationHistoryPath = path.join(dataDir, "conversation-history.jsonl");
@@ -102,15 +105,17 @@ export async function saveMemoryStore(store) {
   if (isSqliteStorage()) {
     return saveSqliteMemoryStore(dataDir, value);
   }
-  await writeFile(memoryPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await writeJsonAtomic(memoryPath, value);
   return value;
 }
 
 export async function mutateMemoryStore(mutator) {
-  const store = await loadMemoryStore();
-  const result = await mutator(store);
-  await saveMemoryStore(store);
-  return result;
+  return await runMemoryMutation(async () => {
+    const store = await loadMemoryStore();
+    const result = await mutator(store);
+    await saveMemoryStore(store);
+    return result;
+  });
 }
 
 function sameMemory(left, right) {

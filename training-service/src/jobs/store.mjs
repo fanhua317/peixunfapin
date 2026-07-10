@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { dataDir } from "../store.mjs";
 import { isSqliteStorage, openTrainingDatabase } from "../sqlite-store.mjs";
+import { writeJsonAtomic } from "../storage/atomic-json.mjs";
 
 export const JOB_STATUSES = new Set(["queued", "running", "succeeded", "failed", "cancelled"]);
 export const jobsPath = path.join(dataDir, "jobs.json");
@@ -117,7 +118,6 @@ async function readJsonStore() {
 }
 
 async function writeJsonStore(store) {
-  await mkdir(path.dirname(jobsPath), { recursive: true });
   const value = {
     meta: {
       ...(store.meta || {}),
@@ -126,9 +126,7 @@ async function writeJsonStore(store) {
     },
     jobs: Array.isArray(store.jobs) ? store.jobs.map(normalizeJob) : [],
   };
-  const tempPath = `${jobsPath}.tmp`;
-  await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  await rename(tempPath, jobsPath);
+  await writeJsonAtomic(jobsPath, value);
 }
 
 async function withJsonStore(mutator) {

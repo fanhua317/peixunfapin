@@ -1,4 +1,5 @@
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { getRuntimeHealth, getVectorIndexStatus } from "../health.mjs";
 import { listKnowledgeBaseVersions } from "../knowledge-base-versions.mjs";
@@ -6,20 +7,18 @@ import { getKnowledgeBaseQuality } from "../quality.mjs";
 import { dataDir, loadState } from "../store.mjs";
 import { cleanRawDirectory, walkFiles } from "./cleaner.mjs";
 import { importCleanDirectory } from "./importer.mjs";
+import { createAsyncLock } from "../storage/async-lock.mjs";
 
 export const ALLOWED_IMPORT_EXTENSIONS = new Set([".pdf", ".xlsx", ".csv", ".md", ".txt"]);
 const CLEAN_REQUIRED_EXTENSIONS = new Set([".pdf", ".xlsx", ".csv"]);
 const CLEAN_READY_EXTENSIONS = new Set([".md", ".txt"]);
 
 let activeImport = null;
+const runImportMutation = createAsyncLock();
 
 export function importMaxUploadBytes() {
   const mb = Number(process.env.TRAINING_IMPORT_MAX_UPLOAD_MB || 200);
   return Math.max(1, mb) * 1024 * 1024;
-}
-
-function timestampId() {
-  return new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "").replace("T", "-");
 }
 
 function parseAliases(value) {
@@ -95,17 +94,29 @@ async function summarizeKnowledgeBases() {
 }
 
 export async function runExclusiveImport(type, work) {
-  if (activeImport) {
-    const error = new Error(`已有导入任务正在运行：${activeImport.type}`);
-    error.statusCode = 409;
-    throw error;
-  }
-  activeImport = { type, startedAt: new Date().toISOString() };
-  try {
-    return await work();
-  } finally {
-    activeImport = null;
-  }
+  return await runImportMutation(async () => {
+    activeImport = { type, startedAt: new Date().toISOString() };
+    try {
+      return await work();
+    } finally {
+      activeImport = null;
+    }
+  });
+}
+
+export async function createImportStagingDir(prefix = "import") {
+  const stagingDir = path.join(dataDir, "imports", `${prefix}-${randomUUID()}`);
+  await mkdir(stagingDir, { recursive: true });
+  return stagingDir;
+}
+
+export async function removeImportStagingDir(stagingDir) {
+  const importsRoot = path.resolve(dataDir, "imports");
+  const target = path.resolve(stagingDir || "");
+  const relative = path.relative(importsRoot, target);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return false;
+  await rm(target, { recursive: true, force: true });
+  return true;
 }
 
 function throwIfCancelled(signal) {
@@ -189,15 +200,18 @@ export async function getImportOverview() {
 export async function importFromDirectory({ inputDir, kbName, aliases = [], cleanMode = "auto" }) {
   return await runExclusiveImport("directory", async () => {
     const sourceDir = await assertDirectory(inputDir);
-    const stagingDir = path.join(dataDir, "imports", `directory-${timestampId()}`);
-    await mkdir(stagingDir, { recursive: true });
-    return await importPreparedDirectory({
-      sourceDir,
-      kbName: kbName || path.basename(sourceDir),
-      aliases: parseAliases(aliases),
-      cleanMode: normalizeCleanMode(cleanMode),
-      stagingDir,
-    });
+    const stagingDir = await createImportStagingDir("directory");
+    try {
+      return await importPreparedDirectory({
+        sourceDir,
+        kbName: kbName || path.basename(sourceDir),
+        aliases: parseAliases(aliases),
+        cleanMode: normalizeCleanMode(cleanMode),
+        stagingDir,
+      });
+    } finally {
+      await removeImportStagingDir(stagingDir);
+    }
   });
 }
 
@@ -216,7 +230,8 @@ export async function stageUploadedFiles({ files, stagingDir }) {
     const ext = path.extname(relative).toLowerCase();
     if (!ALLOWED_IMPORT_EXTENSIONS.has(ext)) throw new Error(`不支持的文件类型：${relative}`);
     const target = path.resolve(uploadDir, relative);
-    if (!target.startsWith(uploadDir)) throw new Error(`非法上传路径：${relative}`);
+    const targetRelative = path.relative(path.resolve(uploadDir), target);
+    if (!targetRelative || targetRelative.startsWith("..") || path.isAbsolute(targetRelative)) throw new Error(`非法上传路径：${relative}`);
     await mkdir(path.dirname(target), { recursive: true });
     await writeFile(target, file.content);
     index += 1;
@@ -226,14 +241,18 @@ export async function stageUploadedFiles({ files, stagingDir }) {
 
 export async function importUploadedFiles({ files, kbName, aliases = [], cleanMode = "auto" }) {
   return await runExclusiveImport("upload", async () => {
-    const stagingDir = path.join(dataDir, "imports", `upload-${timestampId()}`);
-    const { uploadDir } = await stageUploadedFiles({ files, stagingDir });
-    return await importPreparedDirectory({
-      sourceDir: uploadDir,
-      kbName: kbName || "上传资料库",
-      aliases: parseAliases(aliases),
-      cleanMode: normalizeCleanMode(cleanMode),
-      stagingDir,
-    });
+    const stagingDir = await createImportStagingDir("upload");
+    try {
+      const { uploadDir } = await stageUploadedFiles({ files, stagingDir });
+      return await importPreparedDirectory({
+        sourceDir: uploadDir,
+        kbName: kbName || "上传资料库",
+        aliases: parseAliases(aliases),
+        cleanMode: normalizeCleanMode(cleanMode),
+        stagingDir,
+      });
+    } finally {
+      await removeImportStagingDir(stagingDir);
+    }
   });
 }
