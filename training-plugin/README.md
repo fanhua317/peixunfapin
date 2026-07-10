@@ -15,7 +15,9 @@
 - `training_generate_quiz`
 - `training_grade_answer`
 
-网页端已有营销软文、本地记忆、任务中心和 Trace 页面；这些能力本轮没有新增到 OpenClaw 插件 tool 中。
+网页端已有营销软文、本地记忆、任务中心和 Trace 页面；这些能力不属于当前 8 个 OpenClaw plugin tool 的兼容契约。
+
+仓库质量门禁 `training-service` 下的 `npm run check:plugin` 会校验 5 个 TypeScript 文件语法、8 个 tool 名和 8 个既有 endpoint。客户端会区分超时、非 JSON 响应和带状态码的 HTTP 错误，不把失败响应当成成功结果。
 
 ## 安装
 

@@ -2,6 +2,8 @@
 
 本文是服务器部署速查。更完整的运行说明见 `training-service/README.md`。
 
+本文件中的命令只供明确授权的部署任务使用。本地代码修改、提交和推送不会自动连接、更新或重启服务器；服务器现状也不能从这份长期说明中推断，应查看带日期的审计证据。
+
 ## Docker Compose
 
 1. Install Docker and Docker Compose.

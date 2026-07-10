@@ -1,6 +1,6 @@
 # 钜洲培训 Agent 项目总览
 
-更新时间：2026-06-26
+更新时间：2026-07-10
 
 ## 1. 项目定位
 
@@ -17,6 +17,7 @@
 - 没有可用大模型 API 时，不生成讲义、不出题、不写软文。
 - 高风险动作必须确认，包括发布、删除、回滚、恢复、清空记忆等。
 - RAG 不只靠 embedding，主路径是 BM25 + 向量 hybrid + parent-child 上下文。
+- 本地改动默认只提交并推送 GitHub，不自动连接、更新或重启服务器；部署必须获得当前任务的明确授权。
 
 ## 3. 系统分层
 
@@ -69,7 +70,7 @@ SQLite + JSONL + local vector index + clean documents
 
 ```text
 员工打开 /t/:token
--> 校验邀请有效性
+-> 以邀请 token 作为员工能力凭证并校验有效期
 -> 查看讲义
 -> 基于任务资料提问
 -> 生成考试
@@ -77,7 +78,7 @@ SQLite + JSONL + local vector index + clean documents
 -> 记录成绩并更新报表
 ```
 
-过期邀请不能继续提交。重复考试以最新有效提交作为报表参考。
+启用老板访问密钥时，员工页仍可凭有效邀请 token 完成打开、答疑、取题和提交；无效、过期或与任务不匹配的 token 会被拒绝。重复考试以最新有效提交作为报表参考。
 
 ### 营销软文
 
@@ -183,6 +184,8 @@ Run 和 Trace 只保存脱敏摘要、message hash、message preview、意图、
 
 路由策略是快速 LLM Router 优先 + 安全规则门禁 + RAG 证据校验：
 
+HTTP 层把老板认证与员工邀请能力分开：老板 API 继续使用访问密钥或登录 Cookie；员工只在 `/api/invites/:token`、`/api/answer`、`/api/quiz/generate`、`/api/quiz/submit` 使用有效邀请 token。JSON/WS 消息默认限制 1 MiB，非法 JSON/URI、静态资源缺失、跨源或不合规 WebSocket 帧都有明确状态码或关闭码，内部 500 不暴露文件路径。
+
 - 快速 LLM Router 先判断应调用的 skill，覆盖软文、翻译、知识库答疑、培训、进度、删除和普通聊天。
 - 本地规则只处理高风险确认、Router 不可用兜底和少量确定性 parser 校验。
 - 低置信操作返回 `intent_confirm`。
@@ -247,6 +250,8 @@ SQLite 默认保存：
 
 `state.json meta.version` 保持 `1`；SQLite 内部 schema 独立演进。
 
+业务状态、记忆、老板聊天、Jobs 和知识库版本的 JSON 回滚存储采用串行写队列与原子替换。SQLite/JSON 的业务状态提交都经过进程内串行化；讲义、出题、文件读取和切片在锁外执行，提交阶段复核知识库或任务版本，避免丢写和长时间占锁。
+
 老板端聊天历史保留 30 天。列表按最后一条真实消息的 `lastMessageAt` 排序，GET 读取、PATCH 标题/预览和前端恢复渲染不改变排序位置，追加新消息才会刷新排序时间。删除某条聊天会话只影响该会话历史，不应删除培训任务、邀请、考试或本地记忆。
 
 ## 9. 记忆模块
@@ -262,6 +267,8 @@ SQLite 默认保存：
 ## 10. 导入、任务和版本
 
 导入管理支持本机目录和浏览器上传。导入任务进入本地任务队列，成功后可自动创建 `embed_local` 子任务。
+
+上传暂存目录使用 UUID 并做路径边界校验；成功、失败或取消后只删除系统自建暂存目录，不删除用户源目录。导入、embedding 和回滚属于同一知识数据资源，按串行顺序执行。
 
 知识库保留当前版和上一版：
 
@@ -291,7 +298,7 @@ optional Ollama bge-m3 query embedding
 DeepSeek/OpenAI-compatible chat API
 ```
 
-线上 Windows Server 采用“主计划任务 + watchdog + 备份任务 + Ollama 任务”方式保持服务长期在线并降低数据丢失风险。`JuzhouAgentTraining` 运行 `start-server.ps1`，`ExecutionTimeLimit=PT0S`，并配置 1 分钟间隔的短失败重启；`JuzhouAgentTrainingWatchdog` 每 5 分钟检查 8787 端口、首页和 `/api/health`，无响应时拉起主任务；`JuzhouAgentTrainingBackup` 建议每天运行 `backup-server.ps1`，生成 ZIP 后立即校验，并按默认 14 天/最近 10 份策略清理旧备份；`JuzhouAgentOllama` 使用 `start-ollama.cmd` 以 SYSTEM 启动本机 `127.0.0.1:11434` 的 `Ollama/bge-m3`，日志写入 `logs\ollama-system.log`。服务日志追加到 `logs\server.log`，watchdog 日志写入 `logs\watchdog.log`，备份日志写入 `logs\backup.log`。未带访问密钥访问 `/api/health` 返回 `401` 是正常鉴权，不算宕机。
+部署脚本支持“主计划任务 + watchdog + 备份任务 + Ollama 任务”：`JuzhouAgentTraining` 运行 `start-server.ps1`，watchdog 检查 8787 端口、首页和 `/api/health`，备份任务执行生成、校验和保留策略，Ollama 任务只提供本机 query embedding。这里描述的是可用部署结构，不代表当前服务器实时状态；实际状态只引用带日期的审计证据。
 
 Qdrant 是可选部署，不是低并发轻量服务器默认项。使用 Qdrant 时，需要单独备份 volume 或 snapshot。
 
@@ -350,9 +357,12 @@ npm run eval:memory
 npm run eval:agent-trajectory
 npm run eval:traces
 npm run eval:sqlite
+npm run eval:concurrency
 npm run eval:backup
 npm run eval:import
+npm run eval:import-lifecycle
 npm run eval:jobs
+npm run eval:http-security
 npm run eval:streaming
 npm run eval:web-search
 npm run eval:marketing-uniqueness
@@ -360,20 +370,13 @@ npm run eval:marketing-length
 npm run eval:boss-chat
 npm run eval:translation
 npm run eval:kb-versions
-npm run server-audit:inventory
-npm run server-audit:functional
-npm run server-audit:perf
-npm run server-audit:web-search
-npm run server-audit:report
 git diff --check
 ```
 
-RAG 评测集当前维护在 `scripts/fixtures/rag-eval-cases.mjs`，覆盖型号参数、结构原理、制造工艺、销售场景、多语言和标准资料。默认先看 retrieval-only 的 Top1、Top3 和 hybrid 不低于 BM25 的情况。备份评测覆盖 SQLite 快照、JSONL/向量索引打包、校验、强制恢复和备份保留策略。
+RAG 评测集维护在 `scripts/fixtures/rag-eval-cases.mjs`，覆盖型号参数、结构原理、制造工艺、销售场景、多语言和标准资料。Ollama 关闭时评测结果属于 BM25 环境降级；hybrid 质量验收必须先确认 `retrievalMode=hybrid`，再检查 Top1、Top3 和“不低于 BM25”。备份评测覆盖 SQLite 快照、JSONL/向量索引打包、校验、强制恢复和备份保留策略。
 翻译评测 `npm run eval:translation` 不依赖真实模型质量：脚本使用临时数据目录和本地 OpenAI-compatible mock，覆盖显式目标语言、默认目标语言、无正文追问、老板端上一条正文上下文、正文在前且翻译指令在末尾、长文本不静默截断、LLM API 缺失错误、`翻译成英文：这是一台水泵` 和 boss-chat 持久化，并断言“生成英文文章，同时附带中文翻译”不会被翻译 parser 抢走。
 软文去重评测 `npm run eval:marketing-uniqueness` 使用 mock LLM 和临时老板端历史，覆盖相同文章高相似、仅共享产品型号不误判、模板句命中、中英文混合重复、avoid-ai-writing AI 写作痕迹检测、三篇文章结构化返回、最近 3 天历史窗口过滤和自动重写闭环。当前夹具英文 AI-heavy 样本 `aiWritingScore=78`、平实工业产品样本 `aiWritingScore=0`；首轮三篇高度相似稿触发 1 次重写，最终 `overallStatus=ok`、同批最高相似度约 `0.019`、历史最高相似度约 `0.05`、AI 写作痕迹最高分 `0`。
-服务器审计体系补充在 `server-audit:*` 脚本中：生产端口只做只读基线，隔离副本承接写入、合成数据导入、业务闭环、备份恢复、极限压测和 Tavily 联网专项；结果统一写入 `training-service/server-audit-output`，再汇总到 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。2026-06-30 生产只读基线显示 `/api/health` HTTP 200，线上有 2 个知识库、20 个文档、594 个 chunks，`ollamaOk=true`、`localVectorIndexOk=true`、`retrievalMode=hybrid`，Tavily provider 和 credential 已配置但 artifact 不落密钥。旧版 Tavily 答疑专项在服务器隔离副本跑 5 个真实联网样本，成功率 100%，`webSearchMode:on` 平均 6538 ms、p95 8470 ms，平均保留 3.8 个知识库来源并补充 4 个联网来源；新版 `server-audit:web-search` 继续保留真实答疑样本，并新增六链路表，覆盖知识库答疑、营销软文、培训材料、考试、翻译和普通聊天的 off/on 对比。历史读写压测仍作为容量边界：读链路 20 并发内 0 错误，50 并发开始超时，100 并发错误率 35.43% 并触发停止条件；写链路 boss-chat create/delete 在 20 并发仍 0 错误。当前主要风险是高并发读接口 50+ 并发排队超时，以及 CSV 在 direct 导入模式下不会进入知识库，需要 clean/auto 清洗模式。
-
-本轮项目文档只同步 Markdown 文档和桌面 QA 镜像，不做 Word 导出。
+服务器审计属于显式授权的独立流程。脚本、原始 artifact 和带日期结论分别位于 `server-audit:*`、`training-service/server-audit-output` 和 `docs/PERFORMANCE_AUDIT.md` / `docs/RESUME_EVIDENCE.md`；本总览只保留长期有效的架构与验证口径。
 
 ## 14. 主要风险
 

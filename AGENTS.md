@@ -10,6 +10,7 @@
 - 可选兼容插件：`training-plugin`。
 - 项目默认独立于 OpenClaw 运行；OpenClaw Gateway 和 OpenClaw 插件只是兼容集成，不是默认运行依赖。
 - 不要重新创建或依赖 `D:\OpenClaw`、`D:\OpenClawData`。
+- 默认只修改本机仓库并推送 GitHub；除非用户在当前任务明确重新授权，不得连接、探测、更新、上传、部署或重启任何服务器。
 
 ## 开始工作前先读
 
@@ -84,9 +85,12 @@ npm run eval:memory
 npm run eval:agent-trajectory
 npm run eval:traces
 npm run eval:sqlite
+npm run eval:concurrency
 npm run eval:backup
 npm run eval:import
+npm run eval:import-lifecycle
 npm run eval:jobs
+npm run eval:http-security
 npm run eval:kb-versions
 git diff --check
 ```

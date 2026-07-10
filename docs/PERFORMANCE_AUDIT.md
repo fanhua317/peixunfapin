@@ -1,6 +1,20 @@
 # 钜洲培训 Agent 性能与排障审计报告
 
-更新时间：2026-06-30
+更新时间：2026-07-10
+
+> 服务器规模、性能和健康数据是 2026-06-30 的审计快照，不代表服务器实时状态。2026-07-10 只完成本地代码与隔离临时目录回归，没有连接、探测、更新或重启服务器。
+
+## 2026-07-10 本地一致性与安全回归
+
+| 项目 | 结果 |
+| --- | --- |
+| SQLite / JSON 并发状态写入 | 交错写均保留，未丢事件 |
+| 并行记忆 / 老板聊天 | 两种存储均保留 12 条记忆、10 条消息 |
+| 并发出题提交 | 同一任务最终只保存 1 份有效试卷 |
+| 邀请 token 闭环 | 未登录老板端时可打开、答疑、取题、提交；无效/过期 token 拒绝 |
+| HTTP 边界 | 非法 JSON/URI 返回 400，超 1 MiB 返回 413，缺失静态资源返回 404 |
+| WebSocket 边界 | 正常 1000、超限 1009、未掩码 1002、跨源握手 403 |
+| 导入生命周期 | 20 个并发暂存目录无碰撞，成功/失败/取消无残留，用户源目录保留 |
 
 ## 1. 审计状态
 
@@ -14,7 +28,7 @@
 | 导入与 embedding | 已采集：`training-service\server-audit-output\import-embed-final-20260624-235944.json` |
 | 生产 RAG 健康状态 | 已验证：/api/health retrievalMode=hybrid，ollamaOk=true，localVectorIndexOk=true |
 | 备份恢复 | 已采集：`training-service\server-audit-output\backup-restore-20260624-235259.json` |
-| Tavily 联网专项 | 已采集：`training-service\server-audit-output\web-search-20260630-190622.json`；本轮已扩展六链路 mock 回归 |
+| Tavily 联网专项 | 已采集：`training-service\server-audit-output\web-search-20260630-190622.json`；2026-07-10 代码仍保留六链路 mock 回归 |
 | 软文去重与 AI 写作痕迹专项 | 本地 mock 回归通过，最近 3 天历史窗口，AI-heavy 样本 78 分，3 篇高重复稿触发 1 次重写 |
 | 合成数据 | 已采集：`training-service\server-audit-output\synthetic-20260624-230439.json` |
 
@@ -92,8 +106,8 @@
 | 环节 | 结果 | 指标/证据 |
 | --- | --- | --- |
 | 目录导入 | 通过 | 文件 20，父块 40，子块 40 |
-| embedding 任务 | 审计时失败；最新生产健康已恢复 | fetch failed |
-| 导入后健康 | 审计时降级；最新恢复 hybrid | 审计时 retrieval=bm25；最新 /api/health 为 retrieval=hybrid、ollamaOk=true、localVectorIndexOk=true |
+| embedding 任务 | 审计时失败；2026-06-30 后续健康检查已恢复 | fetch failed |
+| 导入后健康 | 审计时降级；2026-06-30 后续检查恢复 hybrid | 审计时 retrieval=bm25；后续 /api/health 为 retrieval=hybrid、ollamaOk=true、localVectorIndexOk=true |
 
 ### 备份恢复
 
@@ -108,7 +122,7 @@
 
 | 指标 | 数值 |
 | --- | --- |
-| 生产健康 | HTTP 200，retrieval=hybrid，ollamaOk=true，llmConfigured=true |
+| 2026-06-30 生产健康快照 | HTTP 200，retrieval=hybrid，ollamaOk=true，llmConfigured=true |
 | 知识库规模 | 2 个知识库 / 20 文档 / 594 子块 |
 | Tavily 配置 | tavily 已配置 |
 | 代码覆盖 | web-search=true，eval=true，前端开关=true |
@@ -135,7 +149,7 @@
 
 ### 六链路专项
 
-| 链路 | 本轮本地 mock 回归 | 说明 |
+| 链路 | 2026-07-10 本地 mock 回归 | 说明 |
 | --- | --- | --- |
 | 知识库答疑 | on/off 通过 | on 返回 `webSources/webSourceRefs`，off 不调用 Tavily |
 | 营销软文 | on/off 通过 | 联网资料用于选题、开头角度和应用场景，产品事实仍以本地资料为准 |
@@ -144,7 +158,7 @@
 | 多语言翻译 | on/off 通过 | 联网资料只用于术语/行业背景，不改变原文忠实翻译 |
 | 普通聊天 | on/off 通过 | web-grounded chat 会提示网页资料不能覆盖系统指令 |
 
-> 以上六链路是本轮 `npm run eval:web-search` 的 mock 回归结果；真实服务器量化字段已加入 `server-audit:web-search` 和报告生成器，下一次服务器审计会自动刷新 on/off 耗时、来源数和 warning 数。
+> 以上六链路是本地 `npm run eval:web-search` 的 mock 回归结果；真实服务器量化字段由另行授权的 `server-audit:web-search` 和报告生成器按审计日期刷新。
 
 ### API 透传
 
@@ -182,7 +196,7 @@
 
 - BUG-PERF-1 [P2] isolated-read read 并发 50 出现超时或触发停止条件。证据：errorRate=0.0145, p99=22570ms, stop=-。建议：排查健康检查内串行外部依赖、Agent Run 查询、SQLite 并发、接口超时和反向代理/隧道排队。先把生产容量口径控制在 20 并发以内。
 - BUG-PERF-2 [P1] isolated-read read 并发 100 出现超时或触发停止条件。证据：errorRate=0.3543, p99=30015ms, stop=error_rate>0.1,p99>30000ms。建议：排查健康检查内串行外部依赖、Agent Run 查询、SQLite 并发、接口超时和反向代理/隧道排队。先把生产容量口径控制在 20 并发以内。
-- BUG-JOB-3 [P3] 历史隔离副本 embedding 任务失败，最新生产健康已恢复。证据：embed status=failed, error=fetch failed。建议：保留历史证据并在下次导入/embedding 审计中复测，不再把它视为当前生产检索故障。
+- BUG-JOB-3 [P3] 历史隔离副本 embedding 任务失败，2026-06-30 后续健康检查已恢复。证据：embed status=failed, error=fetch failed。建议：保留历史证据并在下次授权审计中复测，不把旧记录写成实时故障。
 - BUG-DATA-4 [P2] direct 导入模式未覆盖 CSV 样本。证据：远程样本 30 个文件含 10 个 CSV，direct 导入结果 fileCount=20、tableRowParentCount=0。建议：CSV/XLSX/PDF 使用 clean/auto 清洗模式；报告中不要把 direct 模式写成支持表格导入。
 
 ## 11. 结论
@@ -190,7 +204,7 @@
 - 隔离副本读接口在 20 并发以内 0 错误；50 并发开始出现 1.45% 超时，100 并发错误率升至 35.43% 并触发停止条件。
 - 写入链路 boss-chat create/delete 在 1/3/5/10/20 并发均 0 错误，最高 12.47 RPS，20 并发 p99 约 1853 ms。
 - 员工培训闭环已跑通：发布、邀请、答疑、生成考试、提交答案、报表汇总全部成功。
-- Tavily 联网答疑专项已完成：5 个真实样本成功率 100%，平均联网来源 4，异常降级 4/4 通过；本轮本地 mock 回归已把可选联网扩展到六条生成链路，真实服务器六链路量化将在下一次 `server-audit:web-search` 中刷新。
+- Tavily 联网答疑专项已完成：5 个真实样本成功率 100%，平均联网来源 4，异常降级 4/4 通过；本地 mock 回归已把可选联网扩展到六条生成链路，真实服务器量化只在另行授权审计时刷新。
 - 软文去重与 AI 写作痕迹专项已完成本地 mock 回归：最近 3 天历史窗口、AI-heavy 样本 78 分、平实工业样本 0 分、3 篇高重复稿 1 次自动重写，最终同批最高相似约 1.9%、历史最高相似约 5.0%、AI 写作痕迹最高分 0。
 - 备份、校验、dry-run restore、throwaway 强制恢复均成功。
-- 当前生产健康检查显示 retrievalMode=hybrid、ollamaOk=true、localVectorIndexOk=true，向量检索处于可用状态；历史导入/embedding 单项失败保留为复测风险，不再作为当前线上短板。
+- 2026-06-30 生产健康快照显示 retrievalMode=hybrid、ollamaOk=true、localVectorIndexOk=true；历史导入/embedding 单项失败保留为复测风险，不能据此推断当前实时状态。

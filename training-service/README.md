@@ -2,6 +2,8 @@
 
 `training-service` 是项目主服务，使用 Node.js 原生 HTTP 和无构建 ES modules 前端。它负责老板端聊天、员工学习页、知识库导入、RAG 检索、培训/考试闭环、营销软文、本地记忆、任务中心和运行轨迹。
 
+本地代码修改默认不连接、不更新、不重启服务器；只有当前任务得到用户明确授权时才执行部署或服务器探测。
+
 ## 运行
 
 ```powershell
@@ -59,6 +61,8 @@ TRAINING_STORAGE=json
 ```
 
 `state.json` 的 `meta.version` 继续保持 `1`，但它不再是默认主存储。
+
+业务状态、记忆、老板聊天、Jobs 和知识库版本的 JSON 回滚存储采用进程内串行写入与“唯一临时文件 + 原子替换”。SQLite 与 JSON 的业务状态变更都通过串行提交避免交错写丢失；讲义生成、出题、文件读取和语义切片在锁外完成，提交时重新校验知识库或任务状态。
 
 老板端聊天历史随服务 schemaVersion `5` 保存到 SQLite 的 `boss_chat_sessions` / `boss_chat_messages`；JSON 回滚模式使用 `boss-chat-sessions.json`。当前账号口径固定为 `boss-default`，同一服务和数据目录下的不同浏览器或电脑应看到同一批老板端会话。会话列表按最后一条真实消息的 `lastMessageAt` 倒序；服务会按消息记录修复旧的 `lastMessageAt` 污染，`updatedAt` 只表示标题、预览、删除状态等元数据更新时间，不参与排序。
 
@@ -191,6 +195,8 @@ npm run eval:import
 
 导入成功后会写入 `knowledgeBases`、`documents`、`chunkParents`、`chunks`。同名知识库覆盖时只替换知识库资料，不删除培训任务、邀请、考试、记忆、Trace 或 Jobs。
 
+上传和清洗暂存目录使用 UUID，路径会做真实边界校验。成功、失败或取消后只清理系统创建的暂存目录，不删除用户选择的源目录。导入、embedding 和知识库回滚共享知识数据串行资源，避免并行任务互相覆盖。
+
 ## RAG 与向量索引
 
 主检索路径：
@@ -300,6 +306,8 @@ GET  /api/auth/status
 GET  /api/health
 ```
 
+除员工邀请能力接口外，`/api/*` 在启用 `TRAINING_ACCESS_KEY` 时都要求老板端认证。JSON 请求默认上限 1 MiB；非法 JSON/URI 返回 400，超限返回 413，缺失静态资源返回 404，只有无扩展名页面路由回退 `index.html`。未知 500 只向客户端返回通用错误，不暴露内部路径。WebSocket 要求浏览器同源、客户端掩码、合法 opcode，单条消息上限 1 MiB。
+
 老板端 Agent：
 
 ```text
@@ -358,10 +366,10 @@ GET    /api/tasks
 GET    /api/tasks/:taskId
 DELETE /api/tasks
 DELETE /api/tasks/:taskId
-GET    /api/invites/:token
-POST   /api/answer             # 可传 webSearchMode=on 为员工端资料答疑启用 Tavily 外部参考
-POST   /api/quiz/generate      # 可传 webSearchMode=on 为考试生成补充联网背景；正确答案仍以本地资料为准
-POST   /api/quiz/submit
+GET    /api/invites/:token     # 有效邀请 token 可在未登录老板端时访问
+POST   /api/answer             # 员工传 token；已认证调用方仍可传 taskId
+POST   /api/quiz/generate      # 新增可选 token；已认证调用方保留 taskId 兼容
+POST   /api/quiz/submit        # 员工传 token
 ```
 
 记忆：
@@ -373,7 +381,7 @@ DELETE /api/memory/:id
 DELETE /api/memory
 ```
 
-OpenClaw 插件保留 8 个 training tool 名，不在本轮文档整理中改变。
+OpenClaw 插件固定保留 8 个 training tool 名和既有 endpoint；`npm run check:plugin` 会做 TypeScript 语法、tool 清单和 endpoint 契约检查。
 
 ## 部署要点
 
@@ -397,7 +405,7 @@ Windows Server 长期运行建议保留计划任务，但要去掉默认运行�
 Export-ScheduledTask -TaskName JuzhouAgentTraining | Out-File .\backups\JuzhouAgentTraining.before.xml
 ```
 
-当前线上约定：
+部署脚本支持以下约定；实际服务器状态必须以带日期的审计报告或当次授权检查为准：
 
 - `JuzhouAgentTraining`：以 `SYSTEM` 运行 `start-server.ps1`，`ExecutionTimeLimit=PT0S`，`RestartCount=3`，`RestartInterval=PT1M`，`StartWhenAvailable=true`。
 - `JuzhouAgentTrainingWatchdog`：每 5 分钟运行 `watchdog-server.ps1`，检查 `0.0.0.0:8787`、`http://127.0.0.1:8787/` 和 `/api/health`。线上 `/api/health` 未带密钥返回 `401` 属于正常鉴权，watchdog 视为健康。
@@ -435,9 +443,12 @@ npm run eval:memory
 npm run eval:agent-trajectory
 npm run eval:traces
 npm run eval:sqlite
+npm run eval:concurrency
 npm run eval:backup
 npm run eval:import
+npm run eval:import-lifecycle
 npm run eval:jobs
+npm run eval:http-security
 npm run eval:streaming
 npm run eval:web-search
 npm run eval:marketing-uniqueness
@@ -445,21 +456,14 @@ npm run eval:marketing-length
 npm run eval:boss-chat
 npm run eval:translation
 npm run eval:kb-versions
-npm run server-audit:inventory -- --base-url http://47.95.194.219:8787
-npm run server-audit:functional -- --profile quick
-npm run server-audit:synthetic -- --small 100 --medium 1000 --large 5000
-npm run server-audit:perf -- --base-url http://127.0.0.1:18787 --duration-ms 60000 --read-levels 1,5,10,20,50,100,200
-npm run server-audit:report
 git diff --check
 ```
 
-RAG 评测用例在 `scripts/fixtures/rag-eval-cases.mjs`，当前共 30 条，默认以 retrieval-only 的 Top1/Top3 命中和 hybrid 不低于 BM25 为主要门槛。备份评测覆盖 SQLite 快照、JSONL/向量索引打包、校验、强制恢复和保留策略清理。
+RAG 评测用例在 `scripts/fixtures/rag-eval-cases.mjs`，当前共 30 条。Ollama 关闭时 `eval:rag -- --retrieval-only` 验证的是 BM25 环境降级；hybrid 质量回归必须在 `retrievalMode=hybrid` 时验收 Top1/Top3 和“不低于 BM25”的门槛。备份评测覆盖 SQLite 快照、JSONL/向量索引打包、校验、强制恢复和保留策略清理。
 翻译评测会创建临时 `TRAINING_DATA_DIR`，设置 `TRAINING_AUTH_DISABLED=1`，并启动本地 OpenAI-compatible mock 服务覆盖中英日西法、默认目标语言、缺正文追问、上一条老板端正文上下文、正文在前且翻译指令在末尾、长文本不静默截断、LLM API 缺失错误、`翻译成英文：这是一台水泵` 和 boss-chat 写入；同时断言“生成英文文章，同时附带中文翻译”不会被翻译 parser 抢走。
 联网搜索评测 `npm run eval:web-search` 使用 mock Tavily 和 mock OpenAI-compatible LLM，覆盖知识库答疑、营销软文、培训讲义、考试生成、翻译、普通聊天六条生成链路：`off` 不调用 Tavily，`on` 返回 `webSources/webSourceRefs`，缺 key、500、超时、空结果都不打断原生成链路，并检查 prompt 已区分本地资料/联网资料且不会执行网页指令。
 软文去重评测 `npm run eval:marketing-uniqueness` 使用 mock LLM 覆盖纯 JS 相似度算法、模板句命中、中英文混合文本、vendored avoid-ai-writing AI 写作痕迹检测、多篇文章生成、最近 3 天历史比对和自动重写闭环；当前夹具中英文 AI-heavy 样本 `aiWritingScore=78`，平实工业产品样本 `aiWritingScore=0`，首轮三篇高度相似稿会触发 1 次重写，最终同批相似度约 1.9%、历史最高相似度约 5%、AI 写作痕迹最高分 0。
-服务器审计脚本统一写入 `server-audit-output`：`server-audit:inventory` 采集服务器环境、API 只读探测、计划任务、磁盘和数据规模；`server-audit:functional` 复用现有回归脚本并输出统一 JSON；`server-audit:synthetic` 生成 100/1000/5000 文件三档合成资料；`server-audit:perf` 使用 Node 原生 fetch 做阶梯压测，记录 RPS、错误率、p50/p95/p99 和资源采样；`server-audit:report` 汇总最新 JSON 并刷新 `docs/PERFORMANCE_AUDIT.md` / `docs/RESUME_EVIDENCE.md`。生产端口只做只读基线；极限压测、合成数据导入和写入链路必须在同服务器隔离副本上执行，隔离副本使用独立 `TRAINING_DATA_DIR` 和端口，例如 `127.0.0.1:18787`。缺少访问密钥时受保护接口会标记为 `auth_required`，不会伪造数据。
-
-当前文档和评测流程只维护 Markdown 项目文档和 QA 镜像，本轮不做 Word 导出。
+服务器审计是显式授权的独立流程，脚本输出到 `server-audit-output`，再由 `server-audit:report` 刷新带日期的 `docs/PERFORMANCE_AUDIT.md` / `docs/RESUME_EVIDENCE.md`。长期有效的架构说明不把某次服务器状态写成当前事实。
 
 ## 当前限制
 

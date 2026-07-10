@@ -4,6 +4,8 @@
 
 项目默认可以独立运行；OpenClaw Gateway 和 OpenClaw 插件只是兼容集成入口，不是默认运行依赖。
 
+仓库修改默认只在本机完成并推送 GitHub，不会连接、探测、更新或重启服务器。只有用户在当前任务明确授权部署时，才执行服务器操作；部署说明本身不代表代码会自动上线。
+
 ## 快速启动
 
 ```powershell
@@ -29,11 +31,12 @@ http://127.0.0.1:8787/
 ## 核心能力
 
 - 老板端自然语言创建培训草稿、确认发布、生成员工学习链接。
-- 老板端聊天历史按 `boss-default` 账号规划服务端持久化，同一服务数据目录下跨浏览器/电脑可见；列表按最后一条真实消息的 `lastMessageAt` 倒序，旧元数据会按消息记录重算，`updatedAt` 只表示会话元数据更新时间。
+- 老板端聊天历史已按 `boss-default` 账号服务端持久化，同一服务数据目录下跨浏览器/电脑可见；列表按最后一条真实消息的 `lastMessageAt` 倒序，旧元数据会按消息记录重算，`updatedAt` 只表示会话元数据更新时间。
 - 老板端意图路由以快速 LLM Router 为优先入口，规则主要负责确认门禁、兜底和 RAG 证据校验。
 - 老板端提到已导入资料相关内容时，先由 Router 判断答疑意图，再通过知识库别名、会话上下文和 RAG 命中校验选择资料库并展示来源片段。
 - 老板端支持多语言翻译 skill，可从明确正文、末尾翻译指令或上一条老板端正文中提取待翻译内容；“生成英文文章并附中文翻译”仍归为软文生成，不抢到翻译 skill。
 - 员工端查看讲义、提问、生成考试、提交答案。
+- 员工邀请 token 是员工端能力凭证；启用老板访问密钥后，员工仍可凭有效 token 完成学习闭环，无效或过期 token 会被拒绝。
 - 基于本地知识库生成营销软文，不保存文章记录；生成 prompt 已约束减少通用 AI 模板感、空泛套话和夸大表达。
 - 本地记忆用于普通聊天连续性和低风险默认偏好。
 - 快速 LLM Router、确认卡片、Tool Registry 和 Agent Run 轨迹用于减少误判。
@@ -123,7 +126,7 @@ render:pdf 渲染页面图片
 这个流程不调用外部 OCR API，也不运行 Tesseract/PaddleOCR。看不清或无法确认的参数不要编造。
 型号参数表类资料按“系列 -> 型号 -> 参数行”整理成结构化 Markdown，例如银嘉泵目录补充文件 `visual-pump-model-tables.md`。服务器同步这类资料时优先在服务器重新导入并执行 `npm run embed:local -- --full`，避免本地和服务器 chunk id 不一致。
 
-当前文档流程只维护 Markdown 项目文档和 QA 镜像，本轮不做 Word 导出。
+项目文档和面试 QA 使用 Markdown 维护，桌面 QA 镜像与仓库版本保持同步。
 
 ## 备份与恢复
 
@@ -179,21 +182,22 @@ npm run eval:memory
 npm run eval:agent-trajectory
 npm run eval:traces
 npm run eval:sqlite
+npm run eval:concurrency
 npm run eval:backup
 npm run eval:import
+npm run eval:import-lifecycle
 npm run eval:jobs
+npm run eval:http-security
 npm run eval:boss-chat
 npm run eval:translation
 npm run eval:kb-versions
-npm run server-audit:inventory -- --base-url http://47.95.194.219:8787
-npm run server-audit:functional -- --profile quick
-npm run server-audit:perf -- --base-url http://127.0.0.1:18787 --duration-ms 60000 --read-levels 1,5,10,20,50,100,200
-npm run server-audit:report
 git diff --check
 ```
 
 文档-only 改动通常至少跑 `npm run check` 和 `git diff --check`。
-服务器性能审计默认写入 `training-service/server-audit-output`，再由 `server-audit:report` 汇总到 `docs/PERFORMANCE_AUDIT.md` 和 `docs/RESUME_EVIDENCE.md`。生产端口只做只读基线，写入和极限压测应打隔离副本。
+`npm run eval:rag -- --retrieval-only` 会忠实反映当前环境：Ollama 关闭时是 BM25 降级验证，不应冒充 hybrid 质量验收；hybrid 验收必须临时启用本机 Ollama，确认 `retrievalMode=hybrid` 后再检查 Top1/Top3 门槛。
+
+服务器审计属于显式授权的独立运维流程，证据和日期统一记录在 [docs/PERFORMANCE_AUDIT.md](docs/PERFORMANCE_AUDIT.md)，不作为本地代码修改的默认步骤。
 
 ## 文档索引
 
