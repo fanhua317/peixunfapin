@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import path from "node:path";
 import { ensureAgentRunTables } from "./agent-runs/schema.mjs";
 import { ensureBossChatTables } from "./boss-chat/schema.mjs";
+import { prepareStateCommit } from "./storage/state-revision.mjs";
 
 export const SQLITE_SCHEMA_VERSION = 5;
 
@@ -221,16 +222,10 @@ function readCollection(db, tableName) {
     .map((row) => JSON.parse(row.json));
 }
 
-export function saveSqliteState(dataDir, state) {
+export function saveSqliteState(dataDir, state, { revisionPrepared = false } = {}) {
   const db = openTrainingDatabase(dataDir);
-  const value = {
-    ...state,
-    meta: {
-      ...(state.meta || {}),
-      version: 1,
-      updatedAt: nowIso(),
-    },
-  };
+  const value = { ...state, meta: { ...(state.meta || {}) } };
+  if (!revisionPrepared) prepareStateCommit(value, nowIso());
   db.transaction(() => {
     setMeta(db, "state.meta", JSON.stringify(value.meta));
     for (const collection of STATE_COLLECTIONS) {

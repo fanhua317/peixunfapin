@@ -1,191 +1,102 @@
-export const RAG_EVAL_THRESHOLDS = {
-  total: 30,
-  hybridTop1Relevant: 24,
-  hybridTop3Relevant: 29,
-  hybridTop1BetterOrEqualBm25: 27,
-};
+import {
+  motorExactParameterCases,
+  motorMultilingualCases,
+  motorSemanticCases,
+} from "./rag-eval-motor-cases.mjs";
+import {
+  pumpExactParameterCases,
+  pumpMultilingualCases,
+  pumpSemanticCases,
+} from "./rag-eval-pump-cases.mjs";
+import {
+  crossKnowledgeBaseCases,
+  noAnswerCases,
+} from "./rag-eval-adversarial-cases.mjs";
+import { RAG_EVAL_SCHEMA_FIELDS } from "./rag-eval-case-builder.mjs";
 
-export const ragEvalCases = [
-  {
-    id: "ye3-ie3-four-business-row",
-    category: "model-parameter",
-    query: "YE3 IE3 4级 功率范围",
-    expected: ["YE3", "IE3", "级数: 4", "功率范围"],
-  },
-  {
-    id: "motor-structure-knowledge-point",
-    category: "structure-principle",
-    query: "三相异步电动机结构",
-    expected: ["三相异步电动机", "定子", "转子"],
-  },
-  {
-    id: "stator-rotor-sales-training",
-    category: "sales-scenario",
-    query: "定子转子销售培训",
-    expected: ["定子", "转子", "销售"],
-  },
-  {
-    id: "casting-loss",
-    category: "manufacturing-quality",
-    query: "电机附加损耗和低压铸铝、离心铸铝、压力铸铝有什么关系？",
-    expected: ["附加损耗", "低压铸铝", "离心铸铝", "压力铸铝"],
-  },
-  {
-    id: "broken-bar",
-    category: "manufacturing-quality",
-    query: "铸铝断条检测仪在品质管理里是做什么的？",
-    expected: ["铸铝断条检测仪", "不良转子"],
-  },
-  {
-    id: "iron-loss",
-    category: "manufacturing-quality",
-    query: "铁损检测仪主要控制哪一类原材料质量？",
-    expected: ["铁损检测仪", "硅钢片"],
-  },
-  {
-    id: "ye4-six",
-    category: "model-parameter",
-    query: "YE4 六级铁壳电机的机座范围和功率范围是多少？",
-    expected: ["YE4", "级数: 6", "机座范围", "功率范围"],
-  },
-  {
-    id: "ye3-six",
-    category: "model-parameter",
-    query: "YE3 六级铁壳电机的机座范围和功率范围是多少？",
-    expected: ["YE3", "级数: 6", "机座范围", "功率范围"],
-  },
-  {
-    id: "y2-four",
-    category: "model-parameter",
-    query: "Y2 四级铁壳电机的机座范围和功率范围是多少？",
-    expected: ["Y2", "级数: 4", "机座范围", "功率范围"],
-  },
-  {
-    id: "five-process",
-    category: "manufacturing-quality",
-    query: "银嘉五项领先制造工艺包括哪些？",
-    expected: ["五项领先制造工艺", "铝转子铸铝工艺"],
-  },
-  {
-    id: "english-rotor",
-    category: "multilingual-standard",
-    query: "High-Conductivity Rotor Aluminum Casting 是什么意思，对应哪项工艺？",
-    expected: ["High-Conductivity Rotor Aluminum Casting", "高导电率铝转子铸铝工艺"],
-  },
-  {
-    id: "patent",
-    category: "manufacturing-quality",
-    query: "低压铸铝相关的发明专利号是什么？",
-    expected: ["低压铸", "发明专利", "ZL201810801154.9"],
-  },
-  {
-    id: "cast-rotor",
-    category: "structure-principle",
-    query: "铸铝转子是怎么形成一个整体的？",
-    expected: ["铸铝转子", "导条", "端环"],
-  },
-  {
-    id: "product-intro",
-    category: "sales-scenario",
-    query: "销售介绍产品时为什么不要单一讲专业知识？",
-    expected: ["不要单一讲产品的专业知识", "客户", "产品"],
-  },
-  {
-    id: "ye2-ie2-two",
-    category: "model-parameter",
-    query: "YE2 IE2 2级 功率范围",
-    expected: ["YE2", "IE2", "级数: 2", "功率范围"],
-  },
-  {
-    id: "ye2-ie2-six",
-    category: "model-parameter",
-    query: "YE2 IE2 6级 机座范围",
-    expected: ["YE2", "IE2", "级数: 6", "机座范围"],
-  },
-  {
-    id: "ye4-ie4-four",
-    category: "model-parameter",
-    query: "YE4 IE4 4级 功率范围",
-    expected: ["YE4", "IE4", "级数: 4", "功率范围"],
-  },
-  {
-    id: "ye5-ie5-two",
-    category: "model-parameter",
-    query: "YE5 IE5 2级 功率范围",
-    expected: ["YE5", "IE5", "级数: 2", "功率范围"],
-  },
-  {
-    id: "single-phase-ie3-four",
-    category: "model-parameter",
-    query: "单相 IE3 4级 机座范围",
-    expected: ["单相", "IE3", "级数: 4", "机座范围"],
-  },
-  {
-    id: "nameplate-fields",
-    category: "structure-principle",
-    query: "电机铭牌通常包含哪些关键参数？",
-    expected: ["铭牌", "额定输出功率", "额定电压", "额定电流", "能效等级"],
-    minHits: 2,
-  },
-  {
-    id: "selection-conditions",
-    category: "structure-principle",
-    query: "电机选型需要确认哪些使用条件？",
-    expected: ["环境温度", "海拔", "电压", "频率", "防护等级", "冷却方式"],
-    minHits: 2,
-  },
-  {
-    id: "asynchronous-speed",
-    category: "structure-principle",
-    query: "异步电动机原理 转子转速 旋转磁场",
-    expected: ["转速永远小于旋转磁场", "异步"],
-  },
-  {
-    id: "stator-winding-function",
-    category: "structure-principle",
-    query: "定子绕组在电机里起什么作用？",
-    expected: ["定子绕组", "输入电流", "空气隙", "旋转磁场"],
-  },
-  {
-    id: "rotor-slot-design",
-    category: "manufacturing-quality",
-    query: "转子闭口槽和异形梨形槽有什么价值？",
-    expected: ["闭口槽", "异形梨形槽", "机械强度", "噪音和振动"],
-  },
-  {
-    id: "yh2-series-ie3",
-    category: "model-parameter",
-    query: "定转子 YH2 系列 国标三径 对标能效",
-    expected: ["YH2", "国标三径", "IE3"],
-  },
-  {
-    id: "diameter-slot-skew",
-    category: "manufacturing-quality",
-    query: "定转子资料里的三径、槽配合、斜槽是什么意思？",
-    expected: ["三径", "槽配合", "斜槽"],
-  },
-  {
-    id: "low-pressure-casting-best",
-    category: "manufacturing-quality",
-    query: "低压铸铝相比压力铸铝和离心铸铝有什么优势？",
-    expected: ["低压铸铝", "离心铸铝", "压力铸铝", "电气性能"],
-  },
-  {
-    id: "coil-tension-copper-saving",
-    category: "manufacturing-quality",
-    query: "定子绕组线圈张紧力为什么会影响省铜和一致性？",
-    expected: ["定子绕组", "线圈张紧力", "省铜", "一致性"],
-  },
-  {
-    id: "wonder-series",
-    category: "sales-scenario",
-    query: "WONDER 电机有哪些产品系列？",
-    expected: ["WE/WEA", "ZW/ZWEA", "SWE/SWEA", "SNA/NEMA"],
-  },
-  {
-    id: "english-ie3-table",
-    category: "multilingual-standard",
-    query: "English IE3 motor IE3-90S-4 efficiency table",
-    expected: ["IE3-90S-4", "IE3 motor", "定转子参数表-英语"],
-  },
-];
+export const RAG_EVAL_THRESHOLDS = Object.freeze({
+  total: 150,
+  dev: 120,
+  test: 30,
+  answerQuality: 60,
+  groundedAnswers: 45,
+  abstentionAnswers: 15,
+  hybridTestHit3Rate: 0.9,
+  rerankerMaxHit3Regression: 1,
+  answerFaithfulnessRate: 0.9,
+  citationPrecision: 1,
+  citationRecall: 0.9,
+  correctAbstentions: 14,
+});
+
+export const RAG_EVAL_CATEGORY_COUNTS = Object.freeze({
+  "exact-parameter": 60,
+  "semantic-principle": 30,
+  multilingual: 20,
+  "cross-kb-hard-negative": 20,
+  "no-answer": 20,
+});
+
+export const ragEvalCases = Object.freeze([
+  ...motorExactParameterCases,
+  ...pumpExactParameterCases,
+  ...motorSemanticCases,
+  ...pumpSemanticCases,
+  ...motorMultilingualCases,
+  ...pumpMultilingualCases,
+  ...crossKnowledgeBaseCases,
+  ...noAnswerCases,
+]);
+
+function countBy(items, key) {
+  return items.reduce((counts, item) => ({
+    ...counts,
+    [item[key]]: (counts[item[key]] || 0) + 1,
+  }), {});
+}
+
+export function validateRagEvalCases(cases = ragEvalCases) {
+  const errors = [];
+  const ids = new Set();
+  for (const [index, item] of cases.entries()) {
+    for (const field of RAG_EVAL_SCHEMA_FIELDS) {
+      if (!(field in item)) errors.push(`case[${index}] missing ${field}`);
+    }
+    if (!item.id) errors.push(`case[${index}] has empty id`);
+    if (ids.has(item.id)) errors.push(`duplicate id: ${item.id}`);
+    ids.add(item.id);
+    if (!["dev", "test"].includes(item.split)) errors.push(`${item.id}: invalid split ${item.split}`);
+    if (!["grounded", "abstain"].includes(item.answerMode)) errors.push(`${item.id}: invalid answerMode ${item.answerMode}`);
+    for (const field of ["expectedFacts", "expectedSources", "forbiddenFacts", "tags"]) {
+      if (!Array.isArray(item[field])) errors.push(`${item.id}: ${field} must be an array`);
+    }
+  }
+
+  const splits = countBy(cases, "split");
+  const categories = countBy(cases, "category");
+  const answerCases = cases.filter((item) => item.tags.includes("answer-quality"));
+  const groundedAnswers = answerCases.filter((item) => item.answerMode === "grounded").length;
+  const abstentionAnswers = answerCases.filter((item) => item.answerMode === "abstain").length;
+  if (cases.length !== RAG_EVAL_THRESHOLDS.total) errors.push(`expected ${RAG_EVAL_THRESHOLDS.total} cases, got ${cases.length}`);
+  if (splits.dev !== RAG_EVAL_THRESHOLDS.dev) errors.push(`expected ${RAG_EVAL_THRESHOLDS.dev} dev cases, got ${splits.dev || 0}`);
+  if (splits.test !== RAG_EVAL_THRESHOLDS.test) errors.push(`expected ${RAG_EVAL_THRESHOLDS.test} test cases, got ${splits.test || 0}`);
+  for (const [category, expected] of Object.entries(RAG_EVAL_CATEGORY_COUNTS)) {
+    if (categories[category] !== expected) errors.push(`expected ${expected} ${category} cases, got ${categories[category] || 0}`);
+  }
+  if (answerCases.length !== RAG_EVAL_THRESHOLDS.answerQuality) errors.push(`expected ${RAG_EVAL_THRESHOLDS.answerQuality} answer cases, got ${answerCases.length}`);
+  if (groundedAnswers !== RAG_EVAL_THRESHOLDS.groundedAnswers) errors.push(`expected ${RAG_EVAL_THRESHOLDS.groundedAnswers} grounded answer cases, got ${groundedAnswers}`);
+  if (abstentionAnswers !== RAG_EVAL_THRESHOLDS.abstentionAnswers) errors.push(`expected ${RAG_EVAL_THRESHOLDS.abstentionAnswers} abstention answer cases, got ${abstentionAnswers}`);
+
+  return {
+    ok: errors.length === 0,
+    errors,
+    counts: {
+      total: cases.length,
+      splits,
+      categories,
+      answerQuality: answerCases.length,
+      groundedAnswers,
+      abstentionAnswers,
+    },
+  };
+}

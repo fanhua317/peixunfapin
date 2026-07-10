@@ -1,4 +1,5 @@
 import { getRuntimeHealth } from "../../health.mjs";
+import { getOpenTelemetryStatus } from "../../observability/telemetry.mjs";
 import { dataDir, getStorageStatus, loadState } from "../../store.mjs";
 import { sendJson } from "../response.mjs";
 
@@ -13,6 +14,7 @@ export async function handleHealth(req, res, url) {
     stateError = error instanceof Error ? error.message : String(error);
   }
   const runtime = await getRuntimeHealth(state || undefined);
+  const openTelemetry = getOpenTelemetryStatus();
   sendJson(res, 200, {
     ok: !stateError,
     service: "juzhou-agent-training-service",
@@ -24,7 +26,10 @@ export async function handleHealth(req, res, url) {
     openclawRuntimeOk: runtime.openclawRuntimeOk,
     llmProvider: runtime.llmProvider,
     llmConfigured: runtime.llmConfigured,
+    rerankerOk: runtime.rerankerOk,
     retrievalMode: runtime.retrievalMode,
+    openTelemetryOk: openTelemetry.enabled ? openTelemetry.initialized : null,
+    openTelemetry,
     dataDir,
     storage: getStorageStatus(),
     counts: state ? {

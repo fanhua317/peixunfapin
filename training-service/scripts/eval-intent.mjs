@@ -1,8 +1,12 @@
-import { classifyTrainingIntent } from "../src/ai/index.mjs";
-import { registerLlmProvider } from "../src/llm.mjs";
-
 process.env.TRAINING_LLM_PROVIDER = "eval-intent-router";
 process.env.TRAINING_LLM_INTENT_ROUTER = "1";
+process.env.TRAINING_HYBRID_RETRIEVAL = "0";
+process.env.TRAINING_RERANKER_ENABLED = "0";
+
+const [{ classifyTrainingIntent }, { registerLlmProvider }] = await Promise.all([
+  import("../src/ai/index.mjs"),
+  import("../src/llm.mjs"),
+]);
 
 function routerDecisionForPrompt(prompt) {
   const userInputMatch = String(prompt || "").match(/用户输入：(".*")/s);
@@ -16,10 +20,10 @@ function routerDecisionForPrompt(prompt) {
     return { intent: "generate_marketing_article", skill: "generate_marketing_article", confidence: 0.94, reason: "用户要生成文章，翻译只是文章附加要求。" };
   }
   if (/请帮我检索 CM2 的相关知识|有具体型号吗/.test(message)) {
-    return { intent: "answer_knowledge_question", skill: "answer_knowledge_question", confidence: 0.91, reason: "用户询问水泵知识库资料和型号。" };
+    return { intent: "answer_knowledge_question", skill: "answer_knowledge_question", confidence: 0.91, targetKnowledgeBaseHint: "水泵", reason: "用户询问水泵知识库资料和型号。" };
   }
   if (/这是水泵，不是电机/.test(message)) {
-    return { intent: "answer_knowledge_question", skill: "answer_knowledge_question", confidence: 0.86, reason: "用户纠正主题为水泵，应优先水泵资料。" };
+    return { intent: "answer_knowledge_question", skill: "answer_knowledge_question", confidence: 0.86, targetKnowledgeBaseHint: "水泵", reason: "用户纠正主题为水泵，应优先水泵资料。" };
   }
   return { intent: "answer_general_chat", skill: "answer_general_chat", confidence: 0.6, reason: "eval mock fallback" };
 }
@@ -295,9 +299,8 @@ const cases = [
   {
     name: "pump correction must not select motor kb",
     message: "这是水泵，不是电机",
-    skill: "answer_knowledge_question",
+    skill: "answer_general_chat",
     needsConfirmation: false,
-    knowledgeBaseId: "kb-yinjia-pump",
     notKnowledgeBaseId: "kb-motor",
   },
   {

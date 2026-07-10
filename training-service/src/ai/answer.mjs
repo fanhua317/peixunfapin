@@ -1,4 +1,4 @@
-import { searchChunks, searchKnowledgeContexts } from "../rag.mjs";
+import { assessEvidenceSufficiency, searchChunks, searchKnowledgeContexts } from "../rag.mjs";
 import { ANSWER_CONTEXT_LIMIT, AI_PROFILE } from "./config.mjs";
 import { askLlmStructured } from "./llm-json.mjs";
 import {
@@ -64,6 +64,30 @@ function withAnswerMetadata(payload, chunks, extra = {}) {
     }),
     warnings,
   };
+}
+
+const SEMANTIC_BACKEND_ERROR_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
+
+function isSemanticBackendError(error) {
+  if (error?.semanticBackend === true || error?.stage === "semantic_search") return true;
+  return SEMANTIC_BACKEND_ERROR_CODES.has(String(error?.code || error?.cause?.code || "").toUpperCase());
+}
+
+function gatedBm25Fallback(state, { knowledgeBaseId, query, limit }) {
+  const candidates = searchChunks(state, { knowledgeBaseId, query, limit });
+  const evidence = assessEvidenceSufficiency(candidates, query);
+  if (!evidence.sufficient) return [];
+  return candidates.map((chunk) => ({ ...chunk, evidenceSufficiency: evidence }));
 }
 
 async function generateStrictKnowledgeAnswer({ knowledgeBaseId, question, chunks, webSearch }) {
@@ -169,15 +193,9 @@ export async function generateKnowledgeAnswer(state, { knowledgeBaseId, question
       query: text,
       limit: 8,
     });
-  } catch {
-    chunks = searchChunks(state, {
-      knowledgeBaseId,
-      query: text,
-      limit: 8,
-    });
-  }
-  if (!chunks.length) {
-    chunks = searchChunks(state, {
+  } catch (error) {
+    if (!isSemanticBackendError(error)) throw error;
+    chunks = gatedBm25Fallback(state, {
       knowledgeBaseId,
       query: text,
       limit: 8,

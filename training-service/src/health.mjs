@@ -4,6 +4,7 @@ import { getLlmRuntimeConfig } from "./llm.mjs";
 import { getLocalVectorIndexStatus } from "./local-vector-index.mjs";
 import { QDRANT_DEFAULT_BASE_URL, QDRANT_DEFAULT_COLLECTION } from "./qdrant.mjs";
 import { isUsableTrainingChunk } from "./quality.mjs";
+import { checkRerankerRuntime } from "./reranker.mjs";
 
 const DEFAULT_TIMEOUT_MS = Number(process.env.TRAINING_HEALTH_TIMEOUT_MS || 1500);
 
@@ -93,13 +94,18 @@ export async function checkOllamaRuntime() {
 }
 
 export async function getRuntimeHealth(state = { chunks: [] }) {
-  const [qdrant, ollama, openclawRuntime] = await Promise.all([checkQdrantRuntime(), checkOllamaRuntime(), getOpenClawRuntimeStatus()]);
+  const [qdrant, ollama, openclawRuntime, reranker] = await Promise.all([
+    checkQdrantRuntime(),
+    checkOllamaRuntime(),
+    getOpenClawRuntimeStatus(),
+    checkRerankerRuntime(),
+  ]);
   const localVectorIndex = await getLocalVectorIndexStatus(state || { chunks: [] });
   const hybridConfigured = !["0", "false", "off", "no"].includes(String(process.env.TRAINING_HYBRID_RETRIEVAL || "").toLowerCase());
   const localVectorReady = ["ready", "partial"].includes(localVectorIndex.status);
   const qdrantReady = qdrant.ok && qdrant.collectionExists;
   const semanticReady = hybridConfigured && ollama.ok && (qdrantReady || localVectorReady);
-  const retrievalMode = semanticReady ? "hybrid" : "bm25";
+  const retrievalMode = semanticReady ? (reranker.ok ? "hybrid+reranker" : "hybrid") : "bm25";
   const llm = {
     ...getLlmRuntimeConfig(),
     openclawRuntime,
@@ -109,12 +115,14 @@ export async function getRuntimeHealth(state = { chunks: [] }) {
     ollama,
     localVectorIndex,
     llm,
+    reranker,
     qdrantOk: qdrant.ok,
     ollamaOk: ollama.ok,
     localVectorIndexOk: localVectorReady,
     openclawRuntimeOk: openclawRuntime.ok,
     llmProvider: llm.effectiveProvider,
     llmConfigured: llm.effectiveProvider === "openclaw" ? openclawRuntime.ok : llm.directConfigured,
+    rerankerOk: reranker.ok,
     retrievalMode,
     hybridConfigured,
     checkedAt: new Date().toISOString(),

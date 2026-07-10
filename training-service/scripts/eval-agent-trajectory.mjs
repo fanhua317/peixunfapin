@@ -42,14 +42,17 @@ function intentRouterAnswer(prompt) {
   if (/(翻译|translate\s+(?:to|into))/i.test(message)) {
     return { intent: "translate_text", skill: "translate_text", confidence: 0.93, reason: "用户要求翻译已有文本。" };
   }
-  if (/请帮我检索 CM2 的相关知识|有具体型号吗/.test(message)) {
-    return { intent: "answer_knowledge_question", skill: "answer_knowledge_question", confidence: 0.92, reason: "用户询问水泵知识库资料和型号。" };
+  if (/ZXQ-999|lunar reactor warranty/i.test(message)) {
+    return { intent: "answer_knowledge_question", skill: "answer_knowledge_question", confidence: 0.94, targetKnowledgeBaseHint: "电机", reason: "评测无证据拒答路径。" };
+  }
+  if (/请帮我检索 CM2 的相关知识|有具体型号吗|银嘉泵有哪些主要水泵类型|WZB750|CM2 水泵|它适合什么场景/.test(message)) {
+    return { intent: "answer_knowledge_question", skill: "answer_knowledge_question", confidence: 0.92, targetKnowledgeBaseHint: "水泵", reason: "用户询问水泵知识库资料和型号。" };
   }
   if (/这是水泵，不是电机/.test(message)) {
     return { intent: "answer_knowledge_question", skill: "answer_knowledge_question", confidence: 0.86, reason: "用户纠正主题为水泵，应优先水泵资料。" };
   }
-  if (/(低压铸铝|电机是什么|WONDER 电机)/.test(message)) {
-    return { intent: "answer_knowledge_question", skill: "answer_knowledge_question", confidence: 0.9, reason: "用户询问已导入资料内容。" };
+  if (/(低压铸铝|电机是什么|WONDER|YE4 六级)/.test(message)) {
+    return { intent: "answer_knowledge_question", skill: "answer_knowledge_question", confidence: 0.9, targetKnowledgeBaseHint: "电机", reason: "用户询问已导入电机资料内容。" };
   }
   if (/(发布|安排|出)\s*.*(培训|学习|题)|给.+(培训|学习|考试)|重新输入/.test(message)) {
     return { intent: "create_training_draft", skill: "create_training_draft", confidence: 0.92, reason: "用户要求创建培训草稿。" };
@@ -68,14 +71,24 @@ function mockCompletion(prompt) {
       sourceRefs: ["银嘉泵目录.md :: CM2", "银嘉泵目录.md :: 型号"],
     };
   }
-  if (/工业品营销内容策划/.test(text)) {
+  if (/工业品营销内容策划|industrial B2B pump sales engineer|marketing article JSON/i.test(text)) {
+    const count = Math.max(1, Math.min(Number(text.match(/Generate\s+(\d+)\s+factual marketing article/i)?.[1] || 1), 4));
     return {
-      title: "银嘉泵水泵宣传文章",
-      summary: "基于银嘉泵水泵资料生成的宣传内容。",
-      article: "银嘉泵水泵面向清水输送、增压和一般工业配套场景，CM2 等型号可作为客户选型沟通的切入点。",
-      sellingPoints: ["清水输送", "增压应用", "型号资料可追溯"],
-      sourceRefs: ["银嘉泵目录.md :: CM2", "银嘉泵目录.md :: 型号"],
-      warnings: [],
+      articles: Array.from({ length: count }, (_, index) => ({
+        title: `银嘉泵应用文章 ${index + 1}`,
+        angle: ["清水输送", "稳定增压", "工业配套", "选型沟通"][index] || "产品应用",
+        summary: `基于银嘉泵资料的第 ${index + 1} 个应用角度。`,
+        article: [
+          "面对日常清水输送需求，采购方首先需要核对流量、扬程与安装条件。银嘉泵资料中的 CM2 可作为型号沟通入口，并按实际参数表确认配置。",
+          "当管路压力不稳定时，选型不应只比较功率。应结合增压目标、介质与工作条件查看银嘉泵资料，再确认对应型号。",
+          "工业配套项目更关注持续运行和维护边界。银嘉泵产品资料可以帮助团队把应用场景、型号和来源记录对应起来。",
+          "经销商与客户沟通时，先问清使用场景，再基于银嘉泵目录说明可选系列，避免把资料外参数写成确定事实。",
+        ][index],
+        sellingPoints: ["清水输送", "增压应用", "型号资料可追溯"],
+        sourceRefs: ["银嘉泵目录.md :: CM2", "银嘉泵目录.md :: 型号"],
+        webSourceRefs: [],
+        warnings: [],
+      })),
     };
   }
   if (/专业翻译助手/.test(text)) return "This is a water pump.";
@@ -98,6 +111,11 @@ async function startMockServer() {
       }
       const body = await readJsonBody(req);
       const prompt = (body.messages || []).map((message) => message.content || "").join("\n");
+      if (/企业培训资料答疑助手/.test(prompt) && /触发模型失败评测/.test(prompt)) {
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "intentional answer model failure" } }));
+        return;
+      }
       const answer = mockCompletion(prompt);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({
@@ -144,14 +162,14 @@ const seededState = {
     {
       id: "kb-motor",
       name: "电机基础资料库",
-      aliases: ["电机", "电动机", "电机基础培训", "低压铸铝"],
+      aliases: ["电机", "电动机", "电机基础培训", "低压铸铝", "WONDER", "YE4"],
       status: "ready",
       description: "Agent trajectory eval fixture",
     },
     {
       id: "kb-yinjia-pump",
       name: "银嘉泵水泵资料库",
-      aliases: ["银嘉泵", "银嘉水泵", "水泵", "泵", "CM2", "YINJIA"],
+      aliases: ["银嘉泵", "银嘉水泵", "水泵", "泵", "CM2", "WZB750", "YINJIA"],
       status: "ready",
       description: "Agent trajectory pump eval fixture",
     },
@@ -178,6 +196,34 @@ const seededState = {
       documentId: "doc-yinjia-pump",
       sourceRef: "银嘉泵目录.md :: 型号",
       content: "银嘉泵资料包含 CM2、VM22、QB60、WZB750 等具体水泵型号，型号参数应以资料表为准。",
+    },
+    {
+      id: "parent-motor-wonder",
+      knowledgeBaseId: "kb-motor",
+      documentId: "doc-motor",
+      sourceRef: "WONDER 高效电机.md :: 可靠性",
+      content: "WONDER 高效电机通过稳定的定转子工艺、材料检测和质量控制提升运行可靠性，具体性能仍应以对应型号资料为准。",
+    },
+    {
+      id: "parent-motor-ye4",
+      knowledgeBaseId: "kb-motor",
+      documentId: "doc-motor",
+      sourceRef: "电机参数表.md :: YE4 六级",
+      content: "YE4 六级高效电机的功率范围为 0.75-250kW，选型时还需核对机座号、电压和实际工况。",
+    },
+    {
+      id: "parent-pump-types",
+      knowledgeBaseId: "kb-yinjia-pump",
+      documentId: "doc-yinjia-pump",
+      sourceRef: "银嘉泵目录.md :: 主要类型",
+      content: "银嘉泵主要水泵类型包括离心泵、自吸泵、旋涡泵和多级泵，不同系列对应清水输送、增压等应用场景。",
+    },
+    {
+      id: "parent-pump-wzb750",
+      knowledgeBaseId: "kb-yinjia-pump",
+      documentId: "doc-yinjia-pump",
+      sourceRef: "银嘉泵目录.md :: WZB750",
+      content: "WZB750 是自吸旋涡泵型号，P2 功率为 0.75kW，适用于符合资料边界的清水输送和增压场景。",
     },
   ],
   chunks: [
@@ -207,6 +253,45 @@ const seededState = {
       sourceRef: "银嘉泵目录.md :: 型号",
       content: "银嘉泵水泵具体型号包括 CM2、VM22、QB60、WZB750，追问型号时应沿用水泵资料库。",
       searchText: "水泵 具体型号 型号 CM2 VM22 QB60 WZB750 银嘉泵",
+    },
+    {
+      id: "chunk-motor-wonder",
+      parentId: "parent-motor-wonder",
+      knowledgeBaseId: "kb-motor",
+      documentId: "doc-motor",
+      sourceRef: "WONDER 高效电机.md :: 可靠性",
+      content: "WONDER 高效电机依靠定转子工艺、材料检测和质量控制保障可靠运行。",
+      searchText: "WONDER 高效 电机 可靠 稳定 定转子 工艺 材料检测 质量控制",
+      businessKeys: { model: "WONDER" },
+    },
+    {
+      id: "chunk-motor-ye4",
+      parentId: "parent-motor-ye4",
+      knowledgeBaseId: "kb-motor",
+      documentId: "doc-motor",
+      sourceRef: "电机参数表.md :: YE4 六级",
+      content: "YE4 六级高效电机功率范围为 0.75-250kW。",
+      searchText: "YE4 六级 电机 功率范围 0.75 250 kW 高效",
+      businessKeys: { model: "YE4", poles: "6", powerRange: "0.75-250kW" },
+    },
+    {
+      id: "chunk-pump-types",
+      parentId: "parent-pump-types",
+      knowledgeBaseId: "kb-yinjia-pump",
+      documentId: "doc-yinjia-pump",
+      sourceRef: "银嘉泵目录.md :: 主要类型",
+      content: "主要水泵类型包括离心泵、自吸泵、旋涡泵和多级泵。",
+      searchText: "银嘉泵 主要 水泵 类型 离心泵 自吸泵 旋涡泵 多级泵",
+    },
+    {
+      id: "chunk-pump-wzb750",
+      parentId: "parent-pump-wzb750",
+      knowledgeBaseId: "kb-yinjia-pump",
+      documentId: "doc-yinjia-pump",
+      sourceRef: "银嘉泵目录.md :: WZB750",
+      content: "WZB750 自吸旋涡泵的 P2 功率是 0.75kW，可用于清水输送和增压。",
+      searchText: "WZB750 水泵 自吸 旋涡泵 P2 功率 0.75kW 清水输送 增压 应用场景",
+      businessKeys: { model: "WZB750", powerRange: "0.75kW" },
     },
   ],
   employees: [
@@ -269,6 +354,11 @@ function hasStep(run, expected) {
   return (run.steps || []).some((step) => step.type === type && (!name || step.name === name));
 }
 
+function hasStepStatus(run, expected, status) {
+  const [type, name] = expected.split(":");
+  return (run.steps || []).some((step) => step.type === type && (!name || step.name === name) && step.status === status);
+}
+
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -281,7 +371,7 @@ function payloadKnowledgeBaseId(payload = {}) {
   return payload.knowledgeBase?.id || payload.article?.knowledgeBase?.id || payload.draft?.knowledgeBase?.id || "";
 }
 
-async function waitForNewFinishedRun(beforeIds, label) {
+async function waitForNewFinishedRun(beforeIds, label, options = {}) {
   const deadline = Date.now() + 15_000;
   let lastRun = null;
   while (Date.now() < deadline) {
@@ -291,7 +381,7 @@ async function waitForNewFinishedRun(beforeIds, label) {
       const detail = await request(`/api/agent-runs/${encodeURIComponent(summaryRun.id)}`);
       if (detail.ok) {
         lastRun = detail.payload.run;
-        if (lastRun.status !== "running" && hasStep(lastRun, "result_output")) return lastRun;
+        if (lastRun.status !== "running" && (options.allowFailedWithoutResult || hasStep(lastRun, "result_output"))) return lastRun;
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 150));
@@ -316,6 +406,10 @@ const child = spawn(process.execPath, ["src/server.mjs"], {
     TRAINING_LLM_INTENT_ROUTER: "1",
     TRAINING_LLM_TIMEOUT_MS: "1500",
     OPENCLAW_CHAT_TIMEOUT_MS: "1500",
+    TRAINING_RERANKER_ENABLED: "1",
+    TRAINING_RERANKER_URL: "http://127.0.0.1:9",
+    TRAINING_RERANKER_API_KEY: "agent-trajectory-reranker-eval-key",
+    TRAINING_RERANKER_TIMEOUT_MS: "150",
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -380,18 +474,24 @@ try {
       method: "POST",
       body: JSON.stringify({ sessionId, memoryMode: "auto", message: item.message }),
     });
-    assert(response.ok || response.status === 503, `${item.id}: dispatch failed ${JSON.stringify(response.payload)}`);
-    assert(
-      response.payload.action === item.expectedAction,
-      `${item.id}: expected action ${item.expectedAction}, got ${response.payload.action}; payload=${JSON.stringify(response.payload)}; session=${JSON.stringify(sessionSnapshot?.payload || null)}`
-    );
+    const expectedStatuses = item.expectedStatusOneOf || [200, 503];
+    assert(expectedStatuses.includes(response.status), `${item.id}: expected status ${expectedStatuses.join("/")}, got ${response.status}; payload=${JSON.stringify(response.payload)}`);
+    if (item.expectedAction) {
+      assert(
+        response.payload.action === item.expectedAction,
+        `${item.id}: expected action ${item.expectedAction}, got ${response.payload.action}; payload=${JSON.stringify(response.payload)}; session=${JSON.stringify(sessionSnapshot?.payload || null)}`
+      );
+    }
     if (item.expectedKnowledgeBaseId) {
       assert(payloadKnowledgeBaseId(response.payload) === item.expectedKnowledgeBaseId, `${item.id}: expected knowledgeBaseId ${item.expectedKnowledgeBaseId}, got ${payloadKnowledgeBaseId(response.payload) || "(missing)"}`);
+    }
+    if (item.expectInsufficient) {
+      assert(response.payload.insufficient === true, `${item.id}: expected an explicit insufficient response; payload=${JSON.stringify(response.payload)}`);
     }
     if (item.forbiddenKnowledgeBaseId) {
       assert(payloadKnowledgeBaseId(response.payload) !== item.forbiddenKnowledgeBaseId, `${item.id}: must not select knowledgeBaseId ${item.forbiddenKnowledgeBaseId}`);
     }
-    const run = await waitForNewFinishedRun(beforeIds, item.id);
+    const run = await waitForNewFinishedRun(beforeIds, item.id, { allowFailedWithoutResult: item.allowFailedWithoutResult === true });
     if (item.expectedSkill) assert(run.skill === item.expectedSkill, `${item.id}: expected skill ${item.expectedSkill}, got ${run.skill}`);
     if (item.mustNotAction) assert(run.action !== item.mustNotAction, `${item.id}: action must not be ${item.mustNotAction}`);
     for (const step of item.mustSteps || []) {
@@ -400,7 +500,17 @@ try {
     for (const step of item.mustNotSteps || []) {
       assert(!hasStep(run, step), `${item.id}: forbidden step ${step}; got ${(run.steps || []).map(stepKey).join(", ")}`);
     }
-    results.push({ id: item.id, ok: true, action: run.action, skill: run.skill, steps: (run.steps || []).map(stepKey) });
+    for (const step of item.mustFailSteps || []) {
+      assert(hasStepStatus(run, step, "failed"), `${item.id}: expected failed step ${step}; got ${(run.steps || []).map((entry) => `${stepKey(entry)}=${entry.status}`).join(", ")}`);
+    }
+    if (item.expectObservability) {
+      assert(run.summary?.observability && Object.keys(run.summary.observability).length > 0, `${item.id}: run.summary.observability should be recorded`);
+    }
+    if (item.expectRerankerFallback) {
+      const fallbackText = JSON.stringify({ summary: run.summary, steps: run.steps, payload: response.payload });
+      assert(/fallback|degraded|unavailable|timeout|fetch failed|connection|error/i.test(fallbackText), `${item.id}: reranker fallback reason should be observable`);
+    }
+    results.push({ id: item.id, ok: true, status: response.status, action: run.action, skill: run.skill, steps: (run.steps || []).map(stepKey) });
   }
 
   const deleteFirst = await request("/api/agent/dispatch", {

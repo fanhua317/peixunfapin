@@ -1,7 +1,10 @@
+import { createHash } from "node:crypto";
 import { createEmbeddingClient } from "./embedding.mjs";
 import { loadLocalVectorIndex, searchLocalVectorIndex } from "./local-vector-index.mjs";
 import { buildKbFilter, createQdrantClient, QDRANT_DEFAULT_COLLECTION } from "./qdrant.mjs";
 import { isUsableTrainingChunk } from "./quality.mjs";
+import { getRerankerRuntimeConfig, rerankDocuments } from "./reranker.mjs";
+import { recordRetrievalObservation } from "./observability/context.mjs";
 
 const CJK_RE = /[\u3400-\u9fff]/g;
 
@@ -15,6 +18,24 @@ const PARAMETER_QUERY_RE = /(参数|范围|功率|机座|级数|能效|型号|�
 const HYBRID_COLLECTION = process.env.QDRANT_COLLECTION || QDRANT_DEFAULT_COLLECTION;
 const SEMANTIC_RETRY_MS = Number(process.env.TRAINING_SEMANTIC_RETRY_MS || 60_000);
 const SEMANTIC_BACKEND = String(process.env.TRAINING_VECTOR_BACKEND || process.env.TRAINING_SEMANTIC_BACKEND || "auto").toLowerCase();
+const MIN_EVIDENCE_LEXICAL_COVERAGE = Number(process.env.TRAINING_RAG_MIN_LEXICAL_COVERAGE || 0.16);
+const MIN_EVIDENCE_BM25_SCORE = Number(process.env.TRAINING_RAG_MIN_BM25_SCORE || 1.5);
+const MIN_EVIDENCE_SEMANTIC_SCORE = Number(process.env.TRAINING_RAG_MIN_SEMANTIC_SCORE || 0.42);
+const MIN_EVIDENCE_SEMANTIC_ONLY_SCORE = Number(process.env.TRAINING_RAG_MIN_SEMANTIC_ONLY_SCORE || 0.54);
+const MIN_EVIDENCE_RERANKER_SCORE = Number(process.env.TRAINING_RAG_MIN_RERANKER_SCORE || 0.45);
+const BM25_CACHE_MAX_ENTRIES = boundedInteger(process.env.TRAINING_BM25_CACHE_MAX_ENTRIES, 4, 32);
+const BM25_CACHE_MAX_CHUNKS = boundedInteger(process.env.TRAINING_BM25_CACHE_MAX_CHUNKS, 30_000, 250_000);
+// This limit tracks retained per-document term slots, not the transient raw
+// token stream used while building the corpus. The latter is discarded after
+// frequencies/postings are built, so using it as the cache weight caused large
+// but safe corpora to be rebuilt on every request.
+const BM25_CACHE_MAX_TOKENS = boundedInteger(process.env.TRAINING_BM25_CACHE_MAX_TOKENS, 10_000_000, 50_000_000);
+const SECRET_VALUE_QUERY_RE = /(?:(?:密码|口令|私钥|访问密钥|api\s*key|access\s*key|secret|password|private\s*key|token).{0,16}(?:是什么|是多少|给出|告诉|发我|显示|泄露|what\s+is|show|give|reveal)|(?:给出|告诉|发我|显示|泄露|show|give|reveal).{0,16}(?:密码|口令|私钥|访问密钥|api\s*key|access\s*key|secret|password|private\s*key|token))/i;
+const EVIDENCE_STOP_BIGRAMS = new Set([
+  "什么", "多少", "如何", "怎么", "是否", "哪些", "哪个", "哪种", "一下", "请问", "给出", "具体", "准确", "最新", "实时",
+  "这个", "那个", "可以", "需要", "必须", "使用", "相关", "资料", "问题", "回答", "说明", "今天", "明天", "下周",
+]);
+const EVIDENCE_STOP_CJK_CHARS = new Set(["的", "了", "和", "是", "有", "在", "与", "及", "或", "把", "被", "为", "到", "等"]);
 
 let cachedQdrant = null;
 let cachedEmbedding = null;
@@ -22,6 +43,25 @@ let qdrantHealthy = HYBRID_ENABLED;
 let cachedLocalIndex = null;
 let cachedLocalIndexPath = "";
 let lastSemanticFailureAt = 0;
+let bm25StateSnapshots = new WeakMap();
+const bm25CorpusCache = new Map();
+const bm25CacheCounters = {
+  hits: 0,
+  misses: 0,
+  builds: 0,
+  invalidations: 0,
+  evictions: 0,
+  bypasses: 0,
+};
+let bm25CachedChunks = 0;
+let bm25CachedTokens = 0;
+let bm25MutationEpoch = 0;
+
+function boundedInteger(value, fallback, maximum) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.min(Math.floor(parsed), maximum));
+}
 
 function getQdrant() {
   if (!cachedQdrant) cachedQdrant = createQdrantClient();
@@ -59,15 +99,213 @@ function normalizeText(value) {
   return String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+function cjkRuns(value) {
+  return normalizeText(value).match(/[\u3400-\u9fff]+/g) || [];
+}
+
+function cjkBigrams(value) {
+  const bigrams = [];
+  for (const run of cjkRuns(value)) {
+    const characters = [...run];
+    for (let index = 0; index < characters.length - 1; index += 1) {
+      bigrams.push(`${characters[index]}${characters[index + 1]}`);
+    }
+  }
+  return bigrams;
+}
+
+function meaningfulEvidenceTerms(value) {
+  const text = normalizeText(value);
+  const latin = (text.match(/[a-z0-9][a-z0-9._+/#:-]*/g) || [])
+    .filter((token) => token.length >= 3 && !/^(?:what|which|when|where|find|the|and|for|with|from|into|about)$/.test(token));
+  const bigrams = cjkBigrams(text).filter((term) => (
+    !EVIDENCE_STOP_BIGRAMS.has(term)
+    && ![...term].some((character) => EVIDENCE_STOP_CJK_CHARS.has(character))
+  ));
+  return [...new Set([...latin, ...bigrams])];
+}
+
+function definitionEvidenceTerms(value) {
+  const text = normalizeText(value);
+  const patterns = [
+    /(?:讲一下|介绍一下|解释一下)\s*([^，。！？?]{1,24}?)(?:是什么|是啥|[！？?]|$)/i,
+    /什么是\s*([^，。！？?]{1,24})/i,
+    /^(?:请问\s*)?([^，。！？?\s]{1,8})(?:是什么|是啥)[！？?]?$/i,
+    /^what\s+is\s+(.{1,40}?)[?!.]?$/i,
+    /^define\s+(.{1,40}?)[?!.]?$/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) return meaningfulEvidenceTerms(match[1]);
+  }
+  return [];
+}
+
+function evidenceIdentifiers(value) {
+  return [...new Set((String(value || "").match(/\b(?=[a-z0-9._+/#:-]*[a-z])(?=[a-z0-9._+/#:-]*\d)[a-z0-9][a-z0-9._+/#:-]{1,}\b/gi) || []).map((token) => token.toLowerCase()))];
+}
+
+function businessKeyValues(chunk, names) {
+  const keys = chunk?.businessKeys && typeof chunk.businessKeys === "object" ? chunk.businessKeys : {};
+  return names.flatMap((name) => {
+    const value = keys[name];
+    if (Array.isArray(value)) return value;
+    return value === undefined || value === null ? [] : [value];
+  }).map(normalizeText).filter(Boolean);
+}
+
+function exactIdentifierBm25Boost(query, chunk) {
+  const identifiers = evidenceIdentifiers(query);
+  if (!identifiers.length) return 0;
+  const modelValues = businessKeyValues(chunk, ["model", "models", "series"]);
+  const heading = normalizeText(`${chunk?.heading || ""}\n${chunk?.sourceRef || ""}`);
+  const text = normalizeText(chunkSearchText(chunk));
+  let boost = 0;
+  for (const identifier of identifiers) {
+    const exactBusinessKey = modelValues.some((value) => tokenize(value).includes(identifier));
+    if (exactBusinessKey) {
+      boost += 100;
+      continue;
+    }
+    if (tokenize(heading).includes(identifier)) {
+      boost += 45;
+      continue;
+    }
+    if (tokenize(text).includes(identifier)) boost += 12;
+  }
+  return boost;
+}
+
+export function assessEvidenceSufficiency(contexts, query) {
+  if (SECRET_VALUE_QUERY_RE.test(String(query || ""))) {
+    return {
+      sufficient: false,
+      reason: "secret_value_request",
+      queryTermCount: meaningfulEvidenceTerms(query).length,
+      identifierCount: evidenceIdentifiers(query).length,
+      best: null,
+      rows: [],
+      thresholds: {
+        lexicalCoverage: MIN_EVIDENCE_LEXICAL_COVERAGE,
+        bm25Score: MIN_EVIDENCE_BM25_SCORE,
+        semanticScore: MIN_EVIDENCE_SEMANTIC_SCORE,
+        rerankerScore: MIN_EVIDENCE_RERANKER_SCORE,
+      },
+    };
+  }
+  const candidates = (contexts || []).slice(0, 3);
+  const queryTerms = meaningfulEvidenceTerms(query);
+  const identifiers = evidenceIdentifiers(query);
+  const definitionTerms = definitionEvidenceTerms(query);
+  const rows = candidates.map((context) => {
+    const text = normalizeText(`${context?.sourceRef || ""}\n${context?.heading || ""}\n${context?.matchedPreview || ""}\n${context?.content || ""}`);
+    const matchedTerms = queryTerms.filter((term) => text.includes(term));
+    const matchedIdentifiers = identifiers.filter((identifier) => text.includes(identifier));
+    const lexicalCoverage = queryTerms.length ? matchedTerms.length / queryTerms.length : 0;
+    const bm25ScoreValue = Number(context?.bm25Score || context?.keywordScore || 0);
+    const exactIdentifierBoostValue = Number(context?.exactIdentifierBoost || 0);
+    const semanticScoreValue = Number(context?.semanticScore || 0);
+    const rerankerScoreValue = Number(context?.rerankerScore);
+    const identifierRequired = identifiers.length > 0;
+    const identifierSatisfied = !identifierRequired || matchedIdentifiers.length > 0;
+    const rankSignal = bm25ScoreValue >= MIN_EVIDENCE_BM25_SCORE
+      || semanticScoreValue >= MIN_EVIDENCE_SEMANTIC_SCORE
+      || (Number.isFinite(rerankerScoreValue) && rerankerScoreValue >= MIN_EVIDENCE_RERANKER_SCORE)
+      || exactIdentifierBoostValue > 0;
+    const lexicalSignal = matchedTerms.length >= 2 && lexicalCoverage >= MIN_EVIDENCE_LEXICAL_COVERAGE;
+    const semanticOnlySignal = !identifierRequired && semanticScoreValue >= MIN_EVIDENCE_SEMANTIC_ONLY_SCORE;
+    const singleExactSignal = queryTerms.length === 1 && matchedTerms.length === 1 && bm25ScoreValue >= MIN_EVIDENCE_BM25_SCORE * 2;
+    const definitionSignal = !identifierRequired
+      && definitionTerms.some((term) => matchedTerms.includes(term))
+      && bm25ScoreValue >= MIN_EVIDENCE_BM25_SCORE * 2;
+    const sufficient = identifierSatisfied && (lexicalSignal || semanticOnlySignal || singleExactSignal || definitionSignal || (matchedIdentifiers.length > 0 && rankSignal));
+    return {
+      id: context?.parentId || context?.id || context?.matchedChunkId || "",
+      sufficient,
+      lexicalCoverage: Number(lexicalCoverage.toFixed(4)),
+      matchedTermCount: matchedTerms.length,
+      queryTermCount: queryTerms.length,
+      matchedIdentifierCount: matchedIdentifiers.length,
+      identifierCount: identifiers.length,
+      bm25Score: bm25ScoreValue,
+      exactIdentifierBoost: exactIdentifierBoostValue,
+      semanticScore: semanticScoreValue,
+      rerankerScore: Number.isFinite(rerankerScoreValue) ? rerankerScoreValue : null,
+    };
+  });
+  const best = [...rows].sort((left, right) => {
+    if (left.sufficient !== right.sufficient) return left.sufficient ? -1 : 1;
+    return right.lexicalCoverage - left.lexicalCoverage;
+  })[0] || null;
+  return {
+    sufficient: rows.some((row) => row.sufficient),
+    queryTermCount: queryTerms.length,
+    identifierCount: identifiers.length,
+    best,
+    rows,
+    thresholds: {
+      lexicalCoverage: MIN_EVIDENCE_LEXICAL_COVERAGE,
+      bm25Score: MIN_EVIDENCE_BM25_SCORE,
+      semanticScore: MIN_EVIDENCE_SEMANTIC_SCORE,
+      semanticOnlyScore: MIN_EVIDENCE_SEMANTIC_ONLY_SCORE,
+      rerankerScore: MIN_EVIDENCE_RERANKER_SCORE,
+    },
+  };
+}
+
+export function hasExactIdentifierEvidence(contexts, query) {
+  const identifiers = evidenceIdentifiers(query);
+  if (!identifiers.length) return false;
+  return (contexts || []).some((context) => {
+    const matchedChunks = (context?.matchedChunks || [])
+      .map((item) => `${item?.sourceRef || ""}\n${item?.preview || ""}`)
+      .join("\n");
+    const text = normalizeText([
+      context?.sourceRef,
+      context?.heading,
+      context?.matchedPreview,
+      context?.content,
+      context?.searchText,
+      Object.values(context?.businessKeys || {}).flat().join(" "),
+      matchedChunks,
+    ].filter(Boolean).join("\n"));
+    return identifiers.every((identifier) => text.includes(identifier));
+  });
+}
+
+function applyEvidenceGate(contexts, query) {
+  const evidence = assessEvidenceSufficiency(contexts, query);
+  if (!evidence.sufficient) return { contexts: [], evidence };
+  return {
+    contexts: (contexts || []).map((context) => ({ ...context, evidenceSufficiency: evidence })),
+    evidence,
+  };
+}
+
+function semanticEvidenceUsed(contexts) {
+  return (contexts || []).some((context) => (
+    /(?:^|\+)semantic(?:\+|$)|(?:^|\+)hybrid(?:\+|$)/i.test(String(context?.retrieval || ""))
+    || Number(context?.semanticScore || 0) > 0
+    || Number(context?.semanticNormalized || 0) > 0
+  ));
+}
+
+function withRetrievalExecution(contexts, execution) {
+  const value = Array.isArray(contexts) ? contexts : [];
+  Object.defineProperty(value, "execution", {
+    configurable: false,
+    enumerable: false,
+    writable: false,
+    value: Object.freeze({ ...execution }),
+  });
+  return value;
+}
+
 function tokenize(value) {
   const text = normalizeText(value);
   const latin = text.match(/[a-z0-9][a-z0-9._+/#:-]*/g) || [];
   const cjk = text.match(CJK_RE) || [];
-  const cjkBigrams = [];
-  for (let index = 0; index < cjk.length - 1; index += 1) {
-    cjkBigrams.push(`${cjk[index]}${cjk[index + 1]}`);
-  }
-  return [...latin, ...cjk, ...cjkBigrams].filter(Boolean);
+  return [...latin, ...cjk, ...cjkBigrams(text)].filter(Boolean);
 }
 
 function chunkSearchText(chunk) {
@@ -86,29 +324,174 @@ function tokenCounts(tokens) {
   return counts;
 }
 
+function bm25CorpusCacheKey(revision, scope, mutationSalt = "") {
+  const hash = createHash("sha256");
+  hash.update("juzhou-bm25-corpus-v4;");
+  hash.update(`${revision};${scope};${mutationSalt}`);
+  return hash.digest("hex");
+}
+
+function bm25ScopeKey(scope) {
+  return createHash("sha256").update("juzhou-bm25-scope-v1;").update(scope).digest("hex");
+}
+
+function chunkSequenceMatches(snapshot, chunksRef, revision) {
+  if (!snapshot || snapshot.chunksRef !== chunksRef || snapshot.revision !== revision) return false;
+  return snapshot.chunkCount === chunksRef.length;
+}
+
+function bm25StateSnapshot(state, chunksRef, revision) {
+  if (!state || typeof state !== "object") return null;
+  const previous = bm25StateSnapshots.get(state);
+  if (chunkSequenceMatches(previous, chunksRef, revision)) return previous;
+  if (previous) bm25CacheCounters.invalidations += 1;
+  const snapshot = {
+    chunksRef,
+    chunkCount: chunksRef.length,
+    revision,
+    scopes: new Map(),
+    mutationSalt: previous ? `mutation-${++bm25MutationEpoch}` : "",
+  };
+  bm25StateSnapshots.set(state, snapshot);
+  return snapshot;
+}
+
+export function invalidateBm25CacheForState(state) {
+  if (!state || typeof state !== "object") return;
+  const chunksRef = Array.isArray(state.chunks) ? state.chunks : [];
+  const revision = String(state?.meta?.chunksRevision || state?.meta?.updatedAt || state?.meta?.version || "");
+  bm25CacheCounters.invalidations += 1;
+  bm25StateSnapshots.set(state, {
+    chunksRef,
+    chunkCount: chunksRef.length,
+    revision,
+    scopes: new Map(),
+    mutationSalt: `explicit-${++bm25MutationEpoch}`,
+  });
+}
+
+function readBm25CorpusCache(cacheKey) {
+  const cached = bm25CorpusCache.get(cacheKey);
+  if (!cached) {
+    bm25CacheCounters.misses += 1;
+    return null;
+  }
+  bm25CorpusCache.delete(cacheKey);
+  bm25CorpusCache.set(cacheKey, cached);
+  bm25CacheCounters.hits += 1;
+  return cached.corpus;
+}
+
+function evictOldestBm25Corpus() {
+  const oldestKey = bm25CorpusCache.keys().next().value;
+  if (oldestKey === undefined) return false;
+  const oldest = bm25CorpusCache.get(oldestKey);
+  bm25CorpusCache.delete(oldestKey);
+  bm25CachedChunks -= oldest.chunkCount;
+  bm25CachedTokens -= oldest.tokenCount;
+  bm25CacheCounters.evictions += 1;
+  return true;
+}
+
+function storeBm25CorpusCache(cacheKey, corpus) {
+  const chunkCount = corpus.size;
+  const tokenCount = corpus.tokenCount;
+  if (
+    BM25_CACHE_MAX_ENTRIES === 0
+    || chunkCount > BM25_CACHE_MAX_CHUNKS
+    || tokenCount > BM25_CACHE_MAX_TOKENS
+  ) {
+    bm25CacheCounters.bypasses += 1;
+    return;
+  }
+  while (
+    bm25CorpusCache.size >= BM25_CACHE_MAX_ENTRIES
+    || bm25CachedChunks + chunkCount > BM25_CACHE_MAX_CHUNKS
+    || bm25CachedTokens + tokenCount > BM25_CACHE_MAX_TOKENS
+  ) {
+    if (!evictOldestBm25Corpus()) break;
+  }
+  if (
+    bm25CorpusCache.size >= BM25_CACHE_MAX_ENTRIES
+    || bm25CachedChunks + chunkCount > BM25_CACHE_MAX_CHUNKS
+    || bm25CachedTokens + tokenCount > BM25_CACHE_MAX_TOKENS
+  ) {
+    bm25CacheCounters.bypasses += 1;
+    return;
+  }
+  bm25CorpusCache.set(cacheKey, { corpus, chunkCount, tokenCount });
+  bm25CachedChunks += chunkCount;
+  bm25CachedTokens += tokenCount;
+}
+
+export function getBm25CacheDiagnostics() {
+  return {
+    version: 1,
+    ...bm25CacheCounters,
+    entries: bm25CorpusCache.size,
+    cachedChunks: bm25CachedChunks,
+    cachedTokens: bm25CachedTokens,
+    limits: {
+      entries: BM25_CACHE_MAX_ENTRIES,
+      chunks: BM25_CACHE_MAX_CHUNKS,
+      tokens: BM25_CACHE_MAX_TOKENS,
+    },
+  };
+}
+
+export function resetBm25CacheForTests() {
+  bm25CorpusCache.clear();
+  bm25StateSnapshots = new WeakMap();
+  bm25CachedChunks = 0;
+  bm25CachedTokens = 0;
+  bm25MutationEpoch = 0;
+  for (const key of Object.keys(bm25CacheCounters)) bm25CacheCounters[key] = 0;
+}
+
 function buildBm25Corpus(state, knowledgeBaseId) {
-  const chunks = state.chunks
+  const chunksRef = Array.isArray(state?.chunks) ? state.chunks : [];
+  const scope = String(knowledgeBaseId || "*");
+  const revision = String(state?.meta?.chunksRevision || state?.meta?.updatedAt || state?.meta?.version || "");
+  const snapshot = bm25StateSnapshot(state, chunksRef, revision);
+  const scopeKey = bm25ScopeKey(scope);
+  let cacheKey = snapshot?.scopes.get(scopeKey);
+  if (!cacheKey) {
+    cacheKey = bm25CorpusCacheKey(revision, scope, snapshot?.mutationSalt);
+    snapshot?.scopes.set(scopeKey, cacheKey);
+  }
+  const cached = readBm25CorpusCache(cacheKey);
+  if (cached) return cached;
+  const chunks = chunksRef
     .filter((chunk) => !knowledgeBaseId || chunk.knowledgeBaseId === knowledgeBaseId)
     .filter(isUsableTrainingChunk);
   const entries = chunks.map((chunk) => {
     const tokens = tokenize(chunkSearchText(chunk));
+    const frequencies = tokenCounts(tokens);
     return {
       chunk,
-      tokens,
       length: Math.max(tokens.length, 1),
-      frequencies: tokenCounts(tokens),
+      frequencies,
     };
   });
   const documentFrequency = new Map();
-  for (const entry of entries) {
-    for (const token of new Set(entry.tokens)) {
+  const postings = new Map();
+  for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
+    const entry = entries[entryIndex];
+    for (const token of entry.frequencies.keys()) {
       documentFrequency.set(token, (documentFrequency.get(token) || 0) + 1);
+      const indexes = postings.get(token);
+      if (indexes) indexes.push(entryIndex);
+      else postings.set(token, [entryIndex]);
     }
   }
   const averageLength = entries.length
     ? entries.reduce((sum, entry) => sum + entry.length, 0) / entries.length
     : 1;
-  return { entries, documentFrequency, averageLength, size: entries.length };
+  const tokenCount = entries.reduce((sum, entry) => sum + entry.frequencies.size, 0);
+  const corpus = { entries, documentFrequency, postings, averageLength, size: entries.length, tokenCount };
+  bm25CacheCounters.builds += 1;
+  storeBm25CorpusCache(cacheKey, corpus);
+  return corpus;
 }
 
 function bm25Score(queryTokens, entry, corpus) {
@@ -126,6 +509,21 @@ function bm25Score(queryTokens, entry, corpus) {
   return score;
 }
 
+function bm25CandidateTokens(query, queryTokens, corpus) {
+  const present = [...new Set(queryTokens)]
+    .filter((token) => corpus.postings.has(token))
+    .sort((left, right) => (corpus.documentFrequency.get(left) || corpus.size) - (corpus.documentFrequency.get(right) || corpus.size));
+  const identifiers = new Set(evidenceIdentifiers(query));
+  const identifierTokens = present.filter((token) => identifiers.has(token));
+  if (identifierTokens.length) {
+    const minimumFrequency = corpus.documentFrequency.get(identifierTokens[0]) || 1;
+    return identifierTokens
+      .filter((token) => (corpus.documentFrequency.get(token) || corpus.size) <= Math.max(8, minimumFrequency * 4))
+      .slice(0, 4);
+  }
+  return present.slice(0, 12);
+}
+
 function searchBm25ChildChunks(state, { knowledgeBaseId, query, limit = 5 }) {
   const safeLimit = Math.max(1, Math.min(Number(limit) || 5, 50));
   const queryTokens = tokenize(query);
@@ -139,14 +537,22 @@ function searchBm25ChildChunks(state, { knowledgeBaseId, query, limit = 5 }) {
       retrieval: "bm25",
     }));
   }
-  return corpus.entries
+  const candidateIndexes = new Set();
+  for (const token of bm25CandidateTokens(query, queryTokens, corpus)) {
+    for (const entryIndex of corpus.postings.get(token) || []) candidateIndexes.add(entryIndex);
+  }
+  return [...candidateIndexes]
+    .map((entryIndex) => corpus.entries[entryIndex])
     .map((entry) => {
-      const score = bm25Score(queryTokens, entry, corpus);
+      const baseScore = bm25Score(queryTokens, entry, corpus);
+      const identifierBoost = exactIdentifierBm25Boost(query, entry.chunk);
+      const score = baseScore + identifierBoost;
       return {
         ...entry.chunk,
         score,
-        bm25Score: score,
-        keywordScore: score,
+        bm25Score: baseScore,
+        keywordScore: baseScore,
+        exactIdentifierBoost: identifierBoost,
         retrieval: "bm25",
       };
     })
@@ -208,6 +614,7 @@ function parentContextForHit(parentMap, hit) {
     }],
     score: hit.score || 0,
     bm25Score: hit.bm25Score || hit.keywordScore || 0,
+    exactIdentifierBoost: hit.exactIdentifierBoost || 0,
     bm25Normalized: hit.bm25Normalized || hit.keywordNormalized || 0,
     keywordScore: hit.keywordScore || 0,
     keywordNormalized: hit.keywordNormalized || 0,
@@ -241,6 +648,7 @@ function expandParentMatches(state, matches, limit) {
       ...base,
       score: Math.max(existingScore, nextScore),
       bm25Score: Math.max(Number(existing.bm25Score || existing.keywordScore || 0), Number(context.bm25Score || context.keywordScore || 0)),
+      exactIdentifierBoost: Math.max(Number(existing.exactIdentifierBoost || 0), Number(context.exactIdentifierBoost || 0)),
       bm25Normalized: Math.max(Number(existing.bm25Normalized || existing.keywordNormalized || 0), Number(context.bm25Normalized || context.keywordNormalized || 0)),
       keywordScore: Math.max(Number(existing.keywordScore || 0), Number(context.keywordScore || 0)),
       keywordNormalized: Math.max(Number(existing.keywordNormalized || 0), Number(context.keywordNormalized || 0)),
@@ -255,7 +663,7 @@ function expandParentMatches(state, matches, limit) {
   }
   return [...merged.values()]
     .sort((left, right) => Number(right.score || 0) - Number(left.score || 0))
-    .slice(0, Math.max(1, Math.min(Number(limit) || 5, 20)));
+    .slice(0, Math.max(1, Math.min(Number(limit) || 5, 50)));
 }
 
 export function searchChunks(state, { knowledgeBaseId, query, limit = 5 }) {
@@ -400,8 +808,8 @@ async function semanticSearch(state, { knowledgeBaseId, query, limit }) {
   return matches;
 }
 
-export async function searchKnowledgeContexts(state, { knowledgeBaseId, query, limit = 8 }) {
-  const safeLimit = Math.max(1, Math.min(Number(limit) || 8, 20));
+async function searchHybridKnowledgeContexts(state, { knowledgeBaseId, query, limit = 8 }) {
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 8, 50));
   const candidateLimit = Math.max(safeLimit, Math.min(50, safeLimit * 4));
   const bm25Matches = searchBm25ChildChunks(state, { knowledgeBaseId, query, limit: candidateLimit });
   const semanticMatches = HYBRID_ENABLED ? await semanticSearch(state, { knowledgeBaseId, query, limit: candidateLimit }) : [];
@@ -410,16 +818,18 @@ export async function searchKnowledgeContexts(state, { knowledgeBaseId, query, l
     ? configuredWeights
     : { bm25: 1, semantic: 0 };
   const merged = new Map();
-  const bm25Range = normalizeRange(bm25Matches.map((chunk) => chunk.bm25Score || chunk.score || 0));
+  const bm25Range = normalizeRange(bm25Matches.map((chunk) => chunk.score || chunk.bm25Score || 0));
   for (const chunk of bm25Matches) {
     if (!chunk.id) continue;
-    const bm25ScoreValue = chunk.bm25Score || chunk.score || 0;
+    const bm25ScoreValue = chunk.bm25Score || 0;
+    const bm25RankingScore = chunk.score || bm25ScoreValue;
     merged.set(chunk.id, {
       ...chunk,
       bm25Score: bm25ScoreValue,
-      bm25Normalized: normalizeScore(bm25ScoreValue, bm25Range),
+      bm25RankingScore,
+      bm25Normalized: normalizeScore(bm25RankingScore, bm25Range),
       keywordScore: bm25ScoreValue,
-      keywordNormalized: normalizeScore(bm25ScoreValue, bm25Range),
+      keywordNormalized: normalizeScore(bm25RankingScore, bm25Range),
       semanticScore: 0,
       semanticNormalized: 0,
       retrieval: "bm25",
@@ -469,8 +879,197 @@ export async function searchKnowledgeContexts(state, { knowledgeBaseId, query, l
   return expandParentMatches(state, ranked.slice(0, safeLimit * 2), safeLimit);
 }
 
+function rerankerText(context) {
+  const matched = (context?.matchedChunks || [])
+    .slice(0, 3)
+    .map((chunk) => chunk.preview || chunk.sourceRef || "")
+    .filter(Boolean)
+    .join("\n");
+  return [context?.sourceRef, context?.heading, matched, context?.content]
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, 4_000);
+}
+
+function normalizeRankScores(values) {
+  const finite = values.filter(Number.isFinite);
+  if (!finite.length) return () => 0;
+  const min = Math.min(...finite);
+  const max = Math.max(...finite);
+  if (min === max) return (value) => Number.isFinite(value) ? 1 : 0;
+  return (value) => Number.isFinite(value) ? (value - min) / (max - min) : 0;
+}
+
+async function applyReranker(query, candidates, limit) {
+  const config = getRerankerRuntimeConfig();
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 8, 20));
+  const startedAt = Date.now();
+  const result = await rerankDocuments(query, candidates.map((candidate) => ({
+    id: String(candidate.parentId || candidate.id || candidate.matchedChunkId),
+    text: rerankerText(candidate),
+  })), { topK: candidates.length });
+  if (!result.ok) {
+    return candidates.slice(0, safeLimit).map((candidate) => ({
+      ...candidate,
+      originalScore: Number(candidate.score || 0),
+      rerankerStatus: result.status,
+      rerankerReason: result.reasonCode || result.status,
+      rerankerError: result.error || "",
+      rerankerLatencyMs: result.latencyMs || Date.now() - startedAt,
+      retrievalLatencyMs: 0,
+    }));
+  }
+  const byId = new Map(candidates.map((candidate) => [String(candidate.parentId || candidate.id || candidate.matchedChunkId), candidate]));
+  const resultById = new Map(result.results.map((entry) => [String(entry.id), entry]));
+  const normalizeOriginal = normalizeRankScores(candidates.map((candidate) => Number(candidate.score || 0)));
+  const normalizeReranker = normalizeRankScores(result.results.map((entry) => Number(entry.score)));
+  return candidates
+    .map((candidate) => {
+      const id = String(candidate.parentId || candidate.id || candidate.matchedChunkId);
+      const reranked = resultById.get(id);
+      const originalScore = Number(candidate.score || 0);
+      const rerankerScore = Number(reranked?.score);
+      const rerankerNormalized = normalizeReranker(rerankerScore);
+      const originalNormalized = normalizeOriginal(originalScore);
+      return {
+        ...candidate,
+        originalScore,
+        rerankerScore: Number.isFinite(rerankerScore) ? rerankerScore : null,
+        rerankerNormalized,
+        score: config.weight * rerankerNormalized + (1 - config.weight) * originalNormalized,
+        retrieval: mergeRetrieval(candidate.retrieval, "reranker"),
+        rerankerStatus: "ready",
+        rerankerModel: result.model,
+        rerankerLatencyMs: result.latencyMs || Date.now() - startedAt,
+        retrievalLatencyMs: 0,
+      };
+    })
+    .filter((candidate) => byId.has(String(candidate.parentId || candidate.id || candidate.matchedChunkId)))
+    .sort((left, right) => Number(right.score || 0) - Number(left.score || 0))
+    .slice(0, safeLimit);
+}
+
+export async function searchKnowledgeContextsByMode(state, { knowledgeBaseId, query, limit = 8, mode = "auto" }) {
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 8, 20));
+  const requestedMode = String(mode || "auto").trim().toLowerCase();
+  const startedAt = Date.now();
+  if (requestedMode === "bm25") {
+    const rawContexts = searchChunks(state, { knowledgeBaseId, query, limit: safeLimit }).map((context) => ({
+      ...context,
+      retrievalLatencyMs: Date.now() - startedAt,
+    }));
+    const { contexts } = applyEvidenceGate(rawContexts, query);
+    recordRetrievalObservation({
+      mode: "bm25",
+      candidateCount: rawContexts.length,
+      evidenceCount: contexts.length,
+      retrievalLatencyMs: Date.now() - startedAt,
+    });
+    return withRetrievalExecution(contexts, {
+      requestedMode,
+      effectiveMode: "bm25",
+      semanticUsed: false,
+      rerankerStatus: "not_requested",
+      intentionalSkip: false,
+      degradedReason: "",
+    });
+  }
+  const config = getRerankerRuntimeConfig();
+  const shouldRerank = requestedMode === "hybrid-rerank"
+    || requestedMode === "hybrid+reranker"
+    || (requestedMode === "auto" && config.enabled);
+  const candidateLimit = shouldRerank ? Math.max(safeLimit, config.candidates) : safeLimit;
+  const candidates = await searchHybridKnowledgeContexts(state, { knowledgeBaseId, query, limit: candidateLimit });
+  const semanticUsed = semanticEvidenceUsed(candidates);
+  if (!shouldRerank) {
+    const rawContexts = candidates.slice(0, safeLimit).map((context) => ({
+      ...context,
+      retrievalLatencyMs: Date.now() - startedAt,
+    }));
+    const { contexts } = applyEvidenceGate(rawContexts, query);
+    recordRetrievalObservation({
+      mode: "hybrid",
+      candidateCount: candidates.length,
+      evidenceCount: contexts.length,
+      retrievalLatencyMs: Date.now() - startedAt,
+    });
+    return withRetrievalExecution(contexts, {
+      requestedMode,
+      effectiveMode: semanticUsed ? "hybrid" : "bm25",
+      semanticUsed,
+      rerankerStatus: "not_requested",
+      intentionalSkip: false,
+      degradedReason: semanticUsed ? "" : "semantic_not_used",
+    });
+  }
+  // A cross-encoder may promote a superficially related item from the wider
+  // candidate pool, but ranking confidence is not evidence sufficiency. Require
+  // the plain top window to pass first, except when the original wider pool
+  // already contains every exact model/evidence identifier from the query.
+  // The final reranked window is gated again below, so this exception lets the
+  // reranker rescue precise evidence without turning an unrelated query into an
+  // answer.
+  const preRerankWindow = candidates.slice(0, safeLimit);
+  const preRerankEvidence = assessEvidenceSufficiency(preRerankWindow, query);
+  const exactIdentifierEvidence = hasExactIdentifierEvidence(candidates, query);
+  if (!preRerankEvidence.sufficient && !exactIdentifierEvidence) {
+    recordRetrievalObservation({
+      mode: "hybrid",
+      candidateCount: candidates.length,
+      evidenceCount: 0,
+      retrievalLatencyMs: Date.now() - startedAt,
+      rerankerLatencyMs: 0,
+      rerankerStatus: "skipped_insufficient_evidence",
+      degradedReason: "insufficient_evidence",
+    });
+    return withRetrievalExecution([], {
+      requestedMode,
+      effectiveMode: semanticUsed ? "hybrid_evidence_refusal" : "bm25_evidence_refusal",
+      semanticUsed,
+      rerankerStatus: "skipped_insufficient_evidence",
+      intentionalSkip: true,
+      degradedReason: semanticUsed ? "" : "semantic_not_used",
+    });
+  }
+  const reranked = await applyReranker(query, candidates, safeLimit);
+  const rawContexts = reranked.map((context) => ({
+    ...context,
+    retrievalLatencyMs: Date.now() - startedAt,
+  }));
+  const { contexts } = applyEvidenceGate(rawContexts, query);
+  const top = rawContexts[0] || {};
+  const rerankerReady = top.rerankerStatus === "ready";
+  const degradedReason = [
+    ...(semanticUsed ? [] : ["semantic_not_used"]),
+    ...(rerankerReady ? [] : [top.rerankerReason || top.rerankerStatus || "reranker_not_ready"]),
+  ].join(";");
+  recordRetrievalObservation({
+    mode: top.rerankerStatus === "ready" ? "hybrid+reranker" : "hybrid",
+    candidateCount: candidates.length,
+    evidenceCount: contexts.length,
+    retrievalLatencyMs: Date.now() - startedAt,
+    rerankerLatencyMs: top.rerankerLatencyMs,
+    rerankerStatus: top.rerankerStatus,
+    degradedReason: top.rerankerStatus === "ready" ? "" : top.rerankerReason || top.rerankerStatus,
+  });
+  return withRetrievalExecution(contexts, {
+    requestedMode,
+    effectiveMode: rerankerReady
+      ? (semanticUsed ? "hybrid+reranker" : "bm25+reranker")
+      : (semanticUsed ? "hybrid" : "bm25"),
+    semanticUsed,
+    rerankerStatus: top.rerankerStatus || "missing",
+    intentionalSkip: false,
+    degradedReason,
+  });
+}
+
+export async function searchKnowledgeContexts(state, options) {
+  return await searchKnowledgeContextsByMode(state, { ...options, mode: options?.mode || "auto" });
+}
+
 export async function searchChunksHybrid(state, { knowledgeBaseId, query, limit = 8 }) {
-  return searchKnowledgeContexts(state, { knowledgeBaseId, query, limit });
+  return searchKnowledgeContextsByMode(state, { knowledgeBaseId, query, limit, mode: "hybrid" });
 }
 
 export function isHybridSearchEnabled() {
@@ -478,7 +1077,7 @@ export function isHybridSearchEnabled() {
 }
 
 export function buildAnswer(state, { knowledgeBaseId, question }) {
-  const matches = searchChunks(state, { knowledgeBaseId, query: question, limit: 4 });
+  const matches = applyEvidenceGate(searchChunks(state, { knowledgeBaseId, query: question, limit: 4 }), question).contexts;
   if (!matches.length) {
     return {
       answer: "当前知识库中没有找到足够相关的资料。建议补充或检查清洗后的资料内容。",

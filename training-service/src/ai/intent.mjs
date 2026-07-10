@@ -28,6 +28,8 @@ const MOTOR_DOMAIN_RE = /(电机|电动机|异步|三相|单相|定子|转子|�
 const PUMP_DOMAIN_RE = /(水泵|泵|离心泵|增压泵|自吸泵|喷射泵|射流泵|旋涡泵|漩涡泵|管道泵|潜水泵|污水泵|多级泵|扬程|流量|吸程|口径|叶轮|YINJIA|银嘉|pump|centrifugal|peripheral|jet|booster|submersible)/i;
 const PUMP_MODEL_RE = /\b(?:VM|IDB|QB|WZB|SPM|APM|PM|JLM|JETB|JSW|JSM|JETS|CM|CM2|CDL|CDLF|CPM|SCM|CHM|YMP|YMPV|PS|QDX|WQD|4SKM|SKM)\d*[A-Z0-9-]*\b/i;
 const SHORT_PUBLISH_CONFIRM_RE = /^(确认发布|确认|可以|可以了|发吧|发布吧|没问题|就这样|好的|好|ok|OK|yes|Yes)[。.!！\s]*$/;
+const TEXT_EDIT_DELETE_RE = /(?:这句(?:话)?|这段(?:话|文字)?|文本|句子|标题|文案|文章)[\s\S]{0,40}(?:字|词|字符|措辞)[\s\S]{0,20}(?:删除|删掉|去掉|移除)|(?:删除|删掉|去掉|移除)[\s\S]{0,40}(?:这句(?:话)?|这段(?:话|文字)?|文本|句子|标题|文案|文章|字|词|字符|措辞)/i;
+const DOMAIN_CORRECTION_RE = /(?:(?:这是|应该是)\s*(?:水泵|泵|电机).{0,12}(?:不是|而不是|别用|不要用)\s*(?:水泵|泵|电机)|(?:不是|别用|不要用)\s*(?:水泵|泵|电机).{0,12}(?:是|而是|应该是)\s*(?:水泵|泵|电机))/i;
 
 function normalizeIntentSkill(value) {
   const skill = String(value || "").trim();
@@ -237,11 +239,13 @@ function knowledgeHitScore(hit = {}) {
   const score = Number(hit.score || 0);
   const bm25 = Number(hit.bm25Score || hit.keywordScore || 0);
   const semantic = Number(hit.semanticScore || 0);
+  const exactIdentifierBoost = Number(hit.exactIdentifierBoost || 0);
+  const evidenceSufficient = hit.evidenceSufficiency?.sufficient === true;
   const retrieval = String(hit.retrieval || "");
   if (/(semantic|hybrid|local-vector|vector)/.test(retrieval)) {
-    return Math.max(score, semantic, bm25 >= 4 ? 0.7 : 0);
+    return Math.max(score, semantic, bm25 >= 4 ? 0.7 : 0, exactIdentifierBoost > 0 ? 0.78 : 0, evidenceSufficient ? 0.68 : 0);
   }
-  return Math.max(score >= 4 ? 0.72 : 0, bm25 >= 4 ? 0.72 : 0);
+  return Math.max(score >= 4 ? 0.72 : 0, bm25 >= 4 ? 0.72 : 0, exactIdentifierBoost > 0 ? 0.78 : 0, evidenceSufficient ? 0.68 : 0);
 }
 
 function hasKnowledgeIntentSignal(text, explicitMatch, hints = {}) {
@@ -335,8 +339,64 @@ async function selectKnowledgeBaseForQuestion(state, message, options = {}) {
       scored.push({ kb, top, confidence: Math.max(0, Math.min(1, confidence)), explicitMatch, hints });
     }
   }
+  if (!scored.length && (targetHint || (hints.followUp && hints.recentKnowledgeBaseId))) {
+    const preferred = ready.filter((kb) => (
+      kb.id === hints.recentKnowledgeBaseId || hintMatchesKnowledgeBase(kb, targetHint)
+    ));
+    for (const kb of preferred) {
+      let hits = [];
+      try {
+        hits = await searchKnowledgeContexts(currentState, {
+          knowledgeBaseId: kb.id,
+          query: [text, targetHint].filter(Boolean).join("\n"),
+          limit: 4,
+        });
+      } catch {
+        hits = [];
+      }
+      const top = hits[0] || null;
+      if (!top) continue;
+      const explicitMatch = hintMatchesKnowledgeBase(kb, targetHint);
+      let confidence = knowledgeHitScore(top);
+      if (explicitMatch) confidence += 0.12;
+      if (hints.followUp && kb.id === hints.recentKnowledgeBaseId) confidence += 0.2;
+      if (confidence >= 0.45) {
+        scored.push({ kb, top, confidence: Math.max(0, Math.min(1, confidence)), explicitMatch, hints });
+      }
+    }
+  }
   scored.sort((left, right) => right.confidence - left.confidence);
   return scored[0] || null;
+}
+
+function preferredKnowledgeBaseForQuestion(state, message, options = {}) {
+  const currentState = safeState(state);
+  const ready = currentState.knowledgeBases.filter((kb) => kb.status === "ready");
+  if (!ready.length) return null;
+  const text = String(message || "").trim();
+  const hints = queryHints(text, options);
+  const targetHint = String(options.targetKnowledgeBaseHint || options.routerDecision?.targetKnowledgeBaseHint || "").trim();
+  if (hints.pumpPositive && hints.motorNegated) {
+    const correctedPump = ready.find(isPumpKnowledgeBase);
+    if (correctedPump) return correctedPump;
+  }
+  const targetMatch = targetHint ? matchKnowledgeBase(currentState, targetHint) : null;
+  if (targetMatch && ready.some((kb) => kb.id === targetMatch.id)) return targetMatch;
+  if (hints.followUp && hints.recentKnowledgeBaseId) {
+    const recent = ready.find((kb) => kb.id === hints.recentKnowledgeBaseId);
+    if (recent) return recent;
+  }
+  if (hints.pumpPositive) {
+    const pump = ready.find(isPumpKnowledgeBase);
+    if (pump) return pump;
+  }
+  if (hints.motorPositive) {
+    const motor = ready.find(isMotorKnowledgeBase);
+    if (motor) return motor;
+  }
+  const direct = matchKnowledgeBase(currentState, text);
+  if (direct && ready.some((kb) => kb.id === direct.id)) return direct;
+  return null;
 }
 
 export async function detectKnowledgeAnswerIntent(state, message, options = {}) {
@@ -362,6 +422,30 @@ export async function detectKnowledgeAnswerIntent(state, message, options = {}) 
 
 function applySafetyGate(decision, local) {
   if (!decision) return decision;
+  if (
+    decision.skill === "answer_knowledge_question"
+    && DOMAIN_CORRECTION_RE.test(String(decision.originalMessage || ""))
+    && !KNOWLEDGE_QUESTION_RE.test(String(decision.originalMessage || ""))
+  ) {
+    return normalizeIntentDecision({
+      intent: "answer_general_chat",
+      skill: "answer_general_chat",
+      confidence: 0.98,
+      source: "router_guard",
+      reason: "用户是在纠正资料领域，不是在提出新的事实问题；先确认纠正并由会话连续性保留新领域。",
+      needsConfirmation: false,
+    });
+  }
+  if (decision.skill === "delete_training_records" && TEXT_EDIT_DELETE_RE.test(String(decision.originalMessage || ""))) {
+    return normalizeIntentDecision({
+      intent: "answer_general_chat",
+      skill: "answer_general_chat",
+      confidence: 0.98,
+      source: "router_guard",
+      reason: "用户是在编辑文本，不是删除培训任务或记录。",
+      needsConfirmation: false,
+    });
+  }
   if (HIGH_RISK_INTENT_SKILLS.has(decision.skill)) {
     decision.needsConfirmation = true;
     return decision;
@@ -439,6 +523,7 @@ async function callFastIntentRouter(state, message, local, options = {}) {
 
 安全规则：
 - 删除记录必须选 delete_training_records，但后端会再次确认。
+- 删除句子中的字词、字符或措辞属于文本编辑，不是 delete_training_records。
 - 重新输入完整培训安排是 create_training_draft，不是确认发布。
 - 用户说“不是电机，是水泵”时，不能选择电机知识库。
 - 如果是后续追问，例如“有具体型号吗”，参考最近会话的资料领域。
@@ -496,6 +581,10 @@ export async function classifyTrainingIntent(state, message, options = {}) {
     if (!decision) return await fallbackDecision(currentState, message, local, knowledgeOptions);
 
     decision = applySafetyGate(decision, local);
+    if (decision.skill === "answer_general_chat" && Number(decision.confidence || 0) <= 0.65) {
+      const fallback = await fallbackDecision(currentState, message, local, knowledgeOptions);
+      if (fallback.skill !== "answer_general_chat") return fallback;
+    }
     if (decision.skill === "answer_knowledge_question") {
       const knowledge = await detectKnowledgeAnswerIntent(currentState, message, {
         ...knowledgeOptions,
@@ -515,6 +604,26 @@ export async function classifyTrainingIntent(state, message, options = {}) {
           matchedSourceRef: knowledge.matchedSourceRef,
           retrievalScore: knowledge.retrievalScore,
           retrieval: knowledge.retrieval,
+        });
+      }
+      const preferredKnowledgeBase = preferredKnowledgeBaseForQuestion(currentState, message, {
+        ...knowledgeOptions,
+        targetKnowledgeBaseHint: decision.targetKnowledgeBaseHint,
+        routerDecision: decision,
+      });
+      if (preferredKnowledgeBase) {
+        return normalizeIntentDecision({
+          ...decision,
+          confidence: Math.max(0.72, Number(decision.confidence || 0)),
+          reason: `${decision.reason || "快速路由判定为知识库答疑"} 已锁定资料域；证据充分性由答疑工具继续校验。`,
+          needsConfirmation: false,
+        }, {
+          source: `${decision.source || "router"}+kb_hint`,
+          knowledgeBaseId: preferredKnowledgeBase.id,
+          knowledgeBaseName: preferredKnowledgeBase.name,
+          matchedSourceRef: "",
+          retrievalScore: 0,
+          retrieval: "kb_hint",
         });
       }
       return normalizeIntentDecision({

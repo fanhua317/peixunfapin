@@ -12,6 +12,7 @@ import {
 import { dataRootPath } from "./project-paths.mjs";
 import { createAsyncLock } from "./storage/async-lock.mjs";
 import { writeJsonAtomic } from "./storage/atomic-json.mjs";
+import { prepareStateCommit } from "./storage/state-revision.mjs";
 
 export const dataDir = process.env.TRAINING_DATA_DIR
   ? path.resolve(process.env.TRAINING_DATA_DIR)
@@ -115,13 +116,10 @@ export function normalizeState(state) {
 
 export async function saveState(state) {
   await ensureDataDir();
-  state.meta = {
-    ...(state.meta || {}),
-    version: 1,
-    updatedAt: nowIso(),
-  };
+  normalizeState(state);
+  prepareStateCommit(state, nowIso());
   if (isSqliteStorage()) {
-    saveSqliteState(dataDir, normalizeState(state));
+    saveSqliteState(dataDir, state, { revisionPrepared: true });
     return;
   }
   await writeJsonAtomic(statePath, state);
